@@ -8,10 +8,26 @@ import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Test
+import kotlinx.coroutines.runBlocking
 import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class OnlinePlaylistsTest {
+    @Test fun coverMetadataAndNewestOrderSurviveProviderParsing() = runBlocking {
+        val api = OnlinePlaylists()
+        assertEquals("https://example.org/kw.jpg", api.parseLists(JSONArray("""[{"id":1,"digest":8,"img":"https://example.org/kw.jpg"}]""")).single().coverUrl)
+        assertEquals("https://example.org/qq.jpg", api.parseQqCategoryLists(JSONArray("""[{"basic":{"tid":2,"cover":{"medium_url":"https://example.org/qq.jpg"}}}]""")).single().coverUrl)
+        assertEquals("https://example.org/mg.jpg", api.parseMiguLists(JSONObject("""{"contents":[{"resType":"2021","resId":"3","img":"https://example.org/mg.jpg"}]}""")).single().coverUrl)
+        assertEquals("https://example.org/256/kg.jpg", KugouPlaylists().parseLists(JSONArray("""[{"specialid":4,"imgurl":"//example.org/{size}/kg.jpg"}]""")).single().coverUrl)
+        var requestedOrder = ""
+        val netease = NeteaseApi { _, body, _ ->
+            requestedOrder = body.getString("order")
+            JSONObject("""{"playlists":[{"id":5,"coverImgUrl":"https://example.org/wy.jpg"}]}""")
+        }
+        assertEquals("https://example.org/wy.jpg", netease.recommended(1, order = "new").single().coverUrl)
+        assertEquals("new", requestedOrder)
+        assertEquals("", playlistCover("javascript:alert(1)", "null"))
+    }
     @Test fun parsesQqAndMiguCategoriesAndQqLists() {
         val api = OnlinePlaylists()
         val qq = api.parseQqCategories(JSONArray("""[{"group_name":"语种","v_item":[{"id":123,"name":"国语"}]}]""")).single()

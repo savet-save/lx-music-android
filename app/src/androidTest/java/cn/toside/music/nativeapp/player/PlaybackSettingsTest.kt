@@ -16,6 +16,13 @@ import cn.toside.music.nativeapp.ui.DesktopLyricSettings
 import cn.toside.music.nativeapp.ui.MainActivity
 import cn.toside.music.nativeapp.ui.UiPalette
 import cn.toside.music.nativeapp.ui.SettingsFragment
+import cn.toside.music.nativeapp.online.PlaylistBrowserRepository
+import cn.toside.music.nativeapp.online.PlaylistBrowseQuery
+import cn.toside.music.nativeapp.online.OnlinePlaylist
+import cn.toside.music.nativeapp.online.OnlineTagGroup
+import cn.toside.music.nativeapp.online.Board
+import cn.toside.music.nativeapp.online.ChartsRepository
+import cn.toside.music.nativeapp.online.NativeChartsRepository
 
 import android.app.AlertDialog
 import android.app.Dialog
@@ -616,13 +623,63 @@ class PlaybackSettingsTest {
             assertTrue(fixture.player.state.value.position >= 3000)
         }
     }
+    @Test fun playlistAndSettingsNavigationKeepAudioAndTheGlobalMiniPlayer() = runBlocking {
+        withPlayback { fixture ->
+            fixture.play()
+            val activity = fixture.activity; val media = fixture.media()
+            main {
+                activity.playlistBrowserRepository = object : PlaylistBrowserRepository {
+                    override suspend fun page(query: PlaylistBrowseQuery, page: Int) = emptyList<OnlinePlaylist>()
+                    override suspend fun categories(source: String) = emptyList<OnlineTagGroup>()
+                }
+            }
+            invoke(activity, "showOnlinePlaylists")
+            waitFor { activity.navigationController().currentDestination?.id == R.id.playlist_browser }
+            assertTrue((field(activity, "miniBar") as View).isShown); assertTrue(media.isPlaying)
+            invoke(activity, "showSettings")
+            waitFor { activity.settingsFragment()?.view != null }
+            assertEquals(View.GONE, (field(activity, "miniBar") as View).visibility)
+            main { activity.closeSettings() }
+            waitFor { activity.navigationController().currentDestination?.id == R.id.playlist_browser }
+            assertTrue((field(activity, "miniBar") as View).isShown); assertTrue(media.isPlaying)
+            main { activity.navigationController().popBackStack() }
+            waitFor { activity.navigationController().currentDestination?.id == R.id.music_page }
+            assertSame(media, fixture.media()); assertTrue(fixture.player.state.value.playing)
+            assertEquals(fixture.song, fixture.player.state.value.song)
+        }
+    }
+    @Test fun chartRowClickPlaysTheDisplayedChartQueue() = runBlocking {
+        withPlayback { fixture ->
+            val activity = fixture.activity
+            val songs = (0..2).map { fixture.song.copy(id = fixture.song.id + it, title = "Chart song $it") }
+            main {
+                activity.chartsRepository = object : ChartsRepository {
+                    override fun boards(source: String) = NativeChartsRepository().boards(source)
+                    override suspend fun page(board: Board, page: Int) = songs
+                }
+            }
+            invoke(activity, "showBoards")
+            waitFor { activity.chartsFragment()?.model?.state?.value?.songs?.size == 3 }
+            lateinit var list: ListView
+            main { list = activity.chartsFragment()!!.requireView().findViewWithTag("charts-songs") }
+            waitFor { list.childCount > 1 }
+            main { list.performItemClick(list.getChildAt(1), 1, 1) }
+            waitFor { fixture.player.state.value.song?.id == songs[1].id && fixture.player.state.value.playing }
+            assertEquals(songs, fixture.player.queueState.value!!.songs); assertEquals(1, fixture.player.queueState.value!!.index)
+            assertTrue(fixture.media().isPlaying)
+            waitFor { list.getChildAt(1)?.isActivated == true }
+            main { activity.navigationController().popBackStack() }
+            waitFor { activity.navigationController().currentDestination?.id == R.id.music_page }
+            assertTrue(fixture.player.state.value.playing)
+        }
+    }
     @Test fun settingsFragmentThemeChangesKeepTheSameActivityAndAudioPlaying() = runBlocking {
         withPlayback { fixture ->
             fixture.play()
             val activity = fixture.activity; val player = fixture.player
             invoke(activity, "showSettings")
-            waitFor { (activity.supportFragmentManager.findFragmentByTag(SettingsFragment.TAG) as? SettingsFragment)?.view != null }
-            val fragment = activity.supportFragmentManager.findFragmentByTag(SettingsFragment.TAG) as SettingsFragment
+            waitFor { (activity.settingsFragment() as? SettingsFragment)?.view != null }
+            val fragment = activity.settingsFragment() as SettingsFragment
             val target = if ((field(activity, "palette") as UiPalette).theme.id == "blue") "green" else "blue"
             main {
                 fragment.requireView().findViewWithTag<View>("settings-category-theme").performClick()
@@ -630,13 +687,13 @@ class PlaybackSettingsTest {
             }
             waitFor { (field(activity, "palette") as UiPalette).theme.id == target }
             assertFalse(activity.isDestroyed); assertSame(player, field(activity, "service"))
-            assertSame(fragment, activity.supportFragmentManager.findFragmentByTag(SettingsFragment.TAG))
+            assertSame(fragment, activity.settingsFragment())
             assertTrue(player.state.value.playing); assertTrue(fixture.media().isPlaying)
             val position = player.state.value.position
             waitFor { player.state.value.position > position + 200 }
             assertEquals(fixture.song, player.state.value.song)
             main { activity.closeSettings() }
-            waitFor { activity.supportFragmentManager.findFragmentByTag(SettingsFragment.TAG) == null }
+            waitFor { activity.settingsFragment() == null }
             assertTrue(player.state.value.playing)
         }
     }

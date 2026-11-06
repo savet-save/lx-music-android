@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<navigation xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/main_navigation" app:startDestination="@id/music_page">
+    <fragment android:id="@+id/music_page" android:name="cn.toside.music.nativeapp.ui.MusicPageFragment" />
+    <fragment android:id="@+id/playlist_browser" android:name="cn.toside.music.nativeapp.ui.PlaylistBrowserFragment" />
+    <fragment android:id="@+id/playlist_songs" android:name="cn.toside.music.nativeapp.ui.MusicPageFragment" />
+    <fragment android:id="@+id/charts_page" android:name="cn.toside.music.nativeapp.ui.ChartsFragment" />
+    <fragment android:id="@+id/settings_page" android:name="cn.toside.music.nativeapp.ui.SettingsFragment" />
+</navigation>

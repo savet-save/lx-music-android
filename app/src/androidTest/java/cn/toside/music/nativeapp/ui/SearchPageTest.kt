@@ -131,7 +131,7 @@ class SearchPageTest {
                 val originalJob = field(activity, "loadJob") as Job
                 instrumentation.runOnMainSync { invoke(activity, "showSettings") }
                 instrumentation.waitForIdleSync()
-                val fragment = activity.supportFragmentManager.findFragmentByTag(SettingsFragment.TAG) as SettingsFragment
+                val fragment = activity.settingsFragment() as SettingsFragment
                 val target = if ((field(activity, "palette") as UiPalette).theme.id == "blue") "green" else "blue"
                 instrumentation.runOnMainSync {
                     fragment.requireView().findViewWithTag<View>("settings-category-theme").performClick()

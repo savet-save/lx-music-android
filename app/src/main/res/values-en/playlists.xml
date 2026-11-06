@@ -1,0 +1,11 @@
+<resources>
+    <string name="playlist_new">New</string>
+    <string name="playlist_hot">Popular</string>
+    <string name="playlist_recommended">Recommended</string>
+    <string name="playlist_default">Default</string>
+    <string name="playlist_open">Open</string>
+    <string name="playlist_category">Playlist categories</string>
+    <string name="playlist_retry">Retry</string>
+    <string name="playlist_empty">No playlists</string>
+    <string name="playlist_error">Could not load playlists: %1$s</string>
+</resources>

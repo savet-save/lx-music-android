@@ -41,7 +41,6 @@ class SettingsFragment : Fragment() {
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
-        ScreenInsets.install(requireActivity().window, view)
         preferences = requireContext().getSharedPreferences("app-settings", Context.MODE_PRIVATE).also {
             it.registerOnSharedPreferenceChangeListener(appearanceListener)
         }

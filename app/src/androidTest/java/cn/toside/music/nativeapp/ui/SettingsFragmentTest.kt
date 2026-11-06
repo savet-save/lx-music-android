@@ -37,7 +37,7 @@ class SettingsFragmentTest {
     private fun settings(activity: MainActivity): SettingsFragment {
         var fragment: SettingsFragment? = null
         await {
-            fragment = activity.supportFragmentManager.findFragmentByTag(SettingsFragment.TAG) as? SettingsFragment
+            fragment = activity.settingsFragment() as? SettingsFragment
             fragment?.isResumed == true && fragment?.view != null
         }
         return fragment!!
@@ -193,12 +193,12 @@ class SettingsFragmentTest {
                 instrumentation.runOnMainSync { preferences.edit().putString("theme.id", target).putBoolean("common.isAutoTheme", false).commit() }
                 await { (field(activity, "palette") as UiPalette).theme.id == target }
                 instrumentation.runOnMainSync {
-                    assertSame(fragment, activity.supportFragmentManager.findFragmentByTag(SettingsFragment.TAG))
+                    assertSame(fragment, activity.settingsFragment())
                     assertFalse(descendants(root).first { it.tag == "settings-source-import" }.isEnabled)
                     assertFalse(descendants(root).first { it.tag == "settings-source-url" }.isEnabled)
                     activity.closeSettings()
                 }
-                await { activity.supportFragmentManager.findFragmentByTag(SettingsFragment.TAG) == null }
+                await { activity.settingsFragment() == null }
             }
             assertEquals(before.selected, player.sourceCatalog().selected)
             assertEquals(before.entries.map { it.id }, player.sourceCatalog().entries.map { it.id })
@@ -218,7 +218,7 @@ class SettingsFragmentTest {
                 val songs = (1L..40L).map { Song(it, Uri.EMPTY, "Song $it", "Artist", 60_000, "kw", "{}") }
                 MainActivity::class.java.getDeclaredField("allSongs").apply { isAccessible = true }.set(activity, songs)
                 invoke(activity, "filterSongs")
-                home = activity.findViewById<ViewGroup>(android.R.id.content).getChildAt(0)
+                home = activity.musicPageContent()
                 (field(activity, "list") as ListView).setSelectionFromTop(5, 0)
             }
             await { (field(activity, "list") as ListView).firstVisiblePosition == 5 }
@@ -228,8 +228,8 @@ class SettingsFragmentTest {
             val fragment = settings(activity)
             val root = fragment.requireView()
             assertSame(activity.window.decorView.windowToken, root.windowToken)
-            assertEquals(View.GONE, home.visibility)
-            assertEquals(1, activity.supportFragmentManager.backStackEntryCount)
+            assertFalse(home.isShown)
+            assertEquals(R.id.settings_page, activity.navigationController().currentDestination?.id)
             instrumentation.runOnMainSync { descendants(root).first { it.tag == "settings-category-theme" }.performClick() }
             val target = if ((field(activity, "palette") as UiPalette).theme.id == "blue") "green" else "blue"
             instrumentation.runOnMainSync {
@@ -254,7 +254,7 @@ class SettingsFragmentTest {
             assertSame(fragment, settings(activity)); assertSame(player, field(activity, "service"))
             instrumentation.runOnMainSync { capture("fragment-theme-dark", root) }
             instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
-            await { activity.supportFragmentManager.findFragmentByTag(SettingsFragment.TAG) == null }
+            await { activity.settingsFragment() == null }
             await({ "Home scroll expected $first; actual ${(field(activity, "list") as ListView).firstVisiblePosition}; pending ${field(activity, "pendingScroll")}; visible ${(field(activity, "list") as ListView).isShown}; count ${(field(activity, "list") as ListView).count}" }) {
                 (field(activity, "list") as ListView).isShown && (field(activity, "list") as ListView).firstVisiblePosition == first
             }
@@ -286,10 +286,10 @@ class SettingsFragmentTest {
                 assertEquals("Settings", activity.getString(R.string.settings_title))
                 assertEquals("sources", restored.savePageState()?.getString("category"))
                 assertEquals("https://example.org/fragment-draft.js", (descendants(restored.requireView()).first { it.tag == "settings-source-url" } as EditText).text.toString())
-                assertEquals(1, activity.supportFragmentManager.backStackEntryCount)
+                assertEquals(R.id.settings_page, activity.navigationController().currentDestination?.id)
                 activity.closeSettings()
             }
-            await { activity.supportFragmentManager.findFragmentByTag(SettingsFragment.TAG) == null }
+            await { activity.settingsFragment() == null }
         } finally {
             instrumentation.runOnMainSync { activity.finish() }
             preferences.edit().apply { saved.forEach { (key, value) -> if (value is String) putString(key, value) else remove(key) } }.commit()

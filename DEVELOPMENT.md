@@ -26,7 +26,15 @@
 
 音源管理支持文件/网络导入、多个脚本切换、停用、导出、删除和更新提示，也支持本地歌词/封面动作。开启自动换源时，原平台请求失败后会匹配音源支持的其他平台；匹配按歌曲名、歌手、五秒时长容差和录音版本区分现场、伴奏、混音等版本。歌曲菜单可手动搜索其他来源，或使用系统分享/剪贴板分享 LX 深链。外部音频会复制到私有目录以保存访问能力，后续播放该副本无需媒体库权限。
 
-设置页参考 [桌面版设置导航](https://github.com/lyswhut/lx-music-desktop/blob/master/src/renderer/views/Setting/index.vue)及[移动版设置](https://github.com/lyswhut/lx-music-mobile/tree/master/src/screens/Home/Views/Setting)，使用 Activity 内的 `SettingsFragment` 和返回栈承载；返回键和返回箭头均返回原页面，移除原对话框的「完成」按钮。`SettingsPage` 根据当前窗口宽度切换布局：600 dp 起显示侧边分类，较窄窗口显示顶部横向分类，选中项尽量居中。选择主题后立即更新设置页、主界面和系统栏配色，保留当前分类、滚动位置和播放，不需要关闭设置，也不会重建 Activity；手动选择主题会关闭自动主题。主题切换期间正在下载的音源继续运行。语言、字号和导航布局修改后立即重建界面，Fragment 自动恢复当前分类和音源链接草稿；主页面的数据和滚动位置由 ViewModel 保留。原设置键保持不变。
+导航评估：原实现把歌曲表模式、设置返回栈和多层歌单弹窗分别管理，歌单浏览没有独立的数据与位置状态。现采用 [Navigation 的 NavHostFragment](https://developer.android.com/guide/navigation/use-graph/programmatic)，由 `main_navigation.xml` 定义主内容、歌单浏览、歌单歌曲、排行榜和设置五个目的地；系统返回键和设置返回箭头均经过 NavController。抽屉/宽屏侧栏、底部播放栏和播放 Service 独立于目的地。`MusicPageFragment` 复用现有本地歌曲、搜索与歌单歌曲的公共表格渲染，原有音频、权限和 LX 深链处理仍由 Activity/Service 协调。此轮没有将每个选择弹窗拆成页面，也没有迁移到 Compose。
+
+`PlaylistBrowserFragment` 使用可回收的 GridView：手机三列方形封面和两行标题，宽屏按实际可用宽度增加列数。`PlaylistBrowserViewModel` 保存筛选、分页数据和滚动位置，SavedStateHandle 保存可序列化的小状态；进入歌曲后返回或旋转不重复请求已有页面。换条件取消旧请求并检查请求代数，翻页失败保留已有卡片并重试同一页，重复/空页停止继续加载。封面经过原有 Artwork 大小限制和磁盘缓存，失败时保留占位与歌单点击操作。支持平台切换、分组分类及“打开”原有链接入口。默认酷我提供最新/最热，网易支持最新/最热，QQ 默认分类支持最新/最热/推荐；未支持排序的平台和分类显示推荐。排序参数沿用[原移动版酷我实现](https://github.com/lyswhut/lx-music-mobile/blob/master/src/utils/musicSdk/kw/songList.js)与 [QQ 实现](https://github.com/lyswhut/lx-music-mobile/blob/master/src/utils/musicSdk/tx/songList.js)。
+
+封面绑定保持幂等：已经显示相同 URL 的单元格不再重设文字或位图，8 MiB LRU 淘汰条目也不会清空仍可见的图片。方形封面的像素更新仅使图片重绘，不因图片固有尺寸变化触发整个网格重新测量。“加载更多”显示为底部覆盖层，不再通过改变网格可用高度触发反馈布局。平板回归使用超过 LRU 容量的可见 512 px 图片，在连续父容器布局后检查位图身份与占位状态；手机保持三列布局。
+
+`ChartsFragment` 使用独立 `ChartsViewModel`，默认酷我（别名“小蜗音乐”）热歌榜 id 16。平台与榜单选择在页面顶部，列表直接显示序号、歌名、可用音质、歌手、时长和歌曲操作。音质徽标来自源元数据中的 types，不推断不存在的音质。筛选、分页和原生 ListView 位置状态在返回与旋转后保留，旧筛选响应通过代数检查隔离；翻页失败保留已有歌曲并重试原页。点击歌曲以该榜单作为播放队列，更多操作复用已有歌曲动作并显式排除其他页面的个人歌单上下文。排行榜不覆盖主内容的数据，返回搜索页仍保留原查询；播放器仍由 Activity 外壳和 Service 管理。
+
+设置页参考 [桌面版设置导航](https://github.com/lyswhut/lx-music-desktop/blob/master/src/renderer/views/Setting/index.vue)及[移动版设置](https://github.com/lyswhut/lx-music-mobile/tree/master/src/screens/Home/Views/Setting)，使用导航图内的 `SettingsFragment`；返回键和返回箭头均返回原页面，移除原对话框的「完成」按钮。`SettingsPage` 根据当前窗口宽度切换布局：600 dp 起显示侧边分类，较窄窗口显示顶部横向分类，选中项尽量居中。选择主题后立即更新设置页、主界面和系统栏配色，保留当前分类、滚动位置和播放，不需要关闭设置，也不会重建 Activity；手动选择主题会关闭自动主题。主题切换期间正在下载的音源继续运行。语言、字号和导航布局修改后立即重建界面，Fragment 自动恢复当前分类和音源链接草稿；主页面的数据和滚动位置由 ViewModel 保留。原设置键保持不变。
 
 「自定义音源」内直接提供在线导入表单。`OnlineSourceImport` 使用可取消的 OkHttp 请求，支持重定向、30 秒总超时、2 MB 响应上限，拒绝空内容与 HTML 页面；下载后交由原 `UserSource.import` 校验和原子保存。关闭设置会取消未完成的请求，失败后现有选择仍可使用。专项测试使用本地 HTTP 服务及测试脚本，不依赖真实第三方音源。
 

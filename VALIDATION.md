@@ -1,5 +1,40 @@
 # 原生迁移验证记录
 
+## 2026-11-06：平板封面稳定性与排行榜页面
+
+针对用户提供的 1920×1080 / Android 12 录屏，确认同一位置的歌单图片与 LX 占位反复交替。封面现在对同一 URL 的已显示内容保持幂等，固定方形图片更新像素时不触发父容器重新测量，底部加载更多改为覆盖层以保持网格高度稳定；手机仍使用三列布局。
+
+- YYA-H618 / Android 12（API 31）最终 38 项相关设备测试全部通过，0 失败、0 跳过。包括歌单页 4 项、排行榜 3 项、设置 7 项、搜索 5 项、歌单接口 7 项、窗口适配 5 项、主页手势/抽屉/Insets 各 1 项及真实 MediaPlayer 播放 4 项。
+- 平板专项使用本地 HTTP 返回的多个 512×512 图片，可见位图总量超过 8 MiB 封面 LRU；连续触发 15 次父容器布局后，检查所有可见图片仍非占位，位图对象身份不变，布局次数能够收敛。该专项在本轮宽屏设备实际执行，未按屏宽跳过。
+- 排行榜使用独立 Navigation 目的地、ViewModel 与 SavedStateHandle，默认酷我别名“小蜗音乐”热歌榜（id 16）。验证平台/榜单选择、音质/时长显示、分页失败同页重试、迟到响应隔离、返回/旋转保留位置及原搜索页查询；点击排行榜歌曲验证实际 MediaPlayer 播放该排行榜队列。
+- 显式开启 `liveCharts=true` 和 `livePlaylists=true`，默认热歌榜与默认歌单、封面图片的真实接口验证通过。其余平台使用既有解析和筛选样本；本轮未重新执行五平台全量联网验收，也未下载真实音乐音频。
+- 排行榜的 360×800、1024×768 dp 界面使用同一台设备的真实 Android View 测量与绘制，预览不等于对应尺寸实体手机实测。
+- JVM 单元测试 20 项通过；Debug Lint 为 0 错误、178 警告、1 提示，Release Lint 为 0 错误、174 警告。签名 Release `lx-music-native-v0.9.2.apk`（code 92）构建成功，`apksigner verify --verbose` 通过。
+
+最终记录位于 `build/chart-validation/device-final-tests.txt`、`release-build.txt`、`signature-verification.txt`；截图位于同目录 `screenshots/`，录屏抽帧仅用于诊断。设备测试使用独立 `.chartcheck` 包，验证结束后卸载。
+
+```powershell
+.\gradlew.bat :app:assembleRelease :app:testDebugUnitTest :app:lintDebug :app:lintRelease
+.\gradlew.bat :app:connectedDebugAndroidTest '-Pandroid.testInstrumentationRunnerArguments.class=cn.toside.music.nativeapp.ui.PlaylistBrowserTest,cn.toside.music.nativeapp.ui.ChartsPageTest,cn.toside.music.nativeapp.ui.SettingsFragmentTest,cn.toside.music.nativeapp.ui.SearchPageTest,cn.toside.music.nativeapp.online.OnlinePlaylistsTest,cn.toside.music.nativeapp.ui.AdaptiveLayoutTest,cn.toside.music.nativeapp.ui.HomeNavigationTest,cn.toside.music.nativeapp.ui.PhoneNavigationDrawerTest#drawerUsesSelectedSideBlocksPageSwipesAndLeavesMiniPlayerInteractive,cn.toside.music.nativeapp.ui.ScreenInsetsTest,cn.toside.music.nativeapp.player.PlaybackSettingsTest#playlistAndSettingsNavigationKeepAudioAndTheGlobalMiniPlayer,cn.toside.music.nativeapp.player.PlaybackSettingsTest#settingsFragmentThemeChangesKeepTheSameActivityAndAudioPlaying,cn.toside.music.nativeapp.player.PlaybackSettingsTest#languageAndFontChangesKeepPlaylistSearchAndScrollWhileAudioContinues,cn.toside.music.nativeapp.player.PlaybackSettingsTest#chartRowClickPlaysTheDisplayedChartQueue' '-Pandroid.testInstrumentationRunnerArguments.chartScreenshots=true' '-Pandroid.testInstrumentationRunnerArguments.playlistScreenshots=true' '-Pandroid.testInstrumentationRunnerArguments.liveCharts=true' '-Pandroid.testInstrumentationRunnerArguments.livePlaylists=true'
+```
+
+## 2026-11-06：Navigation 导航与封面歌单页
+
+主内容、歌单浏览、歌单歌曲和设置已接入 `NavHostFragment` / `main_navigation.xml`；抽屉、侧栏及底部播放栏在导航宿主外，播放仍由 Service 维护。歌单浏览独立使用 ViewModel / SavedStateHandle，保留筛选、分页与 GridView 原生位置状态。
+
+- YYA-H618 / Android 12（API 31）最终 33 项相关设备测试全部通过，0 失败、0 跳过。包含歌单浏览 3 项、封面与排序等歌单接口 7 项、设置 7 项、搜索 5 项、窗口适配 5 项、主页手势/抽屉/Insets 各 1 项、真实 MediaPlayer 播放连续性 3 项。
+- 验证三列方形封面、两行标题、宽屏增列、最新/最热切换、歌曲详情返回、旋转保留浏览数据和位置、搜索页返回恢复，以及分页失败重试同一页、重复/空页停止、旧筛选的迟到响应隔离。验证 GridView 在测量阶段更新列数，避免布局后清空卡片；验证播放状态刷新不会让设置页播放栏重新出现。
+- 显式启用 `livePlaylists=true`，默认酷我“最新”真实接口、封面元数据及图片解码显示通过；其他平台封面字段使用固定样本验证，不将本轮记录写成五平台全量联网验收。播放使用静音 PCM，未下载真实音乐音频。
+- 对实际 Android View 按 360×800、600×800、1024×768 dp 测量和绘制歌单页；同组设置/搜索测试覆盖深色、英文和 130% 字号。尺寸验证在同一台设备上完成，并非对应尺寸实体手机实测。
+- JVM 单元测试 20 项通过。Debug Lint：0 错误、171 警告、1 提示；Release Lint：0 错误、167 警告。Release `lx-music-native-v0.9.2.apk`（code 92）构建成功，`apksigner verify --verbose` 通过。
+
+记录位于 `build/navigation-validation/device-final-tests.txt`、`release-build.txt`、`signature-verification.txt`，截图位于同目录 `screenshots/`。设备测试使用独立 `.navigationcheck` 包，完成后已卸载。
+
+```powershell
+.\gradlew.bat :app:assembleRelease :app:testDebugUnitTest :app:lintDebug :app:lintRelease
+.\gradlew.bat :app:connectedDebugAndroidTest '-Pandroid.testInstrumentationRunnerArguments.class=cn.toside.music.nativeapp.ui.PlaylistBrowserTest,cn.toside.music.nativeapp.ui.SettingsFragmentTest,cn.toside.music.nativeapp.ui.SearchPageTest,cn.toside.music.nativeapp.online.OnlinePlaylistsTest,cn.toside.music.nativeapp.ui.AdaptiveLayoutTest,cn.toside.music.nativeapp.ui.HomeNavigationTest,cn.toside.music.nativeapp.ui.PhoneNavigationDrawerTest#drawerUsesSelectedSideBlocksPageSwipesAndLeavesMiniPlayerInteractive,cn.toside.music.nativeapp.ui.ScreenInsetsTest,cn.toside.music.nativeapp.player.PlaybackSettingsTest#playlistAndSettingsNavigationKeepAudioAndTheGlobalMiniPlayer,cn.toside.music.nativeapp.player.PlaybackSettingsTest#settingsFragmentThemeChangesKeepTheSameActivityAndAudioPlaying,cn.toside.music.nativeapp.player.PlaybackSettingsTest#languageAndFontChangesKeepPlaylistSearchAndScrollWhileAudioContinues' '-Pandroid.testInstrumentationRunnerArguments.playlistScreenshots=true' '-Pandroid.testInstrumentationRunnerArguments.livePlaylists=true'
+```
+
 ## 2026-11-06：Fragment 设置页与即时主题配色
 
 设置主页面由 `SettingsFragment` 和 Activity 返回栈承载，移除「完成」按钮。主题选择立即更新设置页、主页和系统栏；换色保留同一个 Activity、Fragment、播放服务、分类和滚动位置。手动选主题会关闭跟随系统；语言、字号和导航布局修改立即重建界面并恢复设置状态。
