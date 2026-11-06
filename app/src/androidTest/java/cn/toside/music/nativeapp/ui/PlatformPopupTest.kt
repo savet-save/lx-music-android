@@ -13,6 +13,7 @@ import android.view.ViewGroup
 import android.view.WindowManager
 import android.view.inspector.WindowInspector
 import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.ListView
 import android.widget.TextView
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -44,6 +45,15 @@ class PlatformPopupTest {
     private fun descendants(view: View): List<View> = listOf(view) + if (view is ViewGroup) (0 until view.childCount).flatMap { descendants(view.getChildAt(it)) } else emptyList()
     private fun menu() = WindowInspector.getGlobalWindowViews().flatMap(::descendants).filterIsInstance<ListView>().firstOrNull { it.tag == "platform-menu" && it.isShown }
     private fun bounds(view: View) = Rect().also { rect -> val p = IntArray(2).also(view::getLocationOnScreen); rect.set(p[0], p[1], p[0] + view.width, p[1] + view.height) }
+    private fun visibleWindow(view: View) = Rect().also { frame ->
+        view.getWindowVisibleDisplayFrame(frame)
+        assertTrue("Visible frame $frame must intersect the app window ${bounds(view.rootView)}", frame.intersect(bounds(view.rootView)))
+    }
+    private fun awaitLayout(view: () -> View?) {
+        await("the menu anchor and its window to finish layout") {
+            view()?.let { it.isShown && it.isLaidOut && !it.isLayoutRequested && !it.rootView.isLayoutRequested } == true
+        }
+    }
     private fun awaitHostFocus(activity: MainActivity) {
         await("the live Activity window to regain input focus") {
             assertFalse("Menu dismissal must not finish the Activity", activity.isFinishing)
@@ -67,8 +77,14 @@ class PlatformPopupTest {
     }
     private fun verify(anchor: View, selected: String, end: Boolean = false) {
         val list = requireNotNull(menu()); val popup = bounds(list); val button = bounds(anchor)
-        assertEquals(button.bottom, popup.top)
-        assertTrue(abs((if (end) button.right - popup.right else button.left - popup.left)) <= 1)
+        val frame = visibleWindow(anchor)
+        val geometry = "anchor=${anchor.tag} $button, popup=$popup, visible window=$frame, alignEnd=$end"
+        assertTrue("The whole menu must stay inside the visible app window: $geometry", frame.contains(popup))
+        assertEquals("Menu must open below its anchor: $geometry", button.bottom, popup.top)
+        // Scrollable filters can leave a button partially clipped; the menu must then avoid the window edge.
+        val alignedLeft = if (end) button.right - popup.width() else button.left
+        val expectedLeft = alignedLeft.coerceIn(frame.left, frame.right - popup.width())
+        assertTrue("Expected menu left=$expectedLeft: $geometry", abs(expectedLeft - popup.left) <= 1)
         assertEquals(0, (list.rootView.layoutParams as WindowManager.LayoutParams).flags and WindowManager.LayoutParams.FLAG_DIM_BEHIND)
         val selectedRow = descendants(list).filterIsInstance<TextView>().first { it.tag == "platform-$selected" }
         assertEquals(UiPalette(anchor.context, NativeThemes(anchor.context).active()).primary, selectedRow.currentTextColor)
@@ -119,6 +135,7 @@ class PlatformPopupTest {
                 MainActivity::class.java.getDeclaredMethod("searchOnline", Boolean::class.javaPrimitiveType).apply { isAccessible = true }.invoke(activity, false)
             }
             await { searches.get() == 5 && (field(activity, "loadJob") as? Job)?.isActive != true }
+            awaitLayout { (field(activity, "searchSourceButton") as View).takeIf { it.isShown } ?: field(activity, "heading") as View }
             main { invoke(activity, "showSearchSources") }; await { menu()?.childCount == 6 }
             main {
                 val anchor = (field(activity, "searchSourceButton") as View).takeIf { it.isShown } ?: field(activity, "heading") as View
@@ -147,6 +164,7 @@ class PlatformPopupTest {
 
             main { invoke(activity, "showOnlinePlaylists") }
             await { activity.navigationController().currentDestination?.id == R.id.playlist_browser && playlistRequests.get() == 1 }
+            awaitLayout { activity.findViewById<ViewGroup>(android.R.id.content).findViewWithTag("playlist-source") }
             main { activity.findViewById<ViewGroup>(android.R.id.content).findViewWithTag<View>("playlist-source").performClick() }
             await { menu()?.childCount == 5 }
             main {
@@ -157,6 +175,7 @@ class PlatformPopupTest {
             await { menu()?.childCount == 5 }; main { choose("tx") }; await { playlistRequests.get() == 2 && menu() == null }
 
             main { invoke(activity, "showBoards") }; await { activity.chartsFragment()?.isResumed == true && chartRequests.get() == 1 }
+            awaitLayout { activity.chartsFragment()?.view?.findViewWithTag("charts-source") }
             main { activity.chartsFragment()!!.requireView().findViewWithTag<View>("charts-source").performClick() }
             await { menu()?.childCount == 5 }
             main { verify(activity.chartsFragment()!!.requireView().findViewWithTag("charts-source"), "kw"); capture(activity, "chart-platforms") }
@@ -178,6 +197,47 @@ class PlatformPopupTest {
             main { activity.chartsFragment()!!.requireView().findViewWithTag<View>("charts-source").performClick() }
             await { menu()?.childCount == 5 }; main { choose("kg") }; await { activity.chartsFragment()?.model?.state?.value?.board?.source == "kg" && chartRequests.get() == 2 }
         } finally { main { activity.finish() } }
+    }
+
+    @Test fun partiallyClippedAnchorsKeepMenusInsideBothWindowEdges() {
+        val activity = instrumentation.startActivitySync(Intent(instrumentation.targetContext, MainActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
+        val popup = PlatformPopup()
+        try {
+            await { activity.settingsPlayer() != null }
+            lateinit var viewport: FrameLayout
+            lateinit var anchor: TextView
+            main {
+                val density = activity.resources.displayMetrics.density
+                fun dp(value: Int) = (value * density).toInt()
+                viewport = FrameLayout(activity)
+                anchor = TextView(activity).apply { tag = "clipped-platform-anchor"; text = "Platform" }
+                viewport.addView(anchor, FrameLayout.LayoutParams(dp(160), dp(48)).apply { topMargin = dp(16) })
+                activity.findViewById<ViewGroup>(android.R.id.content).addView(viewport, ViewGroup.LayoutParams(-1, -1))
+            }
+            awaitLayout { anchor }
+            for (end in listOf(false, true)) {
+                main {
+                    val frame = visibleWindow(anchor)
+                    val origin = bounds(viewport)
+                    anchor.x = ((if (end) frame.right else frame.left) - origin.left - anchor.width / 2).toFloat()
+                    val button = bounds(anchor)
+                    assertTrue("Anchor must remain partially visible", button.intersects(frame.left, frame.top, frame.right, frame.bottom))
+                    assertTrue("Exercise a clipped anchor at the ${if (end) "right" else "left"} edge", if (end) button.right > frame.right else button.left < frame.left)
+                    popup.show(anchor, PlatformPopup.sources, PlatformPopup.sources.map { UiPreferences.sourceName(activity, it) },
+                        "kw", field(activity, "palette") as UiPalette, alignEnd = end) { fail("Opening a menu must not select a provider") }
+                }
+                await { menu()?.childCount == 5 }
+                main {
+                    verify(anchor, "kw", end)
+                    val frame = visibleWindow(anchor); val menuBounds = bounds(menu()!!)
+                    assertEquals("Clipped anchors must pin the menu to the visible window edge", if (end) frame.right else frame.left,
+                        if (end) menuBounds.right else menuBounds.left)
+                    popup.dismiss()
+                }
+                await { menu() == null }
+            }
+        } finally { main { popup.dismiss(); activity.finish() } }
     }
 
     @Test fun outsideTouchCoordinatesStayOutsideTheMenuAtPhoneAndTabletDensities() {
