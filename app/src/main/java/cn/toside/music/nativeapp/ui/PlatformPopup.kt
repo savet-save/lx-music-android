@@ -1,12 +1,15 @@
 package cn.toside.music.nativeapp.ui
 
 import android.annotation.SuppressLint
+import android.app.Activity
+import android.content.ContextWrapper
 import android.graphics.Rect
 import android.graphics.drawable.GradientDrawable
 import android.text.TextUtils
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowManager
 import android.widget.BaseAdapter
 import android.widget.ListView
 import android.widget.PopupWindow
@@ -27,6 +30,9 @@ internal class PlatformPopup {
         if (!anchor.isAttachedToWindow || !anchor.isShown || ids.isEmpty()) return
         require(ids.size == labels.size)
         val context = anchor.context
+        var owner = context
+        while (owner is ContextWrapper && owner !is Activity && owner.baseContext !== owner) owner = owner.baseContext
+        if (owner is Activity && (owner.isFinishing || owner.isDestroyed || owner.isChangingConfigurations)) return
         val density = context.resources.displayMetrics.density
         fun dp(value: Int) = (value * density).roundToInt()
         fun label() = TextView(context).apply {
@@ -92,7 +98,15 @@ internal class PlatformPopup {
         val left = if (onRight) location[0] + anchor.width - width else location[0]
         val offsetX = left.coerceIn(frame.left, frame.right - width) - left
         val offsetY = if (popup.height > below) -anchor.height - popup.height else 0
-        popup.showAsDropDown(anchor, offsetX, offsetY, gravity)
+        try {
+            popup.showAsDropDown(anchor, offsetX, offsetY, gravity)
+        } catch (_: WindowManager.BadTokenException) {
+            // A window can be revoked before its still-attached anchor receives the detach event.
+            runCatching { popup.dismiss() }
+            anchor.removeOnAttachStateChangeListener(detach)
+            if (window === popup) window = null
+            return
+        }
         list.setSelection(ids.indexOf(selected).coerceAtLeast(0))
     }
 

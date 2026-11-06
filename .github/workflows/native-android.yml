@@ -39,6 +39,8 @@ jobs:
       - uses: gradle/actions/setup-gradle@v6
       - name: Install Android SDK
         run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
+      - name: Verify release scripts
+        run: python3 -m unittest discover -s scripts/tests -v
       - name: Build and verify native app
         run: bash ./gradlew --no-daemon :app:assembleDebug :app:assembleDebugAndroidTest :app:testDebugUnitTest :app:lintDebug
       - name: Upload native APKs and reports
@@ -89,3 +91,4 @@ jobs:
             app/build/reports/androidTests/
             app/build/outputs/androidTest-results/
             build/permission-flow/
+            build/device-diagnostics/

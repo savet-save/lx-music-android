@@ -83,6 +83,25 @@ class AboutDiagnosticsTest {
         assertTrue(NativeReleases.compare("0.10.0", "0.9.9") > 0)
         assertNull(NativeReleases.parse(JSONArray().put(release("v2.0.0")).toString()))
     }
+    @Test fun nativeUpdateSelectsDeviceAbiAndFallsBackToAllOrLegacyApks() {
+        fun releases(vararg architectures: String) = JSONArray().put(JSONObject().put("tag_name", "native-v0.9.4")
+            .put("assets", JSONArray().apply { architectures.forEach { architecture ->
+                put(JSONObject().put("name", "lx-music-native-v0.9.4-$architecture.apk").put("size", 123)
+                    .put("digest", "sha256:" + "a".repeat(64)))
+            } })).toString()
+        val allFirst = releases("all", "armv7", "armv8")
+        assertTrue(NativeReleases.parse(allFirst, listOf("arm64-v8a", "armeabi-v7a"))!!.apkUrl!!.endsWith("-armv8.apk"))
+        assertTrue(NativeReleases.parse(allFirst, listOf("armeabi-v7a"))!!.apkUrl!!.endsWith("-armv7.apk"))
+        assertTrue(NativeReleases.parse(allFirst, listOf("x86_64", "x86"))!!.apkUrl!!.endsWith("-all.apk"))
+        assertTrue(NativeReleases.parse(releases("all", "armv7"), listOf("arm64-v8a"))!!.apkUrl!!.endsWith("-all.apk"))
+        assertNull(NativeReleases.parse(releases("armv8"), listOf("armeabi-v7a")))
+        assertEquals("sha256:" + "a".repeat(64), NativeReleases.parse(allFirst, listOf("arm64-v8a"))!!.digest)
+        val legacy = allFirst.replace("-all.apk", ".apk").replace("-armv7.apk", "-unsupported.apk").replace("-armv8.apk", "-unsupported.apk")
+        assertTrue(NativeReleases.parse(legacy, listOf("x86_64"))!!.apkUrl!!.endsWith("-v0.9.4.apk"))
+        val data = JSONArray(allFirst)
+        data.getJSONObject(0).getJSONArray("assets").getJSONObject(2).put("digest", "invalid")
+        assertTrue(NativeReleases.parse(data.toString(), listOf("arm64-v8a"))!!.apkUrl!!.endsWith("-all.apk"))
+    }
     @Test fun nativeFontPreferencePreservesSystemScaleAndAboutShowsInstalledVersionAndLicense() {
         val settings = target.getSharedPreferences("app-settings", 0)
         val original = settings.getString("common.fontScale", null)

@@ -1,5 +1,58 @@
 # 原生迁移验证记录
 
+## 2026-11-06：菜单窗口边界断言 CI 修复
+
+用户提供的 `logs_114339440161.zip` 对应 [运行 42198892068](https://github.com/savet-save/lx-music-android/actions/runs/42198892068)，检出 `22eb172`。构建检查、13 项发布脚本测试、API 28 全部通过；API 35 仅剩 `PlatformPopupTest.providerMenusAnchorToSearchPlaylistsAndChartsAndDoNotResetCurrentChoices` 失败。完整堆栈定位到原第 71 行的水平对齐断言，由第 153 行的歌单平台菜单检查触发，本轮没有再报告窗口令牌、本地化或下载失败。
+
+- 旧断言始终要求菜单与按钮的原始边缘重合，未考虑按钮在水平滚动容器中被部分裁剪的情况。组件原有行为会将菜单限制在应用窗口与可见区域的交集内。Android 的 [PopupWindow 定位说明](https://developer.android.com/reference/android/widget/PopupWindow#showAsDropDown(android.view.View,%20int,%20int,%20int)) 也明确指出空间不足时会调整位置，不能无条件假定原始锚点对齐。
+- 在本地 Android 12 的独立 `.ci114339` 包中，将原测试的应用窗口设为 240×800 dp 并开启触摸模式，复现了同一 `verify` 断言及同一歌单检查调用点：按钮右边缘为 1154 px，窗口和菜单右边缘均为 1119 px，相差 35 px。API 35 原日志未记录这些矩形，因此这里的具体坐标属于本地受控复现。
+- 对齐检查现在校验菜单完整位于可见应用窗口内，并比较经过窗口边界限制后的准确位置；原有 1 px 水平误差范围保留。失败信息包含按钮、菜单、窗口矩形及对齐方向。打开搜索、歌单、排行榜菜单前，先等待锚点及窗口布局完成。
+- 新增左右两侧部分裁剪锚点的设备回归，分别验证左对齐、右对齐菜单贴合窗口边缘，保留选中状态、颜色及无调暗背景检查。修改范围为设备回归测试及本记录。
+- 原先失败的 240 dp 窄窗口场景修复后通过。正式测试类在 YYA-H618 / Android 12（API 31）执行菜单、歌单、排行榜、搜索、设置、本地化和 Insets 回归，共 27 项，25 项通过、2 项未开启的真实联网测试按设计跳过、0 失败；五项菜单测试全部通过。Debug/测试 APK 构建、20 项 JVM 单元测试、Debug Lint 通过（0 错误、175 警告）。
+- 原始日志、受控复现及设备状态记录位于忽略的 `build/ci-114339440161/`。临时测试包完成后卸载。本地仍无 API 28/35 模拟器，本次未推送，API 35 最终结果需以包含本次修改的 Actions 为准。
+
+## 2026-11-06：英文资源与菜单输入焦点 CI 修复
+
+用户提供的 `logs_114318333251.zip` 对应 [运行 42190921135](https://github.com/savet-save/lx-music-android/actions/runs/42190921135)，检出 `7e4c65f`，尚未包含发布脚本提交 `48f85ed`。构建检查及首次授权均通过，上次的排行榜和下载项没有再失败；API 28 剩余本地化检查 1 项失败，API 35 另外有平台菜单测试 `BadTokenException`。
+
+- 英文 `settings_source_hint` 使用了中文品牌文字，触发现有的英文未翻译检查。英文提示改为 `Wildflower🌷`，保留原有检查规则。
+- 菜单测试之前只等待窗口可见就注入返回键，未确认弹窗获得输入焦点；后续对话框若仍使用已退出的 Activity，就可能遇到失效窗口令牌。原日志只提供两帧框架栈，不能据此确认异常的具体应用调用点。本次改为等待菜单窗口获得焦点后发送返回键，并等待宿主重新获得焦点，明确断言宿主未结束或销毁。[Android 窗口焦点说明](https://developer.android.com/reference/android/view/View#hasWindowFocus())
+- 同一测试的窗口外点击原来固定偏移 450 像素，在高 DPI 屏幕上仍可能落在菜单内。现在根据当前应用可见窗口和菜单实际矩形计算点击位置，并新增 1.0、1.33、2.75、4.0 密度下的坐标检查。菜单等待超时包含具体阶段，没有增加重试或放宽断言。
+- CI 失败处理会把 JUnit XML 中的完整失败堆栈打印到运行日志，同时保存 `build/device-diagnostics/test-failures.txt`。Bash 语法检查与模拟失败验证通过：保留原退出码 7，完整输出四层示例堆栈及原有三份诊断文件。
+- Debug APK、仪器测试 APK、20 项 JVM 单元测试及 Debug Lint 通过（0 错误、175 警告）。YYA-H618 / Android 12（API 31）使用独立 `.ci114318` 包按 CI 的两阶段筛选和样本参数执行：首次授权 1 项通过，其余 191 项中 181 项通过、10 项按设计跳过，共 182 项通过、0 失败。包括本次本地化、平台菜单焦点/外部触摸以及全部播放、同步和升级包检查；跳过项为未开启的真实联网验收及设备条件限制。
+- 原始构建、脚本验证与完整设备状态记录位于忽略的 `build/ci-114318333251/`。临时测试包及设备上的两份 APK 样本已清理。当前本地没有配置 API 28/35 模拟器，本次未推送，两个系统版本的最终结果仍以修复提交后的 Actions 为准。
+
+## 2026-11-06：三架构 APK 与 Releases 发布脚本
+
+新增 `scripts/publish-release.py`，由 `native-release.yml` 复用。发布版本 `0.9.3` 对应三个完整文件名 `lx-music-native-v0.9.3-armv7.apk`、`lx-music-native-v0.9.3-armv8.apk`、`lx-music-native-v0.9.3-all.apk`；标题仅为 `0.9.3`。首次原生正式发布使用项目介绍，后续按前一原生正式 Release 标签以来的提交生成改动记录，每次均附三个 APK 的 SHA-256 及 `SHA256SUMS.txt`。
+
+- 13 项 Python 发布流程测试通过，覆盖首次/后续说明、真实 Git 标签范围、标签版本策略、ABI/签名校验、上传顺序、缺包/哈希错误、失败保留草稿、草稿重试、已发布版本不覆盖、仅准备模式及未提交源码拒绝发布。GitHub 写入使用模拟命令验证，本次未创建、上传或修改任何远程 Release。
+- 使用独立输出目录及临时密钥真实构建三包，versionName `0.9.3`、versionCode `9003`。脚本的实际校验函数确认：armv7 包仅含 `armeabi-v7a`，armv8 包仅含 `arm64-v8a`，all 包含 `armeabi-v7a/arm64-v8a/x86/x86_64`；三个 APK 签名均有效且证书一致。生成的说明与校验文件内哈希和实际已签名 APK 一致。
+- 20 项 JVM 单元测试通过；Release Lint 为 0 错误、175 警告。未开启拆包时的 Debug APK/测试 APK 构建通过，Debug 仍为单一 `app-debug.apk`，Debug Lint 为 0 错误、175 警告。
+- YYA-H618 / Android 12（API 31）独立 `.releasecheck` 包执行 `AboutDiagnosticsTest`，4 项全部通过，0 失败、0 跳过；覆盖 ARM 选包、通用包回退、旧单包兼容、错误哈希过滤以及原有版本通道、诊断和关于页行为。临时测试包完成后卸载。
+- 构建、包结构及签名检查、哈希示例和设备原始结果保存于忽略的 `build/release-validation/`。真实三包为测试密钥签名，不能作为正式版本分发；实际发布仍需仓库既有的正式签名配置和 GitHub 登录/Secrets。
+
+## 2026-11-06：第二次 Actions 设备回归修复
+
+用户提供的 `logs_114299436692.zip` 对应 [运行 42183665546](https://github.com/savet-save/lx-music-android/actions/runs/42183665546)，检出合并提交 `3400265`（包含 `1afcca3`）。该次构建检查及两个系统版本的首次授权测试均通过，版本样本已正确使用 `0.9.4`；上次的关于页版本和签名错误未再出现。此运行早于内置音源提交 `351ea05`。
+
+- API 28 有 1 项失败：排行榜抽屉回归等待列表状态超时。对照设备测试确认，关闭后立即重开抽屉并在布局完成前设置滚动位置，会被后续布局覆盖。测试现在等待列表与窗口布局完成，再定位到中间行，避免末行底部对齐随窗口高度变化影响恢复断言；超时信息增加具体阶段及列表状态，保留原有超时上限。
+- API 35 有同一项排行榜失败，另有平台菜单 `BadTokenException` 及 3 项下载失败。歌单 ID 确认后的平台菜单现在等待输入对话框完全关闭，再获取当前页面锚点；宿主正在退出/销毁/重建时不创建菜单，并清理窗口令牌失效时的残留状态。新增仍附着的退出中 Activity 锚点回归。
+- 3 项下载日志均停在 `STATUS_PENDING`（0 字节、reason 0），并非上次旧版本记录被取消。原日志缺少调度器状态，不能据此断言具体的调度约束。CI 通过仅在仪器测试中启用的 `runDownloadJobs=true` 显式触发这些下载对应的系统任务，再验证真实 HTTP 传输、文件内容及安装前安全检查；应用的下载实现未修改。任务 ID 映射依据 [Android 15 官方 AOSP 实现](https://github.com/aosp-mirror/platform_packages_providers_downloadprovider/blob/android-15.0.0_r1/src/com/android/providers/downloads/Helpers.java)。失败时额外上传 JobScheduler、连接状态和 logcat，保留原始失败退出码。
+- 本地 Debug/测试 APK 构建、20 项 JVM 单元测试和 Debug Lint 通过（0 错误、183 警告、1 提示）。Bash 语法检查通过；模拟构建退出码 7，确认失败处理仍返回 7，并生成全部 3 份诊断文件。
+- YYA-H618 / Android 12（API 31）独立 `.ciregression` 包定向复验：`ChartsPageTest`、`PlatformPopupTest`、`DownloadsTest`、`NativeUpdatesTest` 共 11 项，10 项通过、0 失败、1 项未开启的真实榜单联网测试按设计跳过。显式开启下载任务触发，并使用 `0.9.3/code 93` → `0.9.4/code 94` 的同签名及错误签名样本。旧布局顺序的受控对照测试超时，修复后同一滚动/重建检查通过。
+- 输出位于忽略的 `build/ci-114299436692/`；临时测试包和设备上的测试 APK 已清理。本地设备均为 API 31，不能替代 API 28/35 完整回归；本次尚未推送，远程结果需以修复提交后的 Actions 为准。
+
+## 2026-11-06：内置默认野花音源
+
+将用户指定的 [flower/latest.js](https://raw.githubusercontent.com/pdone/lx-music-source/main/flower/latest.js) 原始内容保存为 `app/src/main/assets/script/flower.js`，名称「野花🌷」、版本 `1`。新音源库默认选中该脚本，现有音源库迁移时补入该脚本并保留原有选择、停用及更新提示设置；停用或删除后重启不自动恢复。可继续使用既有音源导入、切换、导出、删除和更新提示功能。
+
+- 原始下载、资源文件以及 Debug APK 内的脚本 SHA-256 均为 `15c166987edde41cf5917b3160c0ab253ff17e5e6bc6765c9eaa11a822c4aa97`，脚本未修改，Git 对该文件保留原始字节。
+- Debug APK、仪器测试 APK 构建通过，20 项 JVM 单元测试全部通过；Debug Lint 为 0 错误、183 警告、1 提示。
+- YYA-H618 / Android 12（API 31）使用独立 `.builtincheck` 包执行 `UserSourceLibraryTest`、`UserSourceTest`、`OnlineSourceImportTest` 和 `SettingsFragmentTest`，24 项全部通过，0 失败、0 跳过。覆盖首次创建、旧单脚本/v1 库迁移、重复脚本去重、停用/删除持久化、现有自定义脚本与更新提示设置保留、导入失败回退和设置页操作。
+- 显式传入 `liveBuiltinSource=true`，未修改的内置脚本通过原生 QuickJS 运行时初始化，并支持 `kw/kg/tx/wy/mg` 的 `musicUrl` 动作。本次未下载真实音乐，也不把动作支持声明记作五平台音频播放验收。该联网初始化测试在未传参数时跳过；其他新增音源库测试不依赖第三方网络。
+- 原始输出位于忽略的 `build/builtin-source-validation/`；测试包完成后卸载。脚本随 APK 打包，初始化与解析仍依赖脚本自己的在线服务，API 28/35 设备结果以对应 Actions 运行记录为准。
+
 ## 2026-11-06：Actions 设备回归版本样本修复
 
 运行 [42154972751](https://github.com/savet-save/lx-music-android/actions/runs/42154972751) 的 API 28 和 API 35 作业各有相同的 4 项失败，构建检查与首次授权测试通过。根因是版本升级后测试仍使用 `0.1.0/0.1.1`：关于页断言与安装版本不符；错误签名样本的 code 2 先被版本校验拒绝；两项下载测试的旧版本记录被 `NativeUpdates.progress()` 主动取消，随后表现为连接重置或等待超时。缓存写入冲突、模拟器启动期间的 ADB offline 警告不是本次作业失败原因。

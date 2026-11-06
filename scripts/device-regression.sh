@@ -2,6 +2,34 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+save_failure_diagnostics() {
+  local result=$?
+  if (( result != 0 )); then
+    mkdir -p build/device-diagnostics
+    python3 - <<'PY' | tee build/device-diagnostics/test-failures.txt || true
+from pathlib import Path
+import xml.etree.ElementTree as ET
+
+for report in sorted(Path('app/build/outputs/androidTest-results').rglob('*.xml')):
+    try:
+        suite = ET.parse(report).getroot()
+    except (ET.ParseError, OSError) as error:
+        print(f'Could not read {report}: {error}')
+        continue
+    for case in suite.iter('testcase'):
+        for failure in case:
+            if failure.tag in ('failure', 'error'):
+                print(f"\nFAILED {case.get('classname', '')}#{case.get('name', '')} ({report})")
+                print(failure.text or failure.get('message', 'No failure details'))
+PY
+    adb shell dumpsys jobscheduler > build/device-diagnostics/jobscheduler.txt 2>&1 || true
+    adb shell dumpsys connectivity > build/device-diagnostics/connectivity.txt 2>&1 || true
+    adb logcat -d -t 1500 > build/device-diagnostics/logcat.txt 2>&1 || true
+  fi
+  exit "$result"
+}
+trap save_failure_diagnostics EXIT
+
 # Read the actual baseline APK metadata so fixtures remain upgrades after version bumps.
 bash ./gradlew --no-daemon :app:assembleDebug
 fixture_metadata=$(python3 - <<'PY'
@@ -39,5 +67,6 @@ cp -a app/build/reports/androidTests/. build/permission-flow/reports/
 cp -a app/build/outputs/androidTest-results/. build/permission-flow/results/
 bash ./gradlew --no-daemon :app:connectedDebugAndroidTest \
   -Pandroid.testInstrumentationRunnerArguments.notClass=cn.toside.music.nativeapp.ui.PermissionFlowTest \
+  -Pandroid.testInstrumentationRunnerArguments.runDownloadJobs=true \
   -Pandroid.testInstrumentationRunnerArguments.updateFixture=/data/local/tmp/lx-native-update-fixture.apk \
   -Pandroid.testInstrumentationRunnerArguments.wrongSignerFixture=/data/local/tmp/lx-native-wrong-signer.apk

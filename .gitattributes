@@ -1,0 +1,2 @@
+# Keep the upstream source bytes intact, including the script's own integrity checks.
+app/src/main/assets/script/flower.js -text

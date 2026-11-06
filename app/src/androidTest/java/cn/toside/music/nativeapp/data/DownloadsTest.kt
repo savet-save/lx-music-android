@@ -5,6 +5,9 @@ import android.content.Context
 import android.net.Uri
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.ParcelFileDescriptor
+import android.os.SystemClock
+import cn.toside.music.nativeapp.DownloadTestScheduler
 import cn.toside.music.nativeapp.utils.PermissionPolicy
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -43,19 +46,24 @@ class DownloadsTest {
         try {
             val downloadId = Downloads(context).enqueue(song, Uri.parse("http://127.0.0.1:${server.localPort}/test.mp3"))
             id = downloadId
+            val scheduler = DownloadTestScheduler(downloadId)
             var status = DownloadManager.STATUS_PENDING
             var reason = 0
-            repeat(80) {
+            val deadline = SystemClock.elapsedRealtime() + 60000
+            while (SystemClock.elapsedRealtime() < deadline) {
                 manager.query(DownloadManager.Query().setFilterById(downloadId)).use { cursor ->
                     if (cursor.moveToFirst()) {
                         status = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
                         reason = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_REASON))
                     }
                 }
-                if (status == DownloadManager.STATUS_SUCCESSFUL || status == DownloadManager.STATUS_FAILED) return@repeat
+                if (status == DownloadManager.STATUS_SUCCESSFUL || status == DownloadManager.STATUS_FAILED) break
+                scheduler.onStatus(status)
                 delay(250)
             }
-            assertEquals("DownloadManager failure reason=$reason", DownloadManager.STATUS_SUCCESSFUL, status)
+            assertEquals("DownloadManager status=$status reason=$reason; scheduler: ${scheduler.diagnostics}", DownloadManager.STATUS_SUCCESSFUL, status)
+            val contents = ParcelFileDescriptor.AutoCloseInputStream(manager.openDownloadedFile(downloadId)).bufferedReader().use { it.readText() }
+            assertEquals("test audio", contents)
         } finally {
             id?.let { manager.remove(it) }
             server.close(); worker.join(2_000)

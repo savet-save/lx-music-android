@@ -6,12 +6,12 @@
     <string name="settings_about">關於與版本</string>
     <string name="settings_selected">已啟用</string>
     <string name="settings_apply_hint">修改後立即生效，無需關閉設定。</string>
-    <string name="settings_source_hint">匯入相容 LX 的音源指令碼，用於線上歌曲播放和下載。</string>
+    <string name="settings_source_hint">已內建「野花🌷」音源，新安裝預設啟用。也可匯入相容 LX 的音源指令碼，用於線上歌曲播放和下載。</string>
     <string name="settings_source_online">線上匯入音源</string>
     <string name="settings_source_url">音源連結</string>
     <string name="settings_source_url_hint">貼上 HTTP 或 HTTPS 指令碼直連，檔案大小不超過 2 MB。請使用你信任的音源。</string>
-    <string name="settings_source_installed">已匯入的音源</string>
-    <string name="settings_source_no_sources">尚未匯入音源。可使用上方連結線上匯入，也可選擇本機指令碼。</string>
+    <string name="settings_source_installed">可用音源</string>
+    <string name="settings_source_no_sources">沒有可用音源。可使用上方連結線上匯入，也可選擇本機指令碼。</string>
     <string name="settings_source_invalid_url">請輸入有效的 HTTP 或 HTTPS 音源連結</string>
     <string name="settings_source_http_error">下載失敗（HTTP %1$d）</string>
     <string name="settings_source_too_large">音源檔案超過 2 MB</string>

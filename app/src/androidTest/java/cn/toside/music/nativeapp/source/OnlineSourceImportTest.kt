@@ -21,7 +21,8 @@ class OnlineSourceImportTest {
             assertEquals(server.script, script)
             isolated { source ->
                 source.import(script)
-                val entry = source.catalog().entries.single()
+                val catalog = source.catalog()
+                val entry = catalog.entries.single { it.id == catalog.selected }
                 assertEquals("测试", entry.author)
                 assertEquals(entry.id, source.catalog().selected)
                 assertEquals("https://example.org/test.mp3", source.musicUrl("kw", JSONObject()))
@@ -55,7 +56,7 @@ class OnlineSourceImportTest {
             failure { source.import(OnlineSourceImport(context).download("${server.address}/missing")) }
             assertEquals(selected, source.catalog().selected)
             source.import(OnlineSourceImport(context).download("${server.address}/script"))
-            assertEquals(1, source.catalog().entries.size)
+            assertEquals(2, source.catalog().entries.size)
             assertEquals("https://example.org/test.mp3", source.musicUrl("kw", JSONObject()))
         } }
     }

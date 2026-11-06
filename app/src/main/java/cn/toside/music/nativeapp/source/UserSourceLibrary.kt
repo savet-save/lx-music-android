@@ -16,12 +16,12 @@ internal data class UserSourceCatalog(val selected: String?, val entries: List<U
 /** The selected ID and scripts are written atomically; importing one script never discards the others. */
 internal class UserSourceLibrary(private val context: Context) {
     private val target = AtomicFile(File(context.filesDir, "user-sources.json"))
-    fun read(): UserSourceCatalog {
+    fun read(): UserSourceCatalog = synchronized(lock) {
         if (!target.baseFile.isFile) {
             val legacy = File(context.filesDir, "user-source.js")
-            if (!legacy.isFile) return UserSourceCatalog(null, emptyList())
-            val entry = metadata(legacy.inputStream().use { it.readBounded(2 * 1024 * 1024) }.toString(Charsets.UTF_8))
-            return UserSourceCatalog(entry.id, listOf(entry)).also(::write)
+            val bundled = bundled()
+            val entry = if (legacy.isFile) metadata(legacy.inputStream().use { it.readBounded(2 * 1024 * 1024) }.toString(Charsets.UTF_8)) else bundled
+            return@synchronized UserSourceCatalog(entry.id, listOf(entry, bundled).distinctBy { it.id }).also(::write)
         }
         val data = target.openRead().use { JSONObject(it.readBounded(32 * 1024 * 1024).toString(Charsets.UTF_8)) }
         val values = data.getJSONArray("sources")
@@ -29,29 +29,38 @@ internal class UserSourceLibrary(private val context: Context) {
             val entry = values.getJSONObject(index)
             metadata(entry.getString("script")).copy(allowUpdateAlert = entry.optBoolean("allowUpdateAlert", true))
         }.distinctBy { it.id }
-        return UserSourceCatalog(data.optString("selected").takeIf { id -> entries.any { it.id == id } }, entries)
+        val catalog = UserSourceCatalog(data.optString("selected").takeIf { id -> entries.any { it.id == id } }, entries)
+        // Migrate once, retaining existing selection (including an explicit disabled state).
+        // Version 2 also remembers removal, so deleted bundled sources are not re-added on restart.
+        if (data.optInt("version", 1) < 2) {
+            return@synchronized catalog.copy(entries = (entries + bundled()).distinctBy { it.id }).also(::write)
+        }
+        catalog
     }
     fun selected(): UserSourceEntry? = read().let { data -> data.entries.firstOrNull { it.id == data.selected } }
-    fun addValidated(script: String): UserSourceEntry {
+    fun addValidated(script: String): UserSourceEntry = synchronized(lock) {
         val entry = metadata(script); val current = read()
         write(UserSourceCatalog(entry.id, current.entries.filterNot { it.id == entry.id } + entry))
-        return entry
+        entry
     }
-    fun select(id: String?) {
+    fun select(id: String?) = synchronized(lock) {
         val current = read()
         require(id == null || current.entries.any { it.id == id }) { "音源不存在" }
         write(current.copy(selected = id))
     }
-    fun remove(id: String) {
+    fun remove(id: String) = synchronized(lock) {
         val current = read()
         write(UserSourceCatalog(current.selected.takeUnless { it == id }, current.entries.filterNot { it.id == id }))
     }
-    fun allowUpdates(id: String, enabled: Boolean) {
+    fun allowUpdates(id: String, enabled: Boolean) = synchronized(lock) {
         val current = read()
         write(current.copy(entries = current.entries.map { if (it.id == id) it.copy(allowUpdateAlert = enabled) else it }))
     }
+    private fun bundled(): UserSourceEntry = metadata(context.assets.open(BUNDLED_ASSET).use {
+        it.readBounded(2 * 1024 * 1024).toString(Charsets.UTF_8)
+    })
     private fun write(data: UserSourceCatalog) {
-        val raw = JSONObject().put("version", 1).put("selected", data.selected ?: JSONObject.NULL)
+        val raw = JSONObject().put("version", 2).put("selected", data.selected ?: JSONObject.NULL)
             .put("sources", JSONArray().apply { data.entries.forEach { put(JSONObject().put("script", it.script).put("allowUpdateAlert", it.allowUpdateAlert)) } })
             .toString().toByteArray(Charsets.UTF_8)
         require(raw.size <= 32 * 1024 * 1024) { "音源库超过 32 MB" }
@@ -60,6 +69,8 @@ internal class UserSourceLibrary(private val context: Context) {
         try { stream.write(raw); target.finishWrite(stream) } catch (e: Exception) { target.failWrite(stream); throw e }
     }
     companion object {
+        const val BUNDLED_ASSET = "script/flower.js"
+        private val lock = Any()
         fun metadata(script: String): UserSourceEntry {
             require(script.toByteArray(Charsets.UTF_8).size <= 2 * 1024 * 1024) { "音源文件超过 2 MB" }
             val head = script.take(8192).substringBefore("*/")
