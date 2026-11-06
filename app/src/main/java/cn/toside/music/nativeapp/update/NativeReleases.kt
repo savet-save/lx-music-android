@@ -2,6 +2,7 @@ package cn.toside.music.nativeapp.update
 
 import cn.toside.music.nativeapp.utils.NativeHttp
 
+import android.os.Build
 import org.json.JSONArray
 
 internal data class NativeRelease(val version: String, val url: String, val notes: String, val apkUrl: String? = null, val size: Long = 0, val digest: String? = null)
@@ -9,7 +10,7 @@ internal object NativeReleases {
     const val REPOSITORY = "savet-save/lx-music-android"
     const val PAGE = "https://github.com/$REPOSITORY/releases"
     // Separate tags keep existing React Native releases out of the native update channel.
-    internal fun parse(json: String): NativeRelease? {
+    internal fun parse(json: String, supportedAbis: List<String> = Build.SUPPORTED_ABIS.toList()): NativeRelease? {
         val releases = JSONArray(json)
         return (0 until releases.length()).mapNotNull { index ->
             val item = releases.getJSONObject(index)
@@ -17,10 +18,20 @@ internal object NativeReleases {
             val version = tag.removePrefix("native-v")
             if (!tag.startsWith("native-v") || !version.matches(Regex("\\d{1,5}\\.\\d{1,5}\\.\\d{1,5}")) || item.optBoolean("draft") || item.optBoolean("prerelease")) return@mapNotNull null
             val assets = item.optJSONArray("assets") ?: return@mapNotNull null
-            val asset = (0 until assets.length()).mapNotNull { assets.optJSONObject(it) }.firstOrNull {
+            val candidates = (0 until assets.length()).mapNotNull { assets.optJSONObject(it) }.filter {
                 it.optString("name").matches(Regex("lx-music-native-[A-Za-z0-9._-]+\\.apk")) && it.optLong("size") in 0..NativeUpdates.MAX_BYTES &&
-                    it.optString("state", "uploaded") == "uploaded"
-            } ?: return@mapNotNull null
+                    it.optString("state", "uploaded") == "uploaded" &&
+                    it.optString("digest").let { digest -> digest.isBlank() || digest == "null" || digest.matches(Regex("sha256:[a-fA-F0-9]{64}")) }
+            }
+            fun priority(name: String): Int? = when {
+                name.endsWith("-armv8.apk") -> supportedAbis.indexOf("arm64-v8a").takeIf { it >= 0 }
+                name.endsWith("-armv7.apk") -> supportedAbis.indexOf("armeabi-v7a").takeIf { it >= 0 }
+                name.endsWith("-all.apk") || name.endsWith("-universal.apk") -> supportedAbis.size
+                name == "lx-music-native-v$version.apk" -> supportedAbis.size + 1
+                else -> null
+            }
+            val asset = candidates.mapNotNull { asset -> priority(asset.getString("name"))?.let { it to asset } }
+                .minByOrNull { it.first }?.second ?: return@mapNotNull null
             val digest = asset.optString("digest").takeIf { it.isNotBlank() && it != "null" }
             if (digest != null && !digest.matches(Regex("sha256:[a-fA-F0-9]{64}"))) return@mapNotNull null
             NativeRelease(version, "$PAGE/tag/$tag", item.optString("body").take(32_000),

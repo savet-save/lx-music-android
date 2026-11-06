@@ -1,5 +1,15 @@
 # 原生迁移验证记录
 
+## 2026-11-06：三架构 APK 与 Releases 发布脚本
+
+新增 `scripts/publish-release.py`，由 `native-release.yml` 复用。发布版本 `0.9.3` 对应三个完整文件名 `lx-music-native-v0.9.3-armv7.apk`、`lx-music-native-v0.9.3-armv8.apk`、`lx-music-native-v0.9.3-all.apk`；标题仅为 `0.9.3`。首次原生正式发布使用项目介绍，后续按前一原生正式 Release 标签以来的提交生成改动记录，每次均附三个 APK 的 SHA-256 及 `SHA256SUMS.txt`。
+
+- 13 项 Python 发布流程测试通过，覆盖首次/后续说明、真实 Git 标签范围、标签版本策略、ABI/签名校验、上传顺序、缺包/哈希错误、失败保留草稿、草稿重试、已发布版本不覆盖、仅准备模式及未提交源码拒绝发布。GitHub 写入使用模拟命令验证，本次未创建、上传或修改任何远程 Release。
+- 使用独立输出目录及临时密钥真实构建三包，versionName `0.9.3`、versionCode `9003`。脚本的实际校验函数确认：armv7 包仅含 `armeabi-v7a`，armv8 包仅含 `arm64-v8a`，all 包含 `armeabi-v7a/arm64-v8a/x86/x86_64`；三个 APK 签名均有效且证书一致。生成的说明与校验文件内哈希和实际已签名 APK 一致。
+- 20 项 JVM 单元测试通过；Release Lint 为 0 错误、175 警告。未开启拆包时的 Debug APK/测试 APK 构建通过，Debug 仍为单一 `app-debug.apk`，Debug Lint 为 0 错误、175 警告。
+- YYA-H618 / Android 12（API 31）独立 `.releasecheck` 包执行 `AboutDiagnosticsTest`，4 项全部通过，0 失败、0 跳过；覆盖 ARM 选包、通用包回退、旧单包兼容、错误哈希过滤以及原有版本通道、诊断和关于页行为。临时测试包完成后卸载。
+- 构建、包结构及签名检查、哈希示例和设备原始结果保存于忽略的 `build/release-validation/`。真实三包为测试密钥签名，不能作为正式版本分发；实际发布仍需仓库既有的正式签名配置和 GitHub 登录/Secrets。
+
 ## 2026-11-06：第二次 Actions 设备回归修复
 
 用户提供的 `logs_114299436692.zip` 对应 [运行 42183665546](https://github.com/savet-save/lx-music-android/actions/runs/42183665546)，检出合并提交 `3400265`（包含 `1afcca3`）。该次构建检查及两个系统版本的首次授权测试均通过，版本样本已正确使用 `0.9.4`；上次的关于页版本和签名错误未再出现。此运行早于内置音源提交 `351ea05`。

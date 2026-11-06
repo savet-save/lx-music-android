@@ -1,4 +1,5 @@
 import com.android.build.api.variant.impl.VariantOutputImpl
+import com.android.build.api.variant.FilterConfiguration
 import java.util.Properties
 
 plugins {
@@ -58,6 +59,12 @@ android {
     buildTypes.getByName("release") {
         signingConfig = signingConfigs.getByName("nativeRelease")
     }
+    splits.abi {
+        isEnable = providers.gradleProperty("nativeSplitApks").map { it.toBooleanStrict() }.orElse(false).get()
+        reset()
+        include("armeabi-v7a", "arm64-v8a")
+        isUniversalApk = true
+    }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -68,9 +75,15 @@ android {
 androidComponents {
     onVariants(selector().withBuildType("release")) { variant ->
         variant.outputs.forEach { output ->
+            val architecture = when (output.filters.firstOrNull { it.filterType == FilterConfiguration.FilterType.ABI }?.identifier) {
+                "armeabi-v7a" -> "armv7"
+                "arm64-v8a" -> "armv8"
+                null -> "all"
+                else -> error("Unexpected release APK ABI")
+            }
             // AGP 8.13 exposes APK filenames on its output implementation.
             (output as VariantOutputImpl).outputFileName.set(
-                output.versionName.map { "lx-music-native-v$it.apk" }
+                output.versionName.map { "lx-music-native-v$it-$architecture.apk" }
             )
         }
     }

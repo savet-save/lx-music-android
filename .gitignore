@@ -21,3 +21,7 @@ keystore.properties
 .DS_Store
 Thumbs.db
 *.swp
+
+# Release script test artifacts
+__pycache__/
+*.pyc
