@@ -15,6 +15,12 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parent.parent
 TAG_PATTERN = re.compile(r"native-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")
+# Build Tools 37 adds scheme prefixes and SDK ranges to the signer certificate labels.
+SIGNER_SHA256_PATTERN = re.compile(
+    r"^(?:V\d+(?:\.\d+)? (?:Hybrid (?:Classical|PQC) )?)?"
+    r"Signer(?: #\d+)?(?::(?: \([^\r\n]*\))?)?"
+    r" certificate SHA-256 digest:[ \t]*([a-fA-F0-9]{64})[ \t\r]*$", re.MULTILINE
+)
 ARCHITECTURES = {"all": None, "armv7": "armeabi-v7a", "armv8": "arm64-v8a"}
 
 
@@ -127,9 +133,11 @@ def verify_apks(version, code, apksigner):
         if (abi and packaged != {abi}) or (not abi and not {"armeabi-v7a", "arm64-v8a"}.issubset(packaged)):
             raise ValueError(f"Wrong native libraries in {name}: {sorted(packaged)}")
         verification = run([apksigner, "verify", "--verbose", "--print-certs", str(path)])
-        signers = set(re.findall(r"Signer #\d+ certificate SHA-256 digest:\s*([a-fA-F0-9]{64})", verification))
-        if not signers or (certificates is not None and signers != certificates):
-            raise ValueError(f"APKs must have the same valid signing certificate: {name}")
+        signers = {digest.lower() for digest in SIGNER_SHA256_PATTERN.findall(verification)}
+        if not signers:
+            raise ValueError(f"Could not read APK signing certificate SHA-256 for {name} from {apksigner}")
+        if certificates is not None and signers != certificates:
+            raise ValueError(f"APK signing certificates differ: {name}")
         certificates = signers
         result[architecture] = path
     return result

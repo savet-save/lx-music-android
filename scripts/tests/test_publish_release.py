@@ -107,8 +107,60 @@ class PublishReleaseTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "version"):
                 release.verify_apks("0.9.3", 93, "apksigner")
         with patch.object(release, "run", side_effect=[certificate, certificate.replace("a" * 64, "b" * 64)]):
-            with self.assertRaisesRegex(ValueError, "same valid signing"):
+            with self.assertRaisesRegex(ValueError, "signing certificates differ"):
                 release.verify_apks("0.9.3", 9003, "apksigner")
+
+    def test_verification_accepts_old_and_build_tools_37_signer_labels(self):
+        self.artifacts()
+        labels = ["Signer #1", "V1 Signer:", "V2 Signer:", "V2 Signer #1:", "V3.0 Signer:",
+                  "V3.0 Signer: (minSdkVersion=28, maxSdkVersion=32)",
+                  "V3.1 Signer: (minSdkVersion=33, maxSdkVersion=2147483647)",
+                  "V3.2 Hybrid Classical Signer: (minSdkVersion=37 (dev release=true), maxSdkVersion=2147483647)",
+                  "V3.2 Hybrid PQC Signer: (minSdkVersion=37, maxSdkVersion=2147483647)"]
+        for label in labels:
+            output = f"Verifies\r\nNumber of signers: 1\r\n{label} certificate SHA-256 digest: {'a' * 64}\r\n"
+            with self.subTest(label=label), patch.object(release, "run", return_value=output):
+                self.assertEqual(3, len(release.verify_apks("0.9.3", 9003, "apksigner")))
+
+    def test_verification_compares_all_signers_regardless_of_order_and_hex_case(self):
+        self.artifacts()
+        first = f"V2 Signer #1: certificate SHA-256 digest: {'a' * 64}\nV2 Signer #2: certificate SHA-256 digest: {'b' * 64}\n"
+        second = f"V2 Signer #1: certificate SHA-256 digest: {'B' * 64}\nV2 Signer #2: certificate SHA-256 digest: {'A' * 64}\n"
+        with patch.object(release, "run", side_effect=[first, second, first]):
+            self.assertEqual(3, len(release.verify_apks("0.9.3", 9003, "apksigner")))
+        with patch.object(release, "run", side_effect=[first, second.replace("A" * 64, "c" * 64)]):
+            with self.assertRaisesRegex(ValueError, "signing certificates differ"):
+                release.verify_apks("0.9.3", 9003, "apksigner")
+
+    def test_verification_ignores_public_key_source_stamp_and_dn_digests(self):
+        self.artifacts()
+        outputs = [f"V2 Signer: certificate SHA-256 digest: {'a' * 64}\n"
+                   f"V2 Signer: public key SHA-256 digest: {other * 64}\n"
+                   f"Source Stamp Signer: certificate SHA-256 digest: {other * 64}\n"
+                   f"V2 Signer: certificate DN: CN=Signer #2 certificate SHA-256 digest: {other * 64}\n"
+                   for other in "bcd"]
+        with patch.object(release, "run", side_effect=outputs):
+            self.assertEqual(3, len(release.verify_apks("0.9.3", 9003, "apksigner")))
+
+    def test_missing_or_malformed_signer_certificates_report_a_parse_error(self):
+        self.artifacts()
+        outputs = ["", f"V2 Signer: public key SHA-256 digest: {'a' * 64}\n",
+                   f"Source Stamp Signer: certificate SHA-256 digest: {'a' * 64}\n",
+                   *(f"V2 Signer: certificate SHA-256 digest: {digest}\n"
+                     for digest in ("a" * 63, "a" * 65, "g" * 64))]
+        for output in outputs:
+            with self.subTest(output=output), patch.object(release, "run", return_value=output):
+                with self.assertRaisesRegex(ValueError, "Could not read APK signing certificate SHA-256.*all.apk.*apksigner"):
+                    release.verify_apks("0.9.3", 9003, "apksigner")
+
+    def test_apksigner_failure_cannot_be_overridden_by_certificate_output(self):
+        self.artifacts()
+        error = subprocess.CalledProcessError(1, ["apksigner", "verify"],
+                                            output=f"V2 Signer: certificate SHA-256 digest: {'a' * 64}\n")
+        with patch.object(release, "run", side_effect=error) as command:
+            with self.assertRaises(subprocess.CalledProcessError):
+                release.verify_apks("0.9.3", 9003, "apksigner")
+        command.assert_called_once()
 
     def test_wrong_native_libraries_are_rejected(self):
         apks = self.artifacts()
