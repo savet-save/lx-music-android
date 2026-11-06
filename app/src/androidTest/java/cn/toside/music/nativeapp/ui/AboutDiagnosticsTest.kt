@@ -1,5 +1,6 @@
 package cn.toside.music.nativeapp.ui
 
+import cn.toside.music.nativeapp.R
 import cn.toside.music.nativeapp.data.AppPreferences
 import cn.toside.music.nativeapp.source.UserSource
 import cn.toside.music.nativeapp.update.NativeReleases
@@ -102,7 +103,11 @@ class AboutDiagnosticsTest {
                 }
             }
             assertTrue(root?.findAccessibilityNodeInfosByText("关于与版本")?.isNotEmpty() == true)
-            assertTrue(root?.findAccessibilityNodeInfosByText("版本：0.1.0")?.isNotEmpty() == true)
+            @Suppress("DEPRECATION")
+            val installed = target.packageManager.getPackageInfo(target.packageName, 0)
+            val expectedVersion = activity!!.getString(R.string.ui_88f46c701fba, installed.versionName)
+            assertTrue("About should show installed version ${installed.versionName}",
+                root?.findAccessibilityNodeInfosByText(expectedVersion)?.isNotEmpty() == true)
             assertTrue(target.assets.open("licenses/Apache-2.0.txt").use { it.readBytes().toString(Charsets.UTF_8) }.contains("Apache License"))
             instrumentation.uiAutomation.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK)
         } finally {
