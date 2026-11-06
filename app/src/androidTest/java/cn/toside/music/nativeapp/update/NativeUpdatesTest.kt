@@ -1,6 +1,7 @@
 package cn.toside.music.nativeapp.update
 
 import cn.toside.music.nativeapp.R
+import cn.toside.music.nativeapp.DownloadTestScheduler
 
 import android.app.DownloadManager
 import android.content.Intent
@@ -57,13 +58,15 @@ class NativeUpdatesTest {
             // The transfer is owned by the OS, with no Activity or service bound to this instance.
             val restored = NativeUpdates(context)
             assertEquals(record, restored.saved())
+            val scheduler = DownloadTestScheduler(record.id)
             val deadline = android.os.SystemClock.elapsedRealtime() + 60000
             var progress = restored.progress()
             while (progress?.status != DownloadManager.STATUS_SUCCESSFUL && android.os.SystemClock.elapsedRealtime() < deadline) {
                 if (progress?.status == DownloadManager.STATUS_FAILED) fail("Download failed: ${progress.reason}; server: ${failure.get()}")
+                scheduler.onStatus(progress?.status)
                 android.os.SystemClock.sleep(100); progress = restored.progress()
             }
-            assertEquals("Download did not finish: $progress / ${failure.get()}", DownloadManager.STATUS_SUCCESSFUL, progress?.status)
+            assertEquals("Download did not finish: $progress / ${failure.get()}; scheduler: ${scheduler.diagnostics}", DownloadManager.STATUS_SUCCESSFUL, progress?.status)
             assertEquals(file.length(), progress!!.current)
             action(restored, record)
         } finally { updates.cancel(); server.close(); worker.join(2000) }

@@ -192,4 +192,20 @@ class PlatformPopupTest {
             } } }.commit()
         }
     }
+
+    @Test fun finishingActivityDoesNotOpenAMenuFromItsStillAttachedAnchor() {
+        val activity = instrumentation.startActivitySync(Intent(instrumentation.targetContext, MainActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
+        val popup = PlatformPopup()
+        try {
+            await { activity.settingsPlayer() != null }
+            main {
+                val anchor = field(activity, "heading") as View
+                assertTrue(anchor.isAttachedToWindow)
+                activity.finish()
+                popup.show(anchor, listOf("kw"), listOf("Kuwo"), "kw", field(activity, "palette") as UiPalette) { }
+                assertNull(menu())
+            }
+        } finally { main { popup.dismiss(); activity.finish() } }
+    }
 }

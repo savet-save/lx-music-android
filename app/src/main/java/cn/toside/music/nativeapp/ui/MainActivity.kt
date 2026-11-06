@@ -581,7 +581,7 @@ class MainActivity : FragmentActivity() {
     }
     private fun showPlaylistLink(initial: String = "") {
         val input = EditText(this).apply { hint = getString(R.string.ui_fd2c0650c75b); setText(initial); maxLines = 4 }
-        AlertDialog.Builder(this).setTitle(getString(R.string.ui_ac7aa03a458f)).setView(input).setNegativeButton(getString(R.string.ui_2cd0f3be8738), null).setPositiveButton(getString(R.string.ui_acfc4e74a650)) { _, _ ->
+        AlertDialog.Builder(this).setTitle(getString(R.string.ui_ac7aa03a458f)).setView(input).setNegativeButton(getString(R.string.ui_2cd0f3be8738), null).setPositiveButton(getString(R.string.ui_acfc4e74a650)) { dialog, _ ->
             val value = input.text.toString().trim()
             val guessed = ExternalLinks.sourceFromUrl(value)
             fun open(source: String) { scope.launch {
@@ -590,11 +590,15 @@ class MainActivity : FragmentActivity() {
                 catch (e: Exception) { toast(getString(R.string.ui_03c68e4bc44d, java.lang.String.valueOf(e.localizedMessage))) }
             } }
             if (guessed != null) open(guessed) else {
-                val anchor = navigationHost()?.childFragmentManager?.primaryNavigationFragment?.view?.findViewWithTag<View>("playlist-open")
-                    ?: if (searchSourceButton.isShown) searchSourceButton else heading
-                anchor.post {
-                    val ids = PlatformPopup.sources
-                    platformPopup.show(anchor, ids, ids.map { UiPreferences.sourceName(this, it) }, "", palette, alignEnd = true, onSelected = ::open)
+                // Wait until the input dialog has released its window, then reacquire the page anchor.
+                (dialog as AlertDialog).setOnDismissListener {
+                    window.decorView.post {
+                        if (isFinishing || isDestroyed || isChangingConfigurations) return@post
+                        val anchor = navigationHost()?.childFragmentManager?.primaryNavigationFragment?.view?.findViewWithTag<View>("playlist-open")
+                            ?: if (searchSourceButton.isShown) searchSourceButton else heading
+                        val ids = PlatformPopup.sources
+                        platformPopup.show(anchor, ids, ids.map { UiPreferences.sourceName(this, it) }, "", palette, alignEnd = true, onSelected = ::open)
+                    }
                 }
             }
         }.show()

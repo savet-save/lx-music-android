@@ -1,5 +1,16 @@
 # 原生迁移验证记录
 
+## 2026-11-06：第二次 Actions 设备回归修复
+
+用户提供的 `logs_114299436692.zip` 对应 [运行 42183665546](https://github.com/savet-save/lx-music-android/actions/runs/42183665546)，检出合并提交 `3400265`（包含 `1afcca3`）。该次构建检查及两个系统版本的首次授权测试均通过，版本样本已正确使用 `0.9.4`；上次的关于页版本和签名错误未再出现。此运行早于内置音源提交 `351ea05`。
+
+- API 28 有 1 项失败：排行榜抽屉回归等待列表状态超时。对照设备测试确认，关闭后立即重开抽屉并在布局完成前设置滚动位置，会被后续布局覆盖。测试现在等待列表与窗口布局完成，再定位到中间行，避免末行底部对齐随窗口高度变化影响恢复断言；超时信息增加具体阶段及列表状态，保留原有超时上限。
+- API 35 有同一项排行榜失败，另有平台菜单 `BadTokenException` 及 3 项下载失败。歌单 ID 确认后的平台菜单现在等待输入对话框完全关闭，再获取当前页面锚点；宿主正在退出/销毁/重建时不创建菜单，并清理窗口令牌失效时的残留状态。新增仍附着的退出中 Activity 锚点回归。
+- 3 项下载日志均停在 `STATUS_PENDING`（0 字节、reason 0），并非上次旧版本记录被取消。原日志缺少调度器状态，不能据此断言具体的调度约束。CI 通过仅在仪器测试中启用的 `runDownloadJobs=true` 显式触发这些下载对应的系统任务，再验证真实 HTTP 传输、文件内容及安装前安全检查；应用的下载实现未修改。任务 ID 映射依据 [Android 15 官方 AOSP 实现](https://github.com/aosp-mirror/platform_packages_providers_downloadprovider/blob/android-15.0.0_r1/src/com/android/providers/downloads/Helpers.java)。失败时额外上传 JobScheduler、连接状态和 logcat，保留原始失败退出码。
+- 本地 Debug/测试 APK 构建、20 项 JVM 单元测试和 Debug Lint 通过（0 错误、183 警告、1 提示）。Bash 语法检查通过；模拟构建退出码 7，确认失败处理仍返回 7，并生成全部 3 份诊断文件。
+- YYA-H618 / Android 12（API 31）独立 `.ciregression` 包定向复验：`ChartsPageTest`、`PlatformPopupTest`、`DownloadsTest`、`NativeUpdatesTest` 共 11 项，10 项通过、0 失败、1 项未开启的真实榜单联网测试按设计跳过。显式开启下载任务触发，并使用 `0.9.3/code 93` → `0.9.4/code 94` 的同签名及错误签名样本。旧布局顺序的受控对照测试超时，修复后同一滚动/重建检查通过。
+- 输出位于忽略的 `build/ci-114299436692/`；临时测试包和设备上的测试 APK 已清理。本地设备均为 API 31，不能替代 API 28/35 完整回归；本次尚未推送，远程结果需以修复提交后的 Actions 为准。
+
 ## 2026-11-06：内置默认野花音源
 
 将用户指定的 [flower/latest.js](https://raw.githubusercontent.com/pdone/lx-music-source/main/flower/latest.js) 原始内容保存为 `app/src/main/assets/script/flower.js`，名称「野花🌷」、版本 `1`。新音源库默认选中该脚本，现有音源库迁移时补入该脚本并保留原有选择、停用及更新提示设置；停用或删除后重启不自动恢复。可继续使用既有音源导入、切换、导出、删除和更新提示功能。

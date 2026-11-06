@@ -33,9 +33,10 @@ import java.util.concurrent.CopyOnWriteArrayList
 class ChartsPageTest {
     private val instrumentation get() = InstrumentationRegistry.getInstrumentation()
     private fun main(action: () -> Unit) = instrumentation.runOnMainSync(action)
-    private fun await(check: () -> Boolean) {
+    private fun await(description: String = "charts state", diagnostics: () -> String = { "" }, check: () -> Boolean) {
         repeat(500) { var done = false; main { done = check() }; if (done) return; SystemClock.sleep(40) }
-        throw AssertionError("Charts did not settle")
+        var details = ""; main { details = diagnostics() }
+        throw AssertionError("Timed out waiting for $description $details")
     }
     private fun field(activity: MainActivity, name: String) = MainActivity::class.java.getDeclaredField(name).apply { isAccessible = true }.get(activity)
     private fun invoke(activity: MainActivity, name: String) = MainActivity::class.java.getDeclaredMethod(name).apply { isAccessible = true }.invoke(activity)
@@ -172,7 +173,7 @@ class ChartsPageTest {
                 }
                 invoke(activity, "showBoards")
             }
-            await { activity.chartsFragment()?.model?.state?.value?.songs?.size == 100 }
+            await("drawer test chart data") { activity.chartsFragment()?.model?.state?.value?.songs?.size == 100 }
             main {
                 listOf(360 to 800, 1024 to 768).forEach { (width, height) ->
                     MainActivity::class.java.getDeclaredField("uiLayout").apply { isAccessible = true }.set(activity, AdaptiveLayout(width, height))
@@ -196,7 +197,7 @@ class ChartsPageTest {
                 }
                 activity.chartsFragment()!!.requireView().findViewWithTag<View>("charts-board").performClick()
             }
-            await { activity.chartsFragment()?.isBoardDrawerOpen == true }
+            await("board drawer to open") { activity.chartsFragment()?.isBoardDrawerOpen == true }
             instrumentation.waitForIdleSync(); SystemClock.sleep(250)
             main {
                 val root = activity.findViewById<ViewGroup>(android.R.id.content).getChildAt(0)
@@ -212,17 +213,31 @@ class ChartsPageTest {
                 }
                 assertEquals(R.id.charts_page, activity.navigationController().currentDestination?.id)
                 drawer.close(false); drawer.open(false)
-                panel.setSelection(panel.count - 1)
+                measure(activity, 360, 400)
             }
-            await { activity.chartsFragment()!!.requireView().findViewWithTag<ListView>("charts-drawer-panel").firstVisiblePosition > 0 }
+            instrumentation.waitForIdleSync()
+            await("board picker layout after reopening") {
+                val panel = activity.chartsFragment()!!.requireView().findViewWithTag<ListView>("charts-drawer-panel")
+                panel.isShown && panel.childCount > 0 && !panel.isLayoutRequested && !activity.window.decorView.isLayoutRequested
+            }
+            main {
+                // Wait for the reopen layout before scrolling; it otherwise overwrites this position.
+                // A middle row also stays valid when the preview and restored window have different heights.
+                activity.chartsFragment()!!.requireView().findViewWithTag<ListView>("charts-drawer-panel").setSelectionFromTop(10, 0)
+            }
+            await("board picker to scroll to row 10", diagnostics = {
+                val fragment = activity.chartsFragment()!!
+                val panel = fragment.requireView().findViewWithTag<ListView>("charts-drawer-panel")
+                "open=${fragment.isBoardDrawerOpen}, shown=${panel.isShown}, attached=${panel.isAttachedToWindow}, first=${panel.firstVisiblePosition}, selected=${panel.selectedItemPosition}, count=${panel.count}, children=${panel.childCount}, height=${panel.height}"
+            }) { activity.chartsFragment()!!.requireView().findViewWithTag<ListView>("charts-drawer-panel").firstVisiblePosition == 10 }
             var first = 0
             main { first = activity.chartsFragment()!!.requireView().findViewWithTag<ListView>("charts-drawer-panel").firstVisiblePosition }
             val monitor = instrumentation.addMonitor(MainActivity::class.java.name, null, false)
             main { activity.recreate() }
             val replacement = instrumentation.waitForMonitorWithTimeout(monitor, 6000)
             instrumentation.removeMonitor(monitor); assertNotNull(replacement); activity = replacement as MainActivity
-            await { activity.chartsFragment()?.isBoardDrawerOpen == true }
-            await { activity.chartsFragment()!!.requireView().findViewWithTag<ListView>("charts-drawer-panel").firstVisiblePosition == first }
+            await("board drawer to reopen after recreation") { activity.chartsFragment()?.isBoardDrawerOpen == true }
+            await("board picker position $first after recreation") { activity.chartsFragment()!!.requireView().findViewWithTag<ListView>("charts-drawer-panel").firstVisiblePosition == first }
             assertEquals(1, requests.size)
             main { (field(activity, "toggle") as View).requestFocus() }
             instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
