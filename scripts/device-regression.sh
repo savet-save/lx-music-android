@@ -6,6 +6,22 @@ save_failure_diagnostics() {
   local result=$?
   if (( result != 0 )); then
     mkdir -p build/device-diagnostics
+    python3 - <<'PY' | tee build/device-diagnostics/test-failures.txt || true
+from pathlib import Path
+import xml.etree.ElementTree as ET
+
+for report in sorted(Path('app/build/outputs/androidTest-results').rglob('*.xml')):
+    try:
+        suite = ET.parse(report).getroot()
+    except (ET.ParseError, OSError) as error:
+        print(f'Could not read {report}: {error}')
+        continue
+    for case in suite.iter('testcase'):
+        for failure in case:
+            if failure.tag in ('failure', 'error'):
+                print(f"\nFAILED {case.get('classname', '')}#{case.get('name', '')} ({report})")
+                print(failure.text or failure.get('message', 'No failure details'))
+PY
     adb shell dumpsys jobscheduler > build/device-diagnostics/jobscheduler.txt 2>&1 || true
     adb shell dumpsys connectivity > build/device-diagnostics/connectivity.txt 2>&1 || true
     adb logcat -d -t 1500 > build/device-diagnostics/logcat.txt 2>&1 || true

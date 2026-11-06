@@ -18,6 +18,7 @@ import android.widget.TextView
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.SdkSuppress
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.lifecycle.Lifecycle
 import cn.toside.music.nativeapp.R
 import cn.toside.music.nativeapp.data.Song
 import cn.toside.music.nativeapp.online.*
@@ -34,15 +35,36 @@ import kotlin.math.abs
 class PlatformPopupTest {
     private val instrumentation get() = InstrumentationRegistry.getInstrumentation()
     private fun main(action: () -> Unit) = instrumentation.runOnMainSync(action)
-    private fun await(check: () -> Boolean) {
+    private fun await(description: String = "platform menu state", check: () -> Boolean) {
         repeat(250) { var done = false; main { done = check() }; if (done) return; SystemClock.sleep(40) }
-        throw AssertionError("Platform menu did not settle")
+        throw AssertionError("Timed out waiting for $description")
     }
     private fun field(activity: MainActivity, name: String) = MainActivity::class.java.getDeclaredField(name).apply { isAccessible = true }.get(activity)
     private fun invoke(activity: MainActivity, name: String) = MainActivity::class.java.getDeclaredMethod(name).apply { isAccessible = true }.invoke(activity)
     private fun descendants(view: View): List<View> = listOf(view) + if (view is ViewGroup) (0 until view.childCount).flatMap { descendants(view.getChildAt(it)) } else emptyList()
     private fun menu() = WindowInspector.getGlobalWindowViews().flatMap(::descendants).filterIsInstance<ListView>().firstOrNull { it.tag == "platform-menu" && it.isShown }
     private fun bounds(view: View) = Rect().also { rect -> val p = IntArray(2).also(view::getLocationOnScreen); rect.set(p[0], p[1], p[0] + view.width, p[1] + view.height) }
+    private fun awaitHostFocus(activity: MainActivity) {
+        await("the live Activity window to regain input focus") {
+            assertFalse("Menu dismissal must not finish the Activity", activity.isFinishing)
+            assertFalse("Menu dismissal must not destroy the Activity", activity.isDestroyed)
+            activity.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) && activity.window.decorView.hasWindowFocus()
+        }
+    }
+    private fun dismissWithBack(activity: MainActivity) {
+        // A visible window may not yet own input focus; BACK must reach the popup, not the Activity.
+        await("popup input focus before BACK") { menu()?.rootView?.hasWindowFocus() == true }
+        instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
+        await("popup dismissal after BACK") { menu() == null }
+        awaitHostFocus(activity)
+    }
+    private fun outsidePoint(window: Rect, popup: Rect): Pair<Float, Float> {
+        val inset = (minOf(window.width(), window.height()) / 40).coerceAtLeast(2)
+        return listOf(window.right - inset to window.top + inset, window.left + inset to window.top + inset,
+            window.right - inset to window.bottom - inset, window.left + inset to window.bottom - inset)
+            .first { (x, y) -> window.contains(x, y) && !popup.contains(x, y) }
+            .let { (x, y) -> x.toFloat() to y.toFloat() }
+    }
     private fun verify(anchor: View, selected: String, end: Boolean = false) {
         val list = requireNotNull(menu()); val popup = bounds(list); val button = bounds(anchor)
         assertEquals(button.bottom, popup.top)
@@ -109,19 +131,19 @@ class PlatformPopupTest {
             await { menu()?.childCount == 6 }
             main { choose("wy") }; await { searches.get() == 6 && (field(activity, "loadJob") as? Job)?.isActive != true }
             main { assertEquals("wy", field(activity, "searchSource")); invoke(activity, "showSearchSources") }
-            await { menu() != null }; instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
-            await { menu() == null }; assertEquals(R.id.music_page, activity.navigationController().currentDestination?.id)
+            dismissWithBack(activity)
+            assertEquals(R.id.music_page, activity.navigationController().currentDestination?.id)
 
             // An ID without a recognizable provider uses the same anchored platform menu.
             main { activity.openPlaylistLink() }
-            await { WindowInspector.getGlobalWindowViews().any { it.findViewById<View>(android.R.id.button1) != null } }
+            await("playlist ID dialog input focus") { WindowInspector.getGlobalWindowViews().any { it.findViewById<View>(android.R.id.button1) != null && it.hasWindowFocus() } }
             main {
                 val dialog = WindowInspector.getGlobalWindowViews().first { it.findViewById<View>(android.R.id.button1) != null }
                 descendants(dialog).filterIsInstance<EditText>().first().setText("12345")
                 dialog.findViewById<View>(android.R.id.button1).performClick()
             }
             await { menu()?.childCount == 5 }
-            instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_BACK); await { menu() == null }
+            dismissWithBack(activity)
 
             main { invoke(activity, "showOnlinePlaylists") }
             await { activity.navigationController().currentDestination?.id == R.id.playlist_browser && playlistRequests.get() == 1 }
@@ -138,17 +160,35 @@ class PlatformPopupTest {
             main { activity.chartsFragment()!!.requireView().findViewWithTag<View>("charts-source").performClick() }
             await { menu()?.childCount == 5 }
             main { verify(activity.chartsFragment()!!.requireView().findViewWithTag("charts-source"), "kw"); capture(activity, "chart-platforms") }
-            val position = IntArray(2)
-            main { menu()!!.getLocationOnScreen(position) }
+            await("chart popup input focus before outside touch") { menu()?.rootView?.hasWindowFocus() == true }
+            var outside = 0f to 0f
+            main {
+                val window = bounds(activity.window.decorView)
+                val visible = Rect().also(activity.window.decorView::getWindowVisibleDisplayFrame)
+                assertTrue(window.intersect(visible))
+                outside = outsidePoint(window, bounds(menu()!!))
+            }
             // A real outside touch dismisses just the popup, leaving the charts destination intact.
             val time = SystemClock.uptimeMillis()
             listOf(MotionEvent.ACTION_DOWN, MotionEvent.ACTION_UP).forEach { action ->
-                MotionEvent.obtain(time, time + 40, action, (position[0] + 450).toFloat(), (position[1] + 30).toFloat(), 0).also { instrumentation.sendPointerSync(it); it.recycle() }
+                MotionEvent.obtain(time, time + 40, action, outside.first, outside.second, 0).also { instrumentation.sendPointerSync(it); it.recycle() }
             }
-            await { menu() == null }; assertEquals(R.id.charts_page, activity.navigationController().currentDestination?.id)
+            await { menu() == null }; awaitHostFocus(activity)
+            assertEquals(R.id.charts_page, activity.navigationController().currentDestination?.id)
             main { activity.chartsFragment()!!.requireView().findViewWithTag<View>("charts-source").performClick() }
             await { menu()?.childCount == 5 }; main { choose("kg") }; await { activity.chartsFragment()?.model?.state?.value?.board?.source == "kg" && chartRequests.get() == 2 }
         } finally { main { activity.finish() } }
+    }
+
+    @Test fun outsideTouchCoordinatesStayOutsideTheMenuAtPhoneAndTabletDensities() {
+        for (density in listOf(1f, 1.33f, 2.75f, 4f)) {
+            val window = Rect(20, 50, 20 + (360 * density).toInt(), 50 + (800 * density).toInt())
+            val popup = Rect(window.left, window.top + (100 * density).toInt(),
+                window.left + (224 * density).toInt(), window.top + (360 * density).toInt())
+            val (x, y) = outsidePoint(window, popup)
+            assertTrue(window.contains(x.toInt(), y.toInt()))
+            assertFalse(popup.contains(x.toInt(), y.toInt()))
+        }
     }
 
     @Test fun darkLargeFontMenuScrollsWithinShortWindowsAndClosesWhenAnchorIsRebuilt() {
