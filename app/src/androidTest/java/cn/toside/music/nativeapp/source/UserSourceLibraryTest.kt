@@ -7,8 +7,10 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
+import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.*
+import org.junit.Assume.assumeTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
@@ -36,9 +38,10 @@ class UserSourceLibraryTest {
     """.trimIndent()
     @Test fun switchingDisablingAndDeletingPreserveTheOtherValidatedScripts() = runBlocking {
         isolated { _, source ->
+            val bundled = source.catalog().selected!!
             source.import(script("first")); val first = source.catalog().selected!!
             source.import(script("second")); val second = source.catalog().selected!!
-            assertEquals(2, source.catalog().entries.size)
+            assertEquals(3, source.catalog().entries.size)
             source.select(first)
             assertEquals("https://example.org/first.mp3", source.musicUrl("kw", JSONObject()))
             try { source.import("throw Error('bad source')"); fail("invalid source must fail") } catch (_: Exception) { }
@@ -48,10 +51,12 @@ class UserSourceLibraryTest {
             assertFalse(source.loadSaved())
             try { source.musicUrl("kw", JSONObject()); fail("disabled source must fail") } catch (_: IllegalStateException) { }
             source.remove(first)
-            assertEquals(listOf(second), source.catalog().entries.map { it.id })
+            assertEquals(listOf(bundled, second), source.catalog().entries.map { it.id })
             source.select(second)
             assertEquals("https://example.org/second.mp3", source.musicUrl("kw", JSONObject()))
             source.remove(second)
+            assertEquals(listOf(bundled), source.catalog().entries.map { it.id }); assertNull(source.catalog().selected)
+            source.remove(bundled)
             assertTrue(source.catalog().entries.isEmpty()); assertNull(source.catalog().selected)
         }
     }
@@ -60,9 +65,76 @@ class UserSourceLibraryTest {
             val raw = script("legacy")
             File(context.filesDir, "user-source.js").writeText(raw)
             assertTrue(source.loadSaved())
-            val entry = source.catalog().entries.single()
+            val catalog = source.catalog()
+            val entry = catalog.entries.single { it.id == catalog.selected }
             assertEquals(raw, entry.script); assertEquals("legacy", entry.name); assertEquals("1.2.3", entry.version)
+            assertEquals(2, catalog.entries.size)
             assertEquals("https://example.org/legacy.mp3", source.musicUrl("kw", JSONObject()))
+        }
+    }
+    @Test fun freshLibrarySelectsThePackagedScriptAndRemembersDisableAndRemoval() = runBlocking {
+        isolated { context, source ->
+            val raw = context.assets.open(UserSourceLibrary.BUNDLED_ASSET).bufferedReader().use { it.readText() }
+            val catalog = source.catalog()
+            val bundled = catalog.entries.single()
+            assertEquals("野花🌷", bundled.name); assertEquals("1", bundled.version)
+            assertEquals(raw, bundled.script); assertEquals(bundled.id, catalog.selected)
+            assertEquals(catalog, UserSourceLibrary(context).read())
+            source.select(null)
+            assertNull(UserSourceLibrary(context).read().selected)
+            assertFalse(source.loadSaved())
+            source.remove(bundled.id)
+            assertEquals(UserSourceCatalog(null, emptyList()), UserSourceLibrary(context).read())
+            assertEquals(UserSourceCatalog(null, emptyList()), UserSourceLibrary(context).read())
+        }
+    }
+    @Test fun existingCatalogAddsBundledSourceOnceAndPreservesSelectionAndUpdatePreferences() = runBlocking {
+        isolated { context, source ->
+            val raw = script("existing")
+            val id = UserSourceLibrary.metadata(raw).id
+            File(context.filesDir, "user-sources.json").writeText(JSONObject().put("version", 1).put("selected", id)
+                .put("sources", JSONArray().put(JSONObject().put("script", raw).put("allowUpdateAlert", false))).toString())
+            val catalog = source.catalog()
+            assertEquals(id, catalog.selected); assertEquals(2, catalog.entries.size)
+            assertEquals(raw, catalog.entries.first().script); assertFalse(catalog.entries.first().allowUpdateAlert)
+            assertEquals("野花🌷", catalog.entries.last().name)
+            assertEquals(catalog, UserSourceLibrary(context).read())
+            assertTrue(source.loadSaved())
+            assertEquals("https://example.org/existing.mp3", source.musicUrl("kw", JSONObject()))
+        }
+    }
+    @Test fun disabledAndEmptyExistingCatalogsStayDisabledDuringBundledMigration() = runBlocking {
+        isolated { context, source ->
+            val target = File(context.filesDir, "user-sources.json")
+            for (scripts in listOf(listOf(script("disabled")), emptyList())) {
+                target.writeText(JSONObject().put("version", 1).put("selected", JSONObject.NULL)
+                    .put("sources", JSONArray().apply { scripts.forEach { put(JSONObject().put("script", it)) } }).toString())
+                val catalog = source.catalog()
+                assertNull(catalog.selected); assertEquals(scripts.size + 1, catalog.entries.size)
+                assertEquals("野花🌷", catalog.entries.last().name)
+                assertFalse(source.loadSaved())
+                assertEquals(catalog, UserSourceLibrary(context).read())
+            }
+        }
+    }
+    @Test fun alreadyImportedBundledScriptIsNotDuplicatedOrReenabled() = runBlocking {
+        isolated { context, source ->
+            val raw = context.assets.open(UserSourceLibrary.BUNDLED_ASSET).bufferedReader().use { it.readText() }
+            File(context.filesDir, "user-sources.json").writeText(JSONObject().put("version", 1).put("selected", JSONObject.NULL)
+                .put("sources", JSONArray().put(JSONObject().put("script", raw).put("allowUpdateAlert", false))).toString())
+            val catalog = source.catalog()
+            assertEquals(raw, catalog.entries.single().script); assertFalse(catalog.entries.single().allowUpdateAlert)
+            assertNull(catalog.selected)
+        }
+    }
+    @Test fun bundledScriptInitializesWithTheNativeRuntime() = runBlocking {
+        assumeTrue("Pass liveBuiltinSource=true to check the bundled source configuration services",
+            InstrumentationRegistry.getArguments().getString("liveBuiltinSource") == "true")
+        isolated { _, source ->
+            assertTrue(source.loadSaved())
+            for (platform in listOf("kw", "kg", "tx", "wy", "mg")) {
+                assertTrue("Bundled source should support $platform music URLs", source.supports(platform, "musicUrl"))
+            }
         }
     }
     @Test fun localLyricsAndScriptUpdatePreferencesWorkThroughTheExistingScriptProtocol() = runBlocking {

@@ -1,5 +1,15 @@
 # 原生迁移验证记录
 
+## 2026-11-06：内置默认野花音源
+
+将用户指定的 [flower/latest.js](https://raw.githubusercontent.com/pdone/lx-music-source/main/flower/latest.js) 原始内容保存为 `app/src/main/assets/script/flower.js`，名称「野花🌷」、版本 `1`。新音源库默认选中该脚本，现有音源库迁移时补入该脚本并保留原有选择、停用及更新提示设置；停用或删除后重启不自动恢复。可继续使用既有音源导入、切换、导出、删除和更新提示功能。
+
+- 原始下载、资源文件以及 Debug APK 内的脚本 SHA-256 均为 `15c166987edde41cf5917b3160c0ab253ff17e5e6bc6765c9eaa11a822c4aa97`，脚本未修改，Git 对该文件保留原始字节。
+- Debug APK、仪器测试 APK 构建通过，20 项 JVM 单元测试全部通过；Debug Lint 为 0 错误、183 警告、1 提示。
+- YYA-H618 / Android 12（API 31）使用独立 `.builtincheck` 包执行 `UserSourceLibraryTest`、`UserSourceTest`、`OnlineSourceImportTest` 和 `SettingsFragmentTest`，24 项全部通过，0 失败、0 跳过。覆盖首次创建、旧单脚本/v1 库迁移、重复脚本去重、停用/删除持久化、现有自定义脚本与更新提示设置保留、导入失败回退和设置页操作。
+- 显式传入 `liveBuiltinSource=true`，未修改的内置脚本通过原生 QuickJS 运行时初始化，并支持 `kw/kg/tx/wy/mg` 的 `musicUrl` 动作。本次未下载真实音乐，也不把动作支持声明记作五平台音频播放验收。该联网初始化测试在未传参数时跳过；其他新增音源库测试不依赖第三方网络。
+- 原始输出位于忽略的 `build/builtin-source-validation/`；测试包完成后卸载。脚本随 APK 打包，初始化与解析仍依赖脚本自己的在线服务，API 28/35 设备结果以对应 Actions 运行记录为准。
+
 ## 2026-11-06：Actions 设备回归版本样本修复
 
 运行 [42154972751](https://github.com/savet-save/lx-music-android/actions/runs/42154972751) 的 API 28 和 API 35 作业各有相同的 4 项失败，构建检查与首次授权测试通过。根因是版本升级后测试仍使用 `0.1.0/0.1.1`：关于页断言与安装版本不符；错误签名样本的 code 2 先被版本校验拒绝；两项下载测试的旧版本记录被 `NativeUpdates.progress()` 主动取消，随后表现为连接重置或等待超时。缓存写入冲突、模拟器启动期间的 ADB offline 警告不是本次作业失败原因。
