@@ -1,5 +1,76 @@
 # 原生迁移验证记录
 
+## 2026-11-06：Actions 设备回归版本样本修复
+
+运行 [42154972751](https://github.com/savet-save/lx-music-android/actions/runs/42154972751) 的 API 28 和 API 35 作业各有相同的 4 项失败，构建检查与首次授权测试通过。根因是版本升级后测试仍使用 `0.1.0/0.1.1`：关于页断言与安装版本不符；错误签名样本的 code 2 先被版本校验拒绝；两项下载测试的旧版本记录被 `NativeUpdates.progress()` 主动取消，随后表现为连接重置或等待超时。缓存写入冲突、模拟器启动期间的 ADB offline 警告不是本次作业失败原因。
+
+- 回归脚本先读取基线 APK 的元数据，再将 versionName 的补丁号、versionCode 各加 1，生成同签名和不同签名的升级样本。测试中的更新版本也从实际安装版本推导；关于页从 PackageManager 读取期望显示版本。更新管理器的版本、签名和完整性校验保持原有规则。
+- 本地 Debug APK、仪器测试 APK 构建通过，20 项 JVM 单元测试全部通过。Debug Lint 为 0 错误、183 警告、1 提示，Bash 语法检查通过；对脚本内实际使用的 Python 生成逻辑执行 7 项检查，覆盖旧版、当前版、两位数补丁号、后续版本、非法版本及版本上限。
+- YYA-H618 / Android 12（API 31）使用独立 `.ciactioncheck` 包验证 `0.9.2/code 92` → `0.9.3/code 93` 样本，`AboutDiagnosticsTest` 与 `NativeUpdatesTest` 共 6 项全部通过，0 失败、0 跳过，包含上述 4 项失败。未自动确认安装升级包，测试包完成后卸载。
+- 构建输出、版本生成检查及设备原始结果保存于忽略的 `build/ci-42154972751/`。本地 Android 12 验证不能代替 API 28/35 的完整回归；远程结果以本次修复提交后的 Native Android Actions 运行为准。
+
+## 2026-11-06：平台浮层与榜单左侧列表
+
+平台选择共用原生 PopupWindow，覆盖搜索、歌单、排行榜及仅输入歌单 ID 的平台选择入口。菜单贴合触发按钮，歌单菜单右对齐，当前平台使用主题色；搜索名称遵循别名/原名设置，默认仍为聚合搜索。重复选择当前平台不清空已有结果、不重复请求。菜单支持外部点击、返回键、短窗口滚动和锚点移除时关闭，边界限制在应用窗口与可见区域的交集内。
+
+榜单选择复用侧边抽屉，从标题下方的内容区左侧展开，宽度为一半、最多 320 dp；顶部标题和底部播放栏保持可用。当前榜单显示主题色及箭头，支持长列表滚动、遮罩、返回键和向左滑动关闭。打开时阻止主页横向切页；重建后恢复展开状态与榜单列表位置。
+
+- YYA-H618 / Android 12（API 31）相关设备回归 41 项全部通过，0 失败、0 跳过，包含平台浮层 2 项、排行榜 4 项、歌单页 4 项、设置 7 项、搜索 5 项、歌单接口 7 项、窗口适配 5 项、主页手势/主抽屉/Insets 各 1 项、实际音频播放 4 项。默认在线歌单与热歌榜显式开启联网验证。
+- 检查三处菜单的锚点边缘、无调暗背景的窗口标志、选中色、重复选择不重载、外部触摸及返回键关闭；暗色、英文、1.6 倍字号在 600×280 dp 短窗口验证滚动、窗口边界及重建后关闭。平台浮层的手机布局使用设备内 360×800 dp 的原生应用窗口；榜单抽屉的 360×800、1024×768 dp 预览使用 Android View 测量与绘制，均不等同于对应实体手机实测。
+- 验证右侧主导航偏好下榜单仍从左侧展开，底部播放器不受遮罩拦截，实际 MediaPlayer 在抽屉打开时可以暂停及继续；从播放器焦点按返回只收起榜单列表。验证滑动不切换主页、重建不重复请求并保留长列表位置。
+- 最终补验歌单 ID 入口后，平台浮层 2 项设备测试再次全部通过。完整回归日志为 `build/popup-validation/device-final-tests.txt`，最终浮层补验为 `popup-final-tests.txt`。
+- JVM 单元测试 20 项通过。最终 Debug Lint 为 0 错误、183 警告、1 提示，Release Lint 为 0 错误、179 警告；详细构建、设备测试、预览与签名验证输出位于 `build/popup-validation/`。签名 Release 文件名仍为 `lx-music-native-v0.9.2.apk`，versionCode 92，`apksigner verify --verbose` 通过。隔离测试包已卸载。
+
+## 2026-11-06：平板封面稳定性与排行榜页面
+
+针对用户提供的 1920×1080 / Android 12 录屏，确认同一位置的歌单图片与 LX 占位反复交替。封面现在对同一 URL 的已显示内容保持幂等，固定方形图片更新像素时不触发父容器重新测量，底部加载更多改为覆盖层以保持网格高度稳定；手机仍使用三列布局。
+
+- YYA-H618 / Android 12（API 31）最终 38 项相关设备测试全部通过，0 失败、0 跳过。包括歌单页 4 项、排行榜 3 项、设置 7 项、搜索 5 项、歌单接口 7 项、窗口适配 5 项、主页手势/抽屉/Insets 各 1 项及真实 MediaPlayer 播放 4 项。
+- 平板专项使用本地 HTTP 返回的多个 512×512 图片，可见位图总量超过 8 MiB 封面 LRU；连续触发 15 次父容器布局后，检查所有可见图片仍非占位，位图对象身份不变，布局次数能够收敛。该专项在本轮宽屏设备实际执行，未按屏宽跳过。
+- 排行榜使用独立 Navigation 目的地、ViewModel 与 SavedStateHandle，默认酷我别名“小蜗音乐”热歌榜（id 16）。验证平台/榜单选择、音质/时长显示、分页失败同页重试、迟到响应隔离、返回/旋转保留位置及原搜索页查询；点击排行榜歌曲验证实际 MediaPlayer 播放该排行榜队列。
+- 显式开启 `liveCharts=true` 和 `livePlaylists=true`，默认热歌榜与默认歌单、封面图片的真实接口验证通过。其余平台使用既有解析和筛选样本；本轮未重新执行五平台全量联网验收，也未下载真实音乐音频。
+- 排行榜的 360×800、1024×768 dp 界面使用同一台设备的真实 Android View 测量与绘制，预览不等于对应尺寸实体手机实测。
+- JVM 单元测试 20 项通过；Debug Lint 为 0 错误、178 警告、1 提示，Release Lint 为 0 错误、174 警告。签名 Release `lx-music-native-v0.9.2.apk`（code 92）构建成功，`apksigner verify --verbose` 通过。
+
+最终记录位于 `build/chart-validation/device-final-tests.txt`、`release-build.txt`、`signature-verification.txt`；截图位于同目录 `screenshots/`，录屏抽帧仅用于诊断。设备测试使用独立 `.chartcheck` 包，验证结束后卸载。
+
+```powershell
+.\gradlew.bat :app:assembleRelease :app:testDebugUnitTest :app:lintDebug :app:lintRelease
+.\gradlew.bat :app:connectedDebugAndroidTest '-Pandroid.testInstrumentationRunnerArguments.class=cn.toside.music.nativeapp.ui.PlaylistBrowserTest,cn.toside.music.nativeapp.ui.ChartsPageTest,cn.toside.music.nativeapp.ui.SettingsFragmentTest,cn.toside.music.nativeapp.ui.SearchPageTest,cn.toside.music.nativeapp.online.OnlinePlaylistsTest,cn.toside.music.nativeapp.ui.AdaptiveLayoutTest,cn.toside.music.nativeapp.ui.HomeNavigationTest,cn.toside.music.nativeapp.ui.PhoneNavigationDrawerTest#drawerUsesSelectedSideBlocksPageSwipesAndLeavesMiniPlayerInteractive,cn.toside.music.nativeapp.ui.ScreenInsetsTest,cn.toside.music.nativeapp.player.PlaybackSettingsTest#playlistAndSettingsNavigationKeepAudioAndTheGlobalMiniPlayer,cn.toside.music.nativeapp.player.PlaybackSettingsTest#settingsFragmentThemeChangesKeepTheSameActivityAndAudioPlaying,cn.toside.music.nativeapp.player.PlaybackSettingsTest#languageAndFontChangesKeepPlaylistSearchAndScrollWhileAudioContinues,cn.toside.music.nativeapp.player.PlaybackSettingsTest#chartRowClickPlaysTheDisplayedChartQueue' '-Pandroid.testInstrumentationRunnerArguments.chartScreenshots=true' '-Pandroid.testInstrumentationRunnerArguments.playlistScreenshots=true' '-Pandroid.testInstrumentationRunnerArguments.liveCharts=true' '-Pandroid.testInstrumentationRunnerArguments.livePlaylists=true'
+```
+
+## 2026-11-06：Navigation 导航与封面歌单页
+
+主内容、歌单浏览、歌单歌曲和设置已接入 `NavHostFragment` / `main_navigation.xml`；抽屉、侧栏及底部播放栏在导航宿主外，播放仍由 Service 维护。歌单浏览独立使用 ViewModel / SavedStateHandle，保留筛选、分页与 GridView 原生位置状态。
+
+- YYA-H618 / Android 12（API 31）最终 33 项相关设备测试全部通过，0 失败、0 跳过。包含歌单浏览 3 项、封面与排序等歌单接口 7 项、设置 7 项、搜索 5 项、窗口适配 5 项、主页手势/抽屉/Insets 各 1 项、真实 MediaPlayer 播放连续性 3 项。
+- 验证三列方形封面、两行标题、宽屏增列、最新/最热切换、歌曲详情返回、旋转保留浏览数据和位置、搜索页返回恢复，以及分页失败重试同一页、重复/空页停止、旧筛选的迟到响应隔离。验证 GridView 在测量阶段更新列数，避免布局后清空卡片；验证播放状态刷新不会让设置页播放栏重新出现。
+- 显式启用 `livePlaylists=true`，默认酷我“最新”真实接口、封面元数据及图片解码显示通过；其他平台封面字段使用固定样本验证，不将本轮记录写成五平台全量联网验收。播放使用静音 PCM，未下载真实音乐音频。
+- 对实际 Android View 按 360×800、600×800、1024×768 dp 测量和绘制歌单页；同组设置/搜索测试覆盖深色、英文和 130% 字号。尺寸验证在同一台设备上完成，并非对应尺寸实体手机实测。
+- JVM 单元测试 20 项通过。Debug Lint：0 错误、171 警告、1 提示；Release Lint：0 错误、167 警告。Release `lx-music-native-v0.9.2.apk`（code 92）构建成功，`apksigner verify --verbose` 通过。
+
+记录位于 `build/navigation-validation/device-final-tests.txt`、`release-build.txt`、`signature-verification.txt`，截图位于同目录 `screenshots/`。设备测试使用独立 `.navigationcheck` 包，完成后已卸载。
+
+```powershell
+.\gradlew.bat :app:assembleRelease :app:testDebugUnitTest :app:lintDebug :app:lintRelease
+.\gradlew.bat :app:connectedDebugAndroidTest '-Pandroid.testInstrumentationRunnerArguments.class=cn.toside.music.nativeapp.ui.PlaylistBrowserTest,cn.toside.music.nativeapp.ui.SettingsFragmentTest,cn.toside.music.nativeapp.ui.SearchPageTest,cn.toside.music.nativeapp.online.OnlinePlaylistsTest,cn.toside.music.nativeapp.ui.AdaptiveLayoutTest,cn.toside.music.nativeapp.ui.HomeNavigationTest,cn.toside.music.nativeapp.ui.PhoneNavigationDrawerTest#drawerUsesSelectedSideBlocksPageSwipesAndLeavesMiniPlayerInteractive,cn.toside.music.nativeapp.ui.ScreenInsetsTest,cn.toside.music.nativeapp.player.PlaybackSettingsTest#playlistAndSettingsNavigationKeepAudioAndTheGlobalMiniPlayer,cn.toside.music.nativeapp.player.PlaybackSettingsTest#settingsFragmentThemeChangesKeepTheSameActivityAndAudioPlaying,cn.toside.music.nativeapp.player.PlaybackSettingsTest#languageAndFontChangesKeepPlaylistSearchAndScrollWhileAudioContinues' '-Pandroid.testInstrumentationRunnerArguments.playlistScreenshots=true' '-Pandroid.testInstrumentationRunnerArguments.livePlaylists=true'
+```
+
+## 2026-11-06：Fragment 设置页与即时主题配色
+
+设置主页面由 `SettingsFragment` 和 Activity 返回栈承载，移除「完成」按钮。主题选择立即更新设置页、主页和系统栏；换色保留同一个 Activity、Fragment、播放服务、分类和滚动位置。手动选主题会关闭跟随系统；语言、字号和导航布局修改立即重建界面并恢复设置状态。
+
+- Android 12（YYA-H618）独立测试包最终 14 项专项设备测试全部通过，无失败或跳过，覆盖 `SettingsFragmentTest` 7 项、`SearchPageTest` 5 项和真实 MediaPlayer 播放连续性/语言字号恢复 2 项。使用本地 HTTP、静音 PCM 和受控搜索结果，不下载真实音乐。
+- 验证亮色到深色连续切换、返回键、主页滚动位置、分类/音源链接草稿跨重建恢复、换色不中断音源导入及聚合搜索；修复界面恢复时输入监听误清结果或取消搜索的问题。按 360×800、600×800、1024×768、640×360 dp 绘制设置页面，并检查深色英文 130% 字号；尺寸验证在同一设备完成。
+- JVM 单元测试 20 项通过。Debug Lint 为 0 错误、151 警告、1 提示；Release Lint 为 0 错误、147 警告。签名 Release `lx-music-native-v0.9.2.apk`（code 92）构建成功，`apksigner verify --verbose` 通过。
+
+最终设备记录位于 `build/fragment-validation/device-final-tests.txt`，构建和签名记录位于同目录 `release-build.txt`、`signature-verification.txt`，截图位于 `screenshots/`。测试使用独立 `.fragmentcheck` 包，完成后已卸载。复现专项可运行：
+
+```powershell
+.\gradlew.bat :app:testDebugUnitTest :app:lintDebug :app:lintRelease :app:assembleRelease
+.\gradlew.bat :app:connectedDebugAndroidTest '-Pandroid.testInstrumentationRunnerArguments.class=cn.toside.music.nativeapp.ui.SettingsFragmentTest,cn.toside.music.nativeapp.ui.SearchPageTest,cn.toside.music.nativeapp.player.PlaybackSettingsTest#settingsFragmentThemeChangesKeepTheSameActivityAndAudioPlaying,cn.toside.music.nativeapp.player.PlaybackSettingsTest#languageAndFontChangesKeepPlaylistSearchAndScrollWhileAudioContinues' '-Pandroid.testInstrumentationRunnerArguments.adaptiveScreenshots=true'
+```
+
 ## 2026-11-05：设置适配与在线音源导入
 
 设备为 YYA-H618 / Android 12（API 31）；JDK 17、Gradle 8.13、SDK 36。Debug 构建成功，14 项 JVM 单元测试通过；24 项相关设备测试全部通过，无失败或跳过，覆盖设置页、音源下载/脚本库及主页导航、屏幕适配、语言与主题回归。状态文案修正后 6 项设置页测试再次通过；最终 Debug Lint 为 0 错误、64 警告、1 提示。
@@ -14,7 +85,7 @@
 设置与下载专项可复现为：
 
 ```powershell
-.\gradlew.bat :app:assembleDebug :app:testDebugUnitTest :app:lintDebug :app:connectedDebugAndroidTest '-Pandroid.testInstrumentationRunnerArguments.class=cn.toside.music.nativeapp.ui.SettingsDialogTest,cn.toside.music.nativeapp.source.OnlineSourceImportTest' '-Pandroid.testInstrumentationRunnerArguments.adaptiveScreenshots=true'
+.\gradlew.bat :app:assembleDebug :app:testDebugUnitTest :app:lintDebug :app:connectedDebugAndroidTest '-Pandroid.testInstrumentationRunnerArguments.class=cn.toside.music.nativeapp.ui.SettingsFragmentTest,cn.toside.music.nativeapp.source.OnlineSourceImportTest' '-Pandroid.testInstrumentationRunnerArguments.adaptiveScreenshots=true'
 ```
 
 日期：2026-11-04。设备：YYA-H618，Android 12（API 31）。JDK 17，Gradle 8.13，Android SDK 36。
@@ -59,7 +130,7 @@ Lint 警告包括依赖新版本提示、RTL、可访问性、原平台协议所
 
 默认设备测试有 7 项需要显式参数：5 项真实平台联网、2 项升级 APK/错误签名完整检查。未传参数时按设计跳过，不能将默认结果写成 145 项全部通过。
 
-完整回归先准备同一调试签名的 0.1.1/code 2 APK，以及版本/包名相同但签名不同的测试 APK，推送到设备临时目录，然后用默认 0.1.0/code 1 运行：
+完整回归先准备同一调试签名、版本号高于当前构建的 APK（versionName 的补丁号和 versionCode 各加 1），以及版本/包名相同但签名不同的测试 APK，推送到设备临时目录，然后恢复当前基线版本运行。`scripts/device-regression.sh` 会读取基线 APK 的 `output-metadata.json` 自动完成这些步骤，避免应用升级后测试样本变成降级包：
 
 ```powershell
 .\gradlew.bat :app:testDebugUnitTest :app:lintDebug :app:connectedDebugAndroidTest `

@@ -2,8 +2,28 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-# Build two signed test fixtures before returning to the normal baseline version.
-bash ./gradlew --no-daemon :app:assembleDebug -PnativeVersionName=0.1.1 -PnativeVersionCode=2
+# Read the actual baseline APK metadata so fixtures remain upgrades after version bumps.
+bash ./gradlew --no-daemon :app:assembleDebug
+fixture_metadata=$(python3 - <<'PY'
+import json
+import re
+
+with open('app/build/outputs/apk/debug/output-metadata.json', encoding='utf-8') as source:
+    metadata = json.load(source)['elements'][0]
+version = metadata['versionName']
+if not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+', version):
+    raise SystemExit(f'Expected a semantic baseline version, got {version!r}')
+major, minor, patch = map(int, version.split('.'))
+code = int(metadata['versionCode']) + 1
+if not (0 < code <= 2_100_000_000 and max(major, minor, patch + 1) <= 99_999):
+    raise SystemExit('Cannot generate a newer Android update fixture within supported version limits')
+print(f'{major}.{minor}.{patch + 1} {code}')
+PY
+)
+read -r fixture_version fixture_code <<< "$fixture_metadata"
+
+# Build same-key and different-key upgrades before returning to the baseline version.
+bash ./gradlew --no-daemon :app:assembleDebug "-PnativeVersionName=$fixture_version" "-PnativeVersionCode=$fixture_code"
 mkdir -p build/update-fixtures
 cp app/build/outputs/apk/debug/app-debug.apk build/update-fixtures/updated.apk
 rm -f build/update-fixtures/wrong-signer.jks

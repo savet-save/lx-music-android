@@ -477,7 +477,7 @@
     <string name="ui_76a0950acd56" formatted="false">"Hide background images in dark mode"</string>
     <string name="ui_7c0f1e4ec56f" formatted="false">"Slow background movement"</string>
     <string name="ui_490573c22811" formatted="false">"Text shadow"</string>
-    <string name="ui_8874d3825cf1" formatted="false">"Choose a theme. In system mode, light and dark themes are saved separately."</string>
+    <string name="ui_8874d3825cf1" formatted="false">"Choosing a theme applies it immediately and turns off system mode. Light and dark themes are saved separately."</string>
     <string name="ui_63c73c4730f4" formatted="false">"Apply"</string>
     <string name="ui_2fe0943eacb3" formatted="false">"Repeat playlist"</string>
     <string name="ui_5bbcac595bc6" formatted="false">"In order"</string>

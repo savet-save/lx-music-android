@@ -83,6 +83,8 @@ tasks.matching { it.name == "preReleaseBuild" || it.name == "validateSigningRele
 dependencies {
     implementation("net.jthink:jaudiotagger:3.0.1")
     implementation("androidx.core:core:1.18.0")
+    implementation("androidx.fragment:fragment-ktx:1.9.1")
+    implementation("androidx.navigation:navigation-fragment-ktx:2.10.2")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("wang.harlon.quickjs:wrapper-android:3.2.3")

@@ -46,7 +46,7 @@ internal class KugouPlaylists {
             val item = items.optJSONObject(i) ?: continue
             val id = item.optString("specialid")
             if (id.isBlank() || !id.all(Char::isDigit)) continue
-            add(OnlinePlaylist(id, "", decode(item.optString("specialname")), decode(item.optString("nickname")), "kg"))
+            add(OnlinePlaylist(id, "", decode(item.optString("specialname")), decode(item.optString("nickname")), "kg", playlistCover(item.optString("imgurl"), item.optString("img"))))
         }
     }
 

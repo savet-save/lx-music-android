@@ -5,7 +5,7 @@
     <string name="settings_sources">自定义音源</string>
     <string name="settings_about">关于与版本</string>
     <string name="settings_selected">已启用</string>
-    <string name="settings_apply_hint">主题、语言和界面布局的更改将在关闭设置后应用。</string>
+    <string name="settings_apply_hint">修改后立即生效，无需关闭设置。</string>
     <string name="settings_source_hint">导入兼容 LX 的音源脚本，用于在线歌曲播放和下载。</string>
     <string name="settings_source_online">在线导入音源</string>
     <string name="settings_source_url">音源链接</string>

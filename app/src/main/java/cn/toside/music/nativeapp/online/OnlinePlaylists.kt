@@ -13,7 +13,7 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 
-data class OnlinePlaylist(val id: String, val digest: String, val name: String, val author: String, val source: String = "kw")
+data class OnlinePlaylist(val id: String, val digest: String, val name: String, val author: String, val source: String = "kw", val coverUrl: String = "")
 internal data class KuwoTag(val id: String, val name: String)
 internal data class KuwoCategory(val name: String, val tags: List<KuwoTag>)
 internal data class OnlineTag(val id: String, val name: String)
@@ -21,14 +21,16 @@ internal data class OnlineTagGroup(val name: String, val tags: List<OnlineTag>)
 
 /** Public recommended playlists and their song metadata. */
 class OnlinePlaylists(private val context: android.content.Context? = null) {
-    suspend fun recommended(page: Int = 1, source: String = "kw", category: String = "全部"): List<OnlinePlaylist> = withContext(Dispatchers.IO) {
+    suspend fun recommended(page: Int = 1, source: String = "kw", category: String = "全部", order: String = "recommend"): List<OnlinePlaylist> = withContext(Dispatchers.IO) {
         require(page > 0)
+        require(order in setOf("new", "hot", "recommend"))
         if (source == "kg") return@withContext KugouPlaylists().recommended(page, if (category == "全部") "" else category)
-        if (source == "wy") return@withContext NeteaseApi().recommended(page, category)
+        if (source == "wy") return@withContext NeteaseApi().recommended(page, category, if (order == "new") "new" else "hot")
         if (source == "tx") {
-            if (category != "全部") {
-                require(category.isNotBlank() && category.all(Char::isDigit))
-                val id = category.toInt()
+            if (category != "全部" || order != "recommend") {
+                val selected = if (category == "全部") (if (order == "new") "2" else "3") else category
+                require(selected.isNotBlank() && selected.all(Char::isDigit))
+                val id = selected.toInt()
                 val request = JSONObject().put("comm", JSONObject().put("cv", 1602).put("ct", 20))
                     .put("playlist", JSONObject().put("module", "playlist.PlayListCategoryServer").put("method", "get_category_content")
                         .put("param", JSONObject().put("titleid", id).put("caller", "0").put("category_id", id).put("size", 36).put("page", page - 1).put("use_page", 1)))
@@ -58,7 +60,7 @@ class OnlinePlaylists(private val context: android.content.Context? = null) {
             if (page > 1) return@withContext emptyList()
             return@withContext parseKuwoSpecialLists(getArray("http://mobileinterfaces.kuwo.cn/er.s?type=get_pc_qz_data&f=web&id=$id&prod=pc"))
         }
-        val url = if (category == "全部") "http://wapi.kuwo.cn/api/pc/classify/playlist/getRcmPlayList?loginUid=0&loginSid=0&appUid=76039576&pn=$page&rn=36&order=hot"
+        val url = if (category == "全部") "http://wapi.kuwo.cn/api/pc/classify/playlist/getRcmPlayList?loginUid=0&loginSid=0&appUid=76039576&pn=$page&rn=36&order=${if (order == "new") "new" else "hot"}"
         else {
             val id = category.removeSuffix("-10000")
             require(id.isNotBlank() && id.all(Char::isDigit))
@@ -152,7 +154,9 @@ class OnlinePlaylists(private val context: android.content.Context? = null) {
             val id = basic.optString("tid")
             if (id.isBlank() || !id.all(Char::isDigit)) continue
             fun decoded(value: String) = Html.fromHtml(value, Html.FROM_HTML_MODE_LEGACY).toString()
-            add(OnlinePlaylist(id, "", decoded(basic.optString("title")), decoded(basic.optJSONObject("creator")?.optString("nick") ?: ""), "tx"))
+            val cover = basic.optJSONObject("cover")
+            add(OnlinePlaylist(id, "", decoded(basic.optString("title")), decoded(basic.optJSONObject("creator")?.optString("nick") ?: ""), "tx",
+                playlistCover(cover?.optString("medium_url"), cover?.optString("default_url"))))
         }
     }
     internal fun parseMiguLists(data: JSONObject): List<OnlinePlaylist> {
@@ -166,7 +170,7 @@ class OnlinePlaylists(private val context: android.content.Context? = null) {
                 else if (item.optString("resType") == "2021") {
                     val id = item.optString("resId")
                     if (id.isNotBlank() && id.all(Char::isDigit) && ids.add(id))
-                        result.add(OnlinePlaylist(id, "", item.optString("txt"), "", "mg"))
+                        result.add(OnlinePlaylist(id, "", item.optString("txt"), "", "mg", playlistCover(item.optString("img"), item.optJSONObject("img")?.optString("url"))))
                 }
             }
         }
@@ -178,7 +182,7 @@ class OnlinePlaylists(private val context: android.content.Context? = null) {
                 val item = items.optJSONObject(i) ?: continue
                 val id = item.optJSONObject("logEvent")?.optString("contentId") ?: continue
                 if (id.isNotBlank() && id.all(Char::isDigit) && ids.add(id))
-                    result.add(OnlinePlaylist(id, "", item.optString("title"), "", "mg"))
+                    result.add(OnlinePlaylist(id, "", item.optString("title"), "", "mg", playlistCover(item.optString("imageUrl"), item.optString("img"), item.optJSONArray("pics")?.optJSONObject(0)?.optString("url"))))
             }
         }
         return result
@@ -188,7 +192,7 @@ class OnlinePlaylists(private val context: android.content.Context? = null) {
             val item = items.optJSONObject(i) ?: continue
             val id = item.optString("id"); val digest = item.optString("digest")
             if (id.isBlank() || !id.all(Char::isDigit) || digest !in setOf("5", "8", "13")) continue
-            add(OnlinePlaylist(id, digest, item.optString("name"), item.optString("uname")))
+            add(OnlinePlaylist(id, digest, item.optString("name"), item.optString("uname"), "kw", playlistCover(item.optString("img"), item.optString("pic"))))
         }
     }
     suspend fun songs(list: OnlinePlaylist, page: Int): List<Song> = withContext(Dispatchers.IO) {

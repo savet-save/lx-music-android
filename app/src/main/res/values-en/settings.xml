@@ -5,7 +5,7 @@
     <string name="settings_sources">Custom sources</string>
     <string name="settings_about">About and updates</string>
     <string name="settings_selected">Enabled</string>
-    <string name="settings_apply_hint">Theme, language and layout changes apply when you close settings.</string>
+    <string name="settings_apply_hint">Changes apply immediately while settings stays open.</string>
     <string name="settings_source_hint">Import an LX-compatible source script for online playback and downloads.</string>
     <string name="settings_source_online">Import from URL</string>
     <string name="settings_source_url">Source URL</string>

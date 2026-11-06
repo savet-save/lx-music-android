@@ -20,6 +20,12 @@ import kotlin.concurrent.thread
 @RunWith(AndroidJUnit4::class)
 class NativeUpdatesTest {
     private val context get() = InstrumentationRegistry.getInstrumentation().targetContext
+    @Suppress("DEPRECATION")
+    private val installed get() = context.packageManager.getPackageInfo(context.packageName, 0)
+    private val updateVersion: String get() {
+        val parts = requireNotNull(installed.versionName).split('.').map { it.toInt() }
+        return "${parts[0]}.${parts[1]}.${parts[2] + 1}"
+    }
     private fun digest(file: File) = file.inputStream().use { input ->
         val hash = MessageDigest.getInstance("SHA-256"); val buffer = ByteArray(65536)
         while (true) { val size = input.read(buffer); if (size < 0) break; hash.update(buffer, 0, size) }
@@ -27,7 +33,7 @@ class NativeUpdatesTest {
     }
     private fun fixture(): File {
         val path = InstrumentationRegistry.getArguments().getString("updateFixture").orEmpty()
-        assumeTrue("Pass updateFixture pointing to a signed native 0.1.1/versionCode 2 APK", path.isNotEmpty())
+        assumeTrue("Pass updateFixture pointing to a signed native $updateVersion APK with a newer versionCode", path.isNotEmpty())
         return File(path).also { assertTrue("Missing upgrade fixture: $path", it.isFile) }
     }
     private fun download(file: File, size: Long = file.length(), hash: String? = digest(file), action: suspend (NativeUpdates, UpdateDownload) -> Unit) = runBlocking {
@@ -47,7 +53,7 @@ class NativeUpdatesTest {
             } catch (e: Throwable) { if (!server.isClosed) failure.set(e) }
         }
         try {
-            val record = updates.start(NativeRelease("0.1.1", "", "fixture", "http://127.0.0.1:${server.localPort}/update.apk", size, hash))
+            val record = updates.start(NativeRelease(updateVersion, "", "fixture", "http://127.0.0.1:${server.localPort}/update.apk", size, hash))
             // The transfer is owned by the OS, with no Activity or service bound to this instance.
             val restored = NativeUpdates(context)
             assertEquals(record, restored.saved())
@@ -95,12 +101,14 @@ class NativeUpdatesTest {
         } finally { file.delete() }
     }
     @Test fun archivePolicyRejectsDowngradeWrongPackageAndChangedSigningKey() {
-        assertTrue(runCatching { NativeUpdates.verifyArchive(context, File(context.applicationInfo.sourceDir), "0.1.0") }.isFailure)
+        assertEquals(context.getString(R.string.update_version_invalid), runCatching {
+            NativeUpdates.verifyArchive(context, File(context.applicationInfo.sourceDir), requireNotNull(installed.versionName))
+        }.exceptionOrNull()?.message)
         val testContext = InstrumentationRegistry.getInstrumentation().context
-        assertTrue(runCatching { NativeUpdates.verifyArchive(context, File(testContext.applicationInfo.sourceDir), "0.1.1") }.isFailure)
+        assertTrue(runCatching { NativeUpdates.verifyArchive(context, File(testContext.applicationInfo.sourceDir), updateVersion) }.isFailure)
         val path = InstrumentationRegistry.getArguments().getString("wrongSignerFixture").orEmpty()
         assumeTrue("Pass wrongSignerFixture for a different-key upgrade APK", path.isNotEmpty())
-        val exception = runCatching { NativeUpdates.verifyArchive(context, File(path), "0.1.1") }.exceptionOrNull()
+        val exception = runCatching { NativeUpdates.verifyArchive(context, File(path), updateVersion) }.exceptionOrNull()
         assertEquals(context.getString(R.string.update_signature_invalid), exception?.message)
     }
 }

@@ -1,0 +1,11 @@
+<resources>
+    <string name="playlist_new">最新</string>
+    <string name="playlist_hot">最熱</string>
+    <string name="playlist_recommended">推薦</string>
+    <string name="playlist_default">預設</string>
+    <string name="playlist_open">開啟</string>
+    <string name="playlist_category">歌單分類</string>
+    <string name="playlist_retry">重試</string>
+    <string name="playlist_empty">暫無歌單</string>
+    <string name="playlist_error">歌單載入失敗：%1$s</string>
+</resources>

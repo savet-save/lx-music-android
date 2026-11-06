@@ -1,0 +1,11 @@
+<resources>
+    <string name="playlist_new">最新</string>
+    <string name="playlist_hot">最热</string>
+    <string name="playlist_recommended">推荐</string>
+    <string name="playlist_default">默认</string>
+    <string name="playlist_open">打开</string>
+    <string name="playlist_category">歌单分类</string>
+    <string name="playlist_retry">重试</string>
+    <string name="playlist_empty">暂无歌单</string>
+    <string name="playlist_error">歌单加载失败：%1$s</string>
+</resources>

@@ -477,7 +477,7 @@
     <string name="ui_76a0950acd56" formatted="false">"深色模式隐藏背景图"</string>
     <string name="ui_7c0f1e4ec56f" formatted="false">"背景缓慢移动"</string>
     <string name="ui_490573c22811" formatted="false">"文字阴影"</string>
-    <string name="ui_8874d3825cf1" formatted="false">"选择主题；系统模式下分别保存明亮和深色主题。"</string>
+    <string name="ui_8874d3825cf1" formatted="false">"选择主题后立即生效，并关闭跟随系统。明亮和深色主题分别保存。"</string>
     <string name="ui_63c73c4730f4" formatted="false">"应用"</string>
     <string name="ui_2fe0943eacb3" formatted="false">"列表循环"</string>
     <string name="ui_5bbcac595bc6" formatted="false">"顺序播放"</string>

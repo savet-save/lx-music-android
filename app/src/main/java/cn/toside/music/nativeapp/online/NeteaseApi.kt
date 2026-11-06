@@ -83,9 +83,10 @@ class NeteaseApi internal constructor(private val transport: ((String, JSONObjec
             if (items.isEmpty()) null else PlaylistCategory(groups.optString(id), items)
         }
     }
-    suspend fun recommended(page: Int, category: String = "全部"): List<OnlinePlaylist> = withContext(Dispatchers.IO) {
+    suspend fun recommended(page: Int, category: String = "全部", order: String = "hot"): List<OnlinePlaylist> = withContext(Dispatchers.IO) {
         require(page > 0)
-        val result = request("/weapi/playlist/list", JSONObject().put("cat", category).put("order", "hot")
+        require(order in setOf("new", "hot"))
+        val result = request("/weapi/playlist/list", JSONObject().put("cat", category).put("order", order)
             .put("limit", 30).put("offset", 30 * (page - 1)).put("total", true))
         val items = result.optJSONArray("playlists") ?: JSONArray()
         buildList {
@@ -93,7 +94,7 @@ class NeteaseApi internal constructor(private val transport: ((String, JSONObjec
                 val item = items.optJSONObject(i) ?: continue
                 val id = item.optString("id")
                 if (id.isNotBlank() && id.all(Char::isDigit)) add(OnlinePlaylist(id, "", item.optString("name"),
-                    item.optJSONObject("creator")?.optString("nickname") ?: "", "wy"))
+                    item.optJSONObject("creator")?.optString("nickname") ?: "", "wy", playlistCover(item.optString("coverImgUrl"))))
             }
         }
     }
