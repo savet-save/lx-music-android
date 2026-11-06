@@ -193,6 +193,7 @@ class MainActivity : FragmentActivity() {
     private var waitingForAudioSettings = false
     private var waitingForServicePlayback: AudioAction? = null
     private var searchSource = SearchCatalog.ALL
+    private val platformPopup = PlatformPopup()
     private var searchCatalog = SearchCatalog()
     private var playlistSearchMode = false
     private var playlistSearchResults = emptyList<OnlinePlaylist>()
@@ -350,6 +351,7 @@ class MainActivity : FragmentActivity() {
         checkNativeUpdatesOnStartup(this, scope)
     }
     override fun onStop() {
+        platformPopup.dismiss()
         playbackSettingsDialog?.dismiss()
         stateJob?.cancel()
         lyricJob?.cancel()
@@ -587,8 +589,14 @@ class MainActivity : FragmentActivity() {
                 catch (e: CancellationException) { throw e }
                 catch (e: Exception) { toast(getString(R.string.ui_03c68e4bc44d, java.lang.String.valueOf(e.localizedMessage))) }
             } }
-            if (guessed != null) open(guessed) else AlertDialog.Builder(this).setTitle(getString(R.string.ui_72477c9eeff6))
-                .setItems(arrayOf(getString(R.string.ui_2a6eaaa1f30c), getString(R.string.ui_6f5fe8042a63), getString(R.string.ui_3ef42060a2e5), getString(R.string.ui_a62864e8c353), getString(R.string.ui_017e2d45158b))) { _, index -> open(ExternalLinks.sources[index]) }.show()
+            if (guessed != null) open(guessed) else {
+                val anchor = navigationHost()?.childFragmentManager?.primaryNavigationFragment?.view?.findViewWithTag<View>("playlist-open")
+                    ?: if (searchSourceButton.isShown) searchSourceButton else heading
+                anchor.post {
+                    val ids = PlatformPopup.sources
+                    platformPopup.show(anchor, ids, ids.map { UiPreferences.sourceName(this, it) }, "", palette, alignEnd = true, onSelected = ::open)
+                }
+            }
         }.show()
     }
     private fun refreshOnlinePlaylist(playlist: Playlist) {
@@ -623,7 +631,7 @@ class MainActivity : FragmentActivity() {
                 val inSearch = ::search.isInitialized && search.visibility == View.VISIBLE &&
                     search.getGlobalVisibleRect(searchBounds) && y + location[1] >= searchBounds.top && y + location[1] <= searchBounds.bottom
                 navigation?.currentDestination?.id !in setOf(R.id.settings_page, R.id.playlist_browser) &&
-                    navigationDrawer?.isOpen != true && preferences.bool("common.homePageScroll", true) && (!::miniBar.isInitialized || y < miniBar.top) && !inSearch
+                    navigationDrawer?.isOpen != true && chartsFragment()?.isBoardDrawerOpen != true && preferences.bool("common.homePageScroll", true) && (!::miniBar.isInitialized || y < miniBar.top) && !inSearch
             }
             navigate = { direction ->
                 val current = when { navigation?.currentDestination?.id == R.id.charts_page -> 2; boardMode -> 2; onlinePlaylistMode -> 3; onlineMode -> 1; else -> 0 }
@@ -1543,20 +1551,16 @@ class MainActivity : FragmentActivity() {
         }
     }
     private fun sourceLabel(): String = sourceLabel(searchSource)
-    private fun sourceLabel(source: String): String = when (source) {
-        SearchCatalog.ALL -> getString(R.string.search_all_sources)
-        "kw" -> getString(R.string.ui_2a6eaaa1f30c); "tx" -> getString(R.string.ui_3ef42060a2e5)
-        "wy" -> getString(R.string.ui_a62864e8c353); "mg" -> getString(R.string.ui_017e2d45158b); else -> getString(R.string.ui_6f5fe8042a63)
-    }
+    private fun sourceLabel(source: String): String = if (source == SearchCatalog.ALL) getString(R.string.search_all_sources) else UiPreferences.sourceName(this, source)
     private fun showSearchSources() {
-        val ids = SearchCatalog.choices
-        AlertDialog.Builder(this).setTitle(getString(R.string.ui_9b980a0136e4))
-            .setSingleChoiceItems(ids.map { sourceLabel(it) }.toTypedArray(), ids.indexOf(searchSource)) { dialog, index ->
-            dialog.dismiss(); searchSource = ids[index]
+        val ids = PlatformPopup.sources + SearchCatalog.ALL
+        val anchor = if (searchSourceButton.isShown) searchSourceButton else heading
+        platformPopup.show(anchor, ids, ids.map(::sourceLabel), searchSource, palette) { selected ->
+            searchSource = selected
             heading.text = getString(R.string.ui_e07216a6d505, sourceLabel())
             resetCatalogResults()
             if (search.text.isNotBlank()) searchOnline()
-        }.show()
+        }
     }
     private fun showPlayerDetails() {
         val state = service?.state?.value ?: return

@@ -1,4 +1,5 @@
 <resources>
+    <string name="chart_close_picker">关闭榜单列表</string>
     <string name="chart_select">选择榜单</string>
     <string name="chart_empty">暂无排行歌曲</string>
     <string name="chart_error">排行榜加载失败：%1$s</string>

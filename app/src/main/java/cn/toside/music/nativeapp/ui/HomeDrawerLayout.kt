@@ -18,16 +18,20 @@ import kotlin.math.abs
 /** Covers the workspace while leaving the mini player outside the drawer's touch area. */
 // Created in code; drawer position is an explicit physical left/right preference.
 @SuppressLint("ViewConstructor", "RtlHardcoded")
-internal class HomeDrawerLayout(context: Context, private val content: View, private val panel: View, private val onRight: Boolean) : FrameLayout(context) {
+internal class HomeDrawerLayout(
+    context: Context, private val content: View, private val panel: View, private val onRight: Boolean,
+    private val widthFraction: Float = .7f, private val tagPrefix: String = "home-drawer",
+    closeDescription: Int = R.string.layout_close_navigation, private val onOpenChanged: (Boolean) -> Unit = {}
+) : FrameLayout(context) {
     private val scrim = View(context).apply {
-        tag = "home-drawer-scrim"
+        tag = "$tagPrefix-scrim"
         setBackgroundColor(Color.argb(140, 0, 0, 0))
-        contentDescription = context.getString(R.string.layout_close_navigation)
+        contentDescription = context.getString(closeDescription)
         isFocusable = true
         setOnClickListener { close() }
     }
     private val overlay = FrameLayout(context).apply {
-        tag = "home-drawer-overlay"; visibility = View.GONE
+        tag = "$tagPrefix-overlay"; visibility = View.GONE
         addView(scrim, LayoutParams(-1, -1))
         addView(panel, LayoutParams(0, -1, if (onRight) Gravity.RIGHT else Gravity.LEFT))
     }
@@ -42,7 +46,8 @@ internal class HomeDrawerLayout(context: Context, private val content: View, pri
     val isOpen get() = overlay.visibility == View.VISIBLE
 
     init {
-        tag = "home-drawer-host"
+        tag = "$tagPrefix-host"
+        panel.tag = "$tagPrefix-panel"
         panel.elevation = 8 * resources.displayMetrics.density
         panel.isClickable = true
         panel.isFocusableInTouchMode = true
@@ -51,7 +56,7 @@ internal class HomeDrawerLayout(context: Context, private val content: View, pri
     }
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-        val panelWidth = minOf((MeasureSpec.getSize(widthMeasureSpec) * .7f).toInt(), (320 * resources.displayMetrics.density).toInt())
+        val panelWidth = minOf((MeasureSpec.getSize(widthMeasureSpec) * widthFraction).toInt(), (320 * resources.displayMetrics.density).toInt())
         if (panel.layoutParams.width != panelWidth) panel.layoutParams.width = panelWidth
         super.onMeasure(widthMeasureSpec, heightMeasureSpec)
     }
@@ -61,6 +66,7 @@ internal class HomeDrawerLayout(context: Context, private val content: View, pri
         previousFocus = rootView.findFocus()
         closing = false
         overlay.visibility = View.VISIBLE
+        onOpenChanged(true)
         content.importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
         panel.animate().withEndAction(null).cancel(); scrim.animate().cancel()
         panel.translationX = if (animate) (if (onRight) 1 else -1) * panel.layoutParams.width.toFloat() else 0f
@@ -85,6 +91,7 @@ internal class HomeDrawerLayout(context: Context, private val content: View, pri
         panel.animate().withEndAction(null).cancel(); scrim.animate().cancel()
         closing = true
         swiping = false
+        onOpenChanged(false)
         content.importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_AUTO
         previousFocus?.requestFocus(); previousFocus = null
         if (Build.VERSION.SDK_INT >= 33) backCallback?.let { backDispatcher?.unregisterOnBackInvokedCallback(it) }

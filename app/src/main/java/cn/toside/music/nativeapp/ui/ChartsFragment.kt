@@ -1,14 +1,15 @@
 package cn.toside.music.nativeapp.ui
 
-import android.app.AlertDialog
 import android.content.Context
 import android.graphics.Typeface
 import android.os.Bundle
+import android.os.Parcelable
 import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.*
+import androidx.activity.OnBackPressedCallback
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.viewModels
 import androidx.lifecycle.*
@@ -40,6 +41,12 @@ class ChartsFragment : Fragment() {
     private var progress: ProgressBar? = null
     private var adapter: SongsAdapter? = null
     private var playingKey: String? = null
+    private val platformPopup = PlatformPopup()
+    private var boardDrawer: HomeDrawerLayout? = null
+    private var boardPicker: ListView? = null
+    private var boardAdapter: BoardsAdapter? = null
+    private var boardBack: OnBackPressedCallback? = null
+    internal val isBoardDrawerOpen get() = boardDrawer?.isOpen == true
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
         palette = UiPalette(requireContext(), NativeThemes(requireContext()).active())
@@ -47,34 +54,55 @@ class ChartsFragment : Fragment() {
         return LinearLayout(requireContext()).apply {
             tag = "charts-page"; orientation = LinearLayout.VERTICAL; setBackgroundColor(palette.surface)
             val header = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(dp(4), dp(4), dp(8), dp(4)) }
-            header.addView(styles.icon(59680, getString(R.string.ui_e35a36e26d52), 19f) { (requireActivity() as MainActivity).openAppNavigation() }, LinearLayout.LayoutParams(dp(48), dp(48)))
+            header.addView(styles.icon(59680, getString(R.string.ui_e35a36e26d52), 19f) {
+                platformPopup.dismiss(); boardDrawer?.close(false); (requireActivity() as MainActivity).openAppNavigation()
+            }, LinearLayout.LayoutParams(dp(48), dp(48)))
             header.addView(styles.label(getString(R.string.ui_1ee95aa94712), 19f).apply { setPadding(dp(8), 0, 0, 0); setTypeface(null, Typeface.BOLD) }, LinearLayout.LayoutParams(0, -2, 1f))
             addView(header)
-            val selectors = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(dp(4), 0, dp(8), 0) }
-            source = control("") { chooseSource() }.apply { tag = "charts-source"; contentDescription = getString(R.string.ui_9b980a0136e4) }
-            board = control("", palette.primary) { chooseBoard() }.apply { tag = "charts-board"; contentDescription = getString(R.string.chart_select) }
-            selectors.addView(source, LinearLayout.LayoutParams(-2, dp(48))); selectors.addView(board, LinearLayout.LayoutParams(0, dp(48), 1f))
-            addView(selectors)
-            addView(View(context).apply { setBackgroundColor(palette.divider) }, LinearLayout.LayoutParams(-1, dp(1)))
-            progress = ProgressBar(context, null, android.R.attr.progressBarStyleHorizontal).apply { isIndeterminate = true; indeterminateTintList = android.content.res.ColorStateList.valueOf(palette.primary) }
-            addView(progress, LinearLayout.LayoutParams(-1, dp(2)))
-            val message = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(dp(12), 0, dp(12), 0) }
-            status = styles.label("", 12f, palette.muted).apply { maxLines = 3; accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE }
-            message.addView(status, LinearLayout.LayoutParams(0, -2, 1f))
-            retry = control(getString(R.string.playlist_retry)) { model.loadMore() }.apply { tag = "charts-retry" }
-            message.addView(retry); addView(message)
-            val result = FrameLayout(context)
-            songs = ListView(context).apply { tag = "charts-songs"; divider = null; isVerticalScrollBarEnabled = false; setPadding(0, 0, 0, dp(56)); clipToPadding = false }
-            result.addView(songs, FrameLayout.LayoutParams(-1, -1))
-            empty = styles.label("", 16f, palette.muted).apply { gravity = Gravity.CENTER; maxLines = 3 }
-            result.addView(empty, FrameLayout.LayoutParams(-1, -1)); songs?.emptyView = empty
-            more = control(getString(R.string.ui_af90a08fec8e)) { model.loadMore() }.apply { tag = "charts-more"; setBackgroundColor(palette.surface); visibility = View.GONE }
-            result.addView(more, FrameLayout.LayoutParams(-1, dp(48), Gravity.BOTTOM))
-            addView(result, LinearLayout.LayoutParams(-1, 0, 1f)); palette.textStyle(this)
+            val content = LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                val selectors = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(dp(4), 0, dp(8), 0) }
+                source = control("") { chooseSource() }.apply { tag = "charts-source"; contentDescription = getString(R.string.ui_9b980a0136e4) }
+                board = control("", palette.primary) { chooseBoard() }.apply { tag = "charts-board"; contentDescription = getString(R.string.chart_select) }
+                selectors.addView(source, LinearLayout.LayoutParams(-2, dp(48))); selectors.addView(board, LinearLayout.LayoutParams(0, dp(48), 1f))
+                addView(selectors)
+                addView(View(context).apply { setBackgroundColor(palette.divider) }, LinearLayout.LayoutParams(-1, dp(1)))
+                progress = ProgressBar(context, null, android.R.attr.progressBarStyleHorizontal).apply { isIndeterminate = true; indeterminateTintList = android.content.res.ColorStateList.valueOf(palette.primary) }
+                addView(progress, LinearLayout.LayoutParams(-1, dp(2)))
+                val message = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(dp(12), 0, dp(12), 0) }
+                status = styles.label("", 12f, palette.muted).apply { maxLines = 3; accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE }
+                message.addView(status, LinearLayout.LayoutParams(0, -2, 1f))
+                retry = control(getString(R.string.playlist_retry)) { model.loadMore() }.apply { tag = "charts-retry" }
+                message.addView(retry); addView(message)
+                val result = FrameLayout(context)
+                songs = ListView(context).apply { tag = "charts-songs"; divider = null; isVerticalScrollBarEnabled = false; setPadding(0, 0, 0, dp(56)); clipToPadding = false }
+                result.addView(songs, FrameLayout.LayoutParams(-1, -1))
+                empty = styles.label("", 16f, palette.muted).apply { gravity = Gravity.CENTER; maxLines = 3 }
+                result.addView(empty, FrameLayout.LayoutParams(-1, -1)); songs?.emptyView = empty
+                more = control(getString(R.string.ui_af90a08fec8e)) { model.loadMore() }.apply { tag = "charts-more"; setBackgroundColor(palette.surface); visibility = View.GONE }
+                result.addView(more, FrameLayout.LayoutParams(-1, dp(48), Gravity.BOTTOM))
+                addView(result, LinearLayout.LayoutParams(-1, 0, 1f))
+            }
+            val picker = ListView(context).apply {
+                divider = null; setBackgroundColor(palette.surface); isVerticalScrollBarEnabled = false
+                adapter = BoardsAdapter().also { boardAdapter = it }
+                setOnItemClickListener { _, _, position, _ ->
+                    val selected = boardAdapter?.items?.getOrNull(position) ?: return@setOnItemClickListener
+                    boardDrawer?.close(); model.select(selected)
+                }
+            }.also { boardPicker = it }
+            boardDrawer = HomeDrawerLayout(context, content, picker, onRight = false, widthFraction = .5f,
+                tagPrefix = "charts-drawer", closeDescription = R.string.chart_close_picker,
+                onOpenChanged = { boardBack?.isEnabled = it })
+            addView(boardDrawer, LinearLayout.LayoutParams(-1, 0, 1f))
+            palette.textStyle(this)
         }
     }
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
+        boardBack = object : OnBackPressedCallback(false) {
+            override fun handleOnBackPressed() { boardDrawer?.close() }
+        }.also { requireActivity().onBackPressedDispatcher.addCallback(viewLifecycleOwner, it) }
         val list = requireNotNull(songs)
         adapter = SongsAdapter().also { list.adapter = it }
         list.setOnItemClickListener { _, _, position, _ -> (requireActivity() as MainActivity).playPageSongs(model.state.value.songs, position) }
@@ -90,11 +118,20 @@ class ChartsFragment : Fragment() {
         renderPlayback((requireActivity() as MainActivity).settingsPlayer()?.state?.value?.song)
         viewLifecycleOwner.lifecycleScope.launch { viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) { model.state.collect(::render) } }
         model.ensureLoaded()
+        if (savedInstanceState?.getBoolean("board-drawer-open") == true) view.post {
+            if (boardDrawer?.isAttachedToWindow == true) {
+                chooseBoard(false)
+                @Suppress("DEPRECATION")
+                val position = savedInstanceState.getParcelable<Parcelable>("board-picker-state")
+                if (position != null) boardPicker?.onRestoreInstanceState(position)
+            }
+        }
     }
     private fun render(state: ChartsState) {
         val list = songs ?: return
         source?.let { val text = UiPreferences.sourceName(requireContext(), state.board.source); if (it.text.toString() != text) it.text = text }
         board?.let { if (it.text.toString() != state.board.name) it.text = state.board.name }
+        renderBoards()
         progress?.visibility = if (state.loading) View.VISIBLE else View.INVISIBLE
         status?.text = state.error?.let { getString(R.string.chart_error, it) }.orEmpty()
         status?.visibility = if (state.error == null) View.GONE else View.VISIBLE
@@ -114,20 +151,39 @@ class ChartsFragment : Fragment() {
         if (key != playingKey) { playingKey = key; adapter?.notifyDataSetChanged() }
     }
     private fun chooseSource() {
-        AlertDialog.Builder(requireContext()).setTitle(R.string.ui_9b980a0136e4)
-            .setSingleChoiceItems(ChartsViewModel.sources.map { UiPreferences.sourceName(requireContext(), it) }.toTypedArray(), ChartsViewModel.sources.indexOf(model.state.value.board.source)) { dialog, index ->
-                dialog.dismiss(); model.selectSource(ChartsViewModel.sources[index])
-            }.setNegativeButton(R.string.ui_2cd0f3be8738, null).show()
+        boardDrawer?.close(false)
+        val anchor = source ?: return
+        val ids = ChartsViewModel.sources
+        platformPopup.show(anchor, ids, ids.map { UiPreferences.sourceName(requireContext(), it) }, model.state.value.board.source, palette) { model.selectSource(it) }
     }
-    private fun chooseBoard() {
-        val choices = model.choices()
-        AlertDialog.Builder(requireContext()).setTitle(R.string.chart_select).setSingleChoiceItems(choices.map { it.name }.toTypedArray(), choices.indexOf(model.state.value.board)) { dialog, index ->
-            dialog.dismiss(); model.select(choices[index])
-        }.setNegativeButton(R.string.ui_2cd0f3be8738, null).show()
+    private fun renderBoards() {
+        boardAdapter?.let { adapter ->
+            val choices = model.choices()
+            val selected = model.state.value.board
+            if (adapter.items != choices || adapter.selected != selected) {
+                adapter.items = choices; adapter.selected = selected; adapter.notifyDataSetChanged()
+            }
+        }
+    }
+    private fun chooseBoard(animate: Boolean = true) {
+        platformPopup.dismiss(); renderBoards()
+        if (isBoardDrawerOpen) boardDrawer?.close(animate)
+        else {
+            val selected = boardAdapter?.items?.indexOf(model.state.value.board) ?: 0
+            boardPicker?.setSelection((selected - 2).coerceAtLeast(0))
+            boardDrawer?.open(animate)
+        }
     }
     private fun rememberPosition() { songs?.let { if (it.childCount > 0) model.scrollState = it.onSaveInstanceState() } }
-    override fun onSaveInstanceState(outState: Bundle) { rememberPosition(); super.onSaveInstanceState(outState) }
+    override fun onSaveInstanceState(outState: Bundle) {
+        rememberPosition()
+        outState.putBoolean("board-drawer-open", isBoardDrawerOpen)
+        outState.putParcelable("board-picker-state", boardPicker?.onSaveInstanceState())
+        super.onSaveInstanceState(outState)
+    }
+    override fun onStop() { platformPopup.dismiss(); super.onStop() }
     override fun onDestroyView() {
+        platformPopup.dismiss(); boardDrawer?.close(false); boardDrawer = null; boardPicker = null; boardAdapter = null; boardBack = null
         rememberPosition(); songs = null; adapter = null; source = null; board = null; status = null; empty = null; more = null; retry = null; progress = null
         super.onDestroyView()
     }
@@ -135,6 +191,24 @@ class ChartsFragment : Fragment() {
         gravity = Gravity.CENTER_VERTICAL; minHeight = dp(48); setPadding(dp(10), 0, dp(10), 0); background = styles.touch(); isFocusable = true; setOnClickListener { action() }
     }
     private fun dp(value: Int) = styles.dp(value)
+    private inner class BoardsAdapter : BaseAdapter() {
+        var items = emptyList<Board>()
+        var selected: Board? = null
+        override fun getCount() = items.size
+        override fun getItem(position: Int) = items[position].name
+        override fun getItemId(position: Int) = position.toLong()
+        override fun getView(position: Int, convertView: View?, parent: ViewGroup): View =
+            ((convertView as? TextView) ?: styles.label("", 14f).apply {
+                gravity = Gravity.CENTER_VERTICAL; minHeight = dp(48); maxLines = 2
+                setPadding(dp(8), dp(10), dp(8), dp(10)); background = styles.touch()
+            }).apply {
+                val item = items[position]; isSelected = item == selected
+                isActivated = item == selected
+                text = if (isSelected) "› ${item.name}" else item.name
+                setTextColor(if (isSelected) palette.primary else palette.foreground)
+                tag = "chart-choice-${item.source}-${item.id}"
+            }
+    }
     private inner class SongsAdapter : BaseAdapter() {
         var items = emptyList<Song>()
         override fun getCount() = items.size

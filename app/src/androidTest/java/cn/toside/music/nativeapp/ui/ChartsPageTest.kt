@@ -7,6 +7,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.SystemClock
 import android.view.KeyEvent
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.inspector.WindowInspector
@@ -155,6 +156,88 @@ class ChartsPageTest {
             await { activity.navigationController().currentDestination?.id == R.id.music_page }
             assertEquals("home draft", (field(activity, "search") as TextView).text.toString())
         } finally { main { activity.finish() } }
+    }
+
+    @Test fun boardDrawerStaysOnTheLeftProtectsPageSwipesAndRestoresAcrossRecreation() {
+        var activity = start()
+        val requests = CopyOnWriteArrayList<Board>()
+        val preferences = instrumentation.targetContext.getSharedPreferences("app-settings", 0)
+        val side = preferences.getString("common.drawerLayoutPosition", null)
+        preferences.edit().putString("common.drawerLayoutPosition", "right").commit()
+        try {
+            main {
+                activity.chartsRepository = object : ChartsRepository {
+                    override fun boards(source: String) = NativeChartsRepository().boards(source)
+                    override suspend fun page(board: Board, page: Int): List<Song> { requests += board; return songs(board) }
+                }
+                invoke(activity, "showBoards")
+            }
+            await { activity.chartsFragment()?.model?.state?.value?.songs?.size == 100 }
+            main {
+                listOf(360 to 800, 1024 to 768).forEach { (width, height) ->
+                    MainActivity::class.java.getDeclaredField("uiLayout").apply { isAccessible = true }.set(activity, AdaptiveLayout(width, height))
+                    invoke(activity, "applyThemeInPlace"); measure(activity, width, height)
+                    val root = activity.findViewById<ViewGroup>(android.R.id.content).getChildAt(0)
+                    val drawer = root.findViewWithTag<HomeDrawerLayout>("charts-drawer-host")
+                    drawer.open(false); measure(activity, width, height)
+                    val panel = root.findViewWithTag<ListView>("charts-drawer-panel")
+                    assertEquals(0, panel.left); assertEquals(0, panel.top); assertEquals(drawer.height, panel.height)
+                    val density = activity.resources.displayMetrics.density
+                    assertEquals(minOf(drawer.width / 2, (320 * density).toInt()), panel.width)
+                    val row = panel.findViewWithTag<TextView>("chart-choice-kw-16")
+                    assertNotNull(row); assertTrue(row.text.startsWith("› ")); assertTrue(row.isActivated)
+                    val drawerPosition = IntArray(2); val playerPosition = IntArray(2)
+                    drawer.getLocationOnScreen(drawerPosition); (field(activity, "miniBar") as View).getLocationOnScreen(playerPosition)
+                    assertTrue(drawerPosition[1] + drawer.height <= playerPosition[1])
+                    assertTrue(drawer.top > 0)
+                    assertEquals(View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS, drawer.getChildAt(0).importantForAccessibility)
+                    capture("chart-drawer-$width", root)
+                    drawer.close(false)
+                }
+                activity.chartsFragment()!!.requireView().findViewWithTag<View>("charts-board").performClick()
+            }
+            await { activity.chartsFragment()?.isBoardDrawerOpen == true }
+            instrumentation.waitForIdleSync(); SystemClock.sleep(250)
+            main {
+                val root = activity.findViewById<ViewGroup>(android.R.id.content).getChildAt(0)
+                val panel = root.findViewWithTag<ListView>("charts-drawer-panel")
+                val drawer = root.findViewWithTag<HomeDrawerLayout>("charts-drawer-host")
+                val position = IntArray(2); val origin = IntArray(2)
+                panel.getLocationOnScreen(position); root.getLocationOnScreen(origin)
+                val fromX = (position[0] - origin[0] + panel.width * .8f)
+                val y = (position[1] - origin[1] + panel.height / 2).toFloat()
+                val time = SystemClock.uptimeMillis()
+                listOf(MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE, MotionEvent.ACTION_UP).forEachIndexed { index, action ->
+                    MotionEvent.obtain(time, time + index * 40, action, if (index == 0) fromX else fromX - panel.width * .6f, y, 0).also { root.dispatchTouchEvent(it); it.recycle() }
+                }
+                assertEquals(R.id.charts_page, activity.navigationController().currentDestination?.id)
+                drawer.close(false); drawer.open(false)
+                panel.setSelection(panel.count - 1)
+            }
+            await { activity.chartsFragment()!!.requireView().findViewWithTag<ListView>("charts-drawer-panel").firstVisiblePosition > 0 }
+            var first = 0
+            main { first = activity.chartsFragment()!!.requireView().findViewWithTag<ListView>("charts-drawer-panel").firstVisiblePosition }
+            val monitor = instrumentation.addMonitor(MainActivity::class.java.name, null, false)
+            main { activity.recreate() }
+            val replacement = instrumentation.waitForMonitorWithTimeout(monitor, 6000)
+            instrumentation.removeMonitor(monitor); assertNotNull(replacement); activity = replacement as MainActivity
+            await { activity.chartsFragment()?.isBoardDrawerOpen == true }
+            await { activity.chartsFragment()!!.requireView().findViewWithTag<ListView>("charts-drawer-panel").firstVisiblePosition == first }
+            assertEquals(1, requests.size)
+            main { (field(activity, "toggle") as View).requestFocus() }
+            instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
+            await { activity.chartsFragment()?.isBoardDrawerOpen == false }
+            assertEquals(R.id.charts_page, activity.navigationController().currentDestination?.id)
+            main {
+                val view = activity.chartsFragment()!!.requireView()
+                view.findViewWithTag<View>("charts-board").performClick()
+                view.findViewWithTag<View>("charts-drawer-scrim").performClick()
+            }
+            await { activity.chartsFragment()?.isBoardDrawerOpen == false }
+        } finally {
+            main { activity.finish() }
+            preferences.edit().apply { if (side == null) remove("common.drawerLayoutPosition") else putString("common.drawerLayoutPosition", side) }.commit()
+        }
     }
 
     @Test fun liveDefaultKuwoHotChartLoadsSongMetadata() {

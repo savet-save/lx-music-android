@@ -155,12 +155,13 @@ class PlaylistBrowserFragment : Fragment() {
         row.addView(control(getString(R.string.playlist_open)) { (requireActivity() as MainActivity).openPlaylistLink() }.apply { tag = "playlist-open" })
         row.addView(control(UiPreferences.sourceName(requireContext(), query.source)) { chooseSource() }.apply { tag = "playlist-source" })
     }
+    private val platformPopup = PlatformPopup()
     private fun chooseSource() {
-        val sources = listOf("kw", "kg", "tx", "wy", "mg")
-        AlertDialog.Builder(requireContext()).setTitle(R.string.ui_9b980a0136e4)
-            .setSingleChoiceItems(sources.map { UiPreferences.sourceName(requireContext(), it) }.toTypedArray(), sources.indexOf(model.state.value.query.source)) { dialog, index ->
-                dialog.dismiss(); rememberPosition(); model.select(PlaylistBrowseQuery(source = sources[index]))
-            }.setNegativeButton(R.string.ui_2cd0f3be8738, null).show()
+        val sources = PlatformPopup.sources
+        val anchor = filters?.findViewWithTag<View>("playlist-source") ?: return
+        platformPopup.show(anchor, sources, sources.map { UiPreferences.sourceName(requireContext(), it) }, model.state.value.query.source, palette, alignEnd = true) { selected ->
+            rememberPosition(); model.select(PlaylistBrowseQuery(source = selected))
+        }
     }
     private fun chooseCategory() {
         if (categoriesJob?.isActive == true) return
@@ -190,7 +191,9 @@ class PlaylistBrowserFragment : Fragment() {
         background = styles.touch(); isFocusable = true; setOnClickListener { click() }
     }
     private fun dp(value: Int) = styles.dp(value)
+    override fun onStop() { platformPopup.dismiss(); super.onStop() }
     override fun onDestroyView() {
+        platformPopup.dismiss()
         rememberPosition(); categoriesJob = null; adapter = null; grid = null; filters = null; status = null; retry = null; more = null; progress = null
         super.onDestroyView()
     }

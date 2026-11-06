@@ -1,4 +1,5 @@
 <resources>
+    <string name="chart_close_picker">Close chart list</string>
     <string name="chart_select">Choose chart</string>
     <string name="chart_empty">No chart songs</string>
     <string name="chart_error">Could not load chart: %1$s</string>

@@ -162,7 +162,7 @@ class SearchPageTest {
         Fixture().use { fixture ->
             val activity = fixture.activity
             assertEquals(SearchCatalog.ALL, field(activity, "searchSource"))
-            chooseSource(activity, activity.getString(R.string.ui_a62864e8c353))
+            chooseSource(activity, UiPreferences.sourceName(activity, "wy"))
             assertEquals("wy", field(activity, "searchSource"))
             chooseSource(activity, activity.getString(R.string.search_all_sources))
             assertEquals(SearchCatalog.ALL, field(activity, "searchSource"))

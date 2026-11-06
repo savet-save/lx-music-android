@@ -668,6 +668,16 @@ class PlaybackSettingsTest {
             assertEquals(songs, fixture.player.queueState.value!!.songs); assertEquals(1, fixture.player.queueState.value!!.index)
             assertTrue(fixture.media().isPlaying)
             waitFor { list.getChildAt(1)?.isActivated == true }
+            main { activity.chartsFragment()!!.requireView().findViewWithTag<View>("charts-board").performClick() }
+            waitFor { activity.chartsFragment()?.isBoardDrawerOpen == true }
+            main { (field(activity, "toggle") as View).performClick() }
+            waitFor { !fixture.player.state.value.playing }
+            assertFalse(fixture.media().isPlaying); assertTrue(activity.chartsFragment()!!.isBoardDrawerOpen)
+            main { (field(activity, "toggle") as View).performClick() }
+            waitFor { fixture.player.state.value.playing }
+            main { activity.onBackPressedDispatcher.onBackPressed() }
+            waitFor { activity.chartsFragment()?.isBoardDrawerOpen == false }
+            assertEquals(R.id.charts_page, activity.navigationController().currentDestination?.id)
             main { activity.navigationController().popBackStack() }
             waitFor { activity.navigationController().currentDestination?.id == R.id.music_page }
             assertTrue(fixture.player.state.value.playing)
