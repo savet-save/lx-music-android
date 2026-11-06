@@ -23,6 +23,8 @@ internal class SearchHistory(context: Context, name: String = "search-history") 
 
 internal class SearchSuggestions {
     suspend fun suggestions(source: String, query: String): List<String> {
+        if (source == SearchCatalog.ALL) return SearchCatalog.page(query, pageSize = { Int.MAX_VALUE }, key = { it.lowercase() },
+            fetch = { provider, term, _ -> suggestions(provider, term) }).items.take(15)
         // The old Migu web suggestion endpoint now returns its HTML site (and was disabled in RN).
         // Build suggestions from the working native public song search instead.
         if (source == "mg") return OnlineSearch().search(query, source = "mg").take(10).map { "${it.title} - ${it.artist}" }.distinct()
@@ -37,6 +39,8 @@ internal class SearchSuggestions {
         return parseSuggestions(source, result)
     }
     suspend fun hot(source: String): List<String> {
+        if (source == SearchCatalog.ALL) return SearchCatalog.page("hot", pageSize = { Int.MAX_VALUE }, key = { it.lowercase() },
+            fetch = { provider, _, _ -> hot(provider) }).items.take(50)
         val result = when (source) {
             "kw" -> NativeHttp.json("http://hotword.kuwo.cn/hotword.s?prod=kwplayer_ar_9.3.0.1&newver=2&uid=0&plat=kwplayer_ar&rformat=json&encoding=utf8&tabid=1")
             "kg" -> NativeHttp.json("http://gateway.kugou.com/api/v3/search/hot_tab?signature=ee44edb9d7155821412d220bcaf509dd&appid=1005&clientver=10026&plat=0", headers = mapOf(

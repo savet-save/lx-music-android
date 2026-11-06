@@ -1,6 +1,15 @@
 <resources>
     <string name="layout_search">Search</string>
     <string name="layout_close_navigation">Close navigation menu</string>
+    <string name="search_all_sources">All platforms</string>
+    <string name="search_songs">Songs</string>
+    <string name="search_placeholder">Search for something...</string>
+    <string name="search_empty">Find your next favorite 😉</string>
+    <string name="search_no_results">No matching results</string>
+    <string name="search_clear">Clear search</string>
+    <string name="search_partial">Some platforms are unavailable: %1$s. Load more to retry.</string>
+    <string name="search_unavailable">Search platforms are unavailable. Please try again later.</string>
+    <string name="search_playlist_count">%1$d playlists</string>
     <string name="layout_songlists">Playlists</string>
     <string name="layout_track">Track</string>
     <string name="layout_artist">Artist</string>

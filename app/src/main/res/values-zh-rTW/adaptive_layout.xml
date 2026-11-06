@@ -1,6 +1,15 @@
 <resources>
     <string name="layout_search">搜尋</string>
     <string name="layout_close_navigation">關閉導覽選單</string>
+    <string name="search_all_sources">聚合搜尋</string>
+    <string name="search_songs">歌曲</string>
+    <string name="search_placeholder">Search for something...</string>
+    <string name="search_empty">搜我所想~~😉</string>
+    <string name="search_no_results">沒有找到相關結果</string>
+    <string name="search_clear">清空搜尋</string>
+    <string name="search_partial">部分平台暫不可用：%1$s，可點選載入更多重試</string>
+    <string name="search_unavailable">搜尋平台暫不可用，請稍後重試</string>
+    <string name="search_playlist_count">%1$d 個歌單</string>
     <string name="layout_songlists">歌單</string>
     <string name="layout_track">歌曲</string>
     <string name="layout_artist">歌手</string>

@@ -23,7 +23,8 @@ import cn.toside.music.nativeapp.online.OnlineBoards
 import cn.toside.music.nativeapp.online.OnlinePlaylist
 import cn.toside.music.nativeapp.online.OnlinePlaylists
 import cn.toside.music.nativeapp.online.OnlineSearch
-import cn.toside.music.nativeapp.online.PlaylistSearch
+import cn.toside.music.nativeapp.online.SearchCatalog
+import cn.toside.music.nativeapp.online.SearchUnavailableException
 import cn.toside.music.nativeapp.online.SearchHistory
 import cn.toside.music.nativeapp.online.SearchSuggestions
 import cn.toside.music.nativeapp.player.LyricAlignment
@@ -173,7 +174,24 @@ class MainActivity : Activity() {
     private var pendingAudioAction: AudioAction? = null
     private var waitingForAudioSettings = false
     private var waitingForServicePlayback: AudioAction? = null
-    private var searchSource = "kg"
+    private var searchSource = SearchCatalog.ALL
+    private var searchCatalog = SearchCatalog()
+    private var playlistSearchMode = false
+    private var playlistSearchResults = emptyList<OnlinePlaylist>()
+    private var searchNextPages = emptyMap<String, Int>()
+    private var catalogLoading = false
+    private var searchGeneration = 0L
+    private lateinit var searchRow: LinearLayout
+    private lateinit var searchTabs: LinearLayout
+    private lateinit var searchSourceButton: TextView
+    private lateinit var searchClearButton: TextView
+    private lateinit var headerSyncButton: View
+    private lateinit var listHeaderView: LinearLayout
+    private lateinit var emptyIcon: TextView
+    private lateinit var emptyHint: TextView
+    private val searchTabLabels = mutableMapOf<Boolean, TextView>()
+    private val searchTabIndicators = mutableMapOf<Boolean, View>()
+    private val isCatalogPage get() = onlineMode && !boardMode && !onlinePlaylistMode
     private var searchPage = 0
     private var searchedText = ""
     private var changingSeek = false
@@ -207,7 +225,8 @@ class MainActivity : Activity() {
     private var detailActiveLine = -1
     private data class PageSnapshot(val songs: List<Song>, val playlist: Playlist?, val board: Board?, val onlinePlaylist: OnlinePlaylist?,
         val online: Boolean, val boards: Boolean, val onlineLists: Boolean, val source: String, val query: String, val searchVisible: Boolean,
-        val searchPage: Int, val boardPage: Int, val playlistPage: Int, val more: Boolean, val loading: Boolean, val first: Int, val top: Int)
+        val searchPage: Int, val boardPage: Int, val playlistPage: Int, val more: Boolean, val loading: Boolean, val first: Int, val top: Int,
+        val searchPlaylists: Boolean, val foundPlaylists: List<OnlinePlaylist>, val nextPages: Map<String, Int>)
     private var pendingScroll: Pair<Int, Int>? = null
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
@@ -337,6 +356,7 @@ class MainActivity : Activity() {
         outState.putBoolean("navigation-open", navigationDrawer?.isOpen == true)
         outState.putInt("home-mode", when { page.boards -> 2; page.onlineLists -> 3; page.online -> 1; else -> 0 })
         outState.putString("home-source", page.source); outState.putString("home-query", page.query.take(2000)); outState.putBoolean("home-search-visible", page.searchVisible)
+        outState.putBoolean("home-search-playlists", playlistSearchMode)
         outState.putInt("home-first", page.first); outState.putInt("home-top", page.top)
         page.playlist?.let { outState.putLong("home-playlist", it.id) }
         page.board?.let { outState.putStringArray("home-board", arrayOf(it.id, it.name, it.source)) }
@@ -359,25 +379,30 @@ class MainActivity : Activity() {
     override fun onRetainNonConfigurationInstance(): Any = pageSnapshot()
     private fun pageSnapshot() = PageSnapshot(allSongs, activePlaylist, selectedBoard, selectedOnlinePlaylist, onlineMode, boardMode, onlinePlaylistMode,
         searchSource, search.text.toString(), search.visibility == View.VISIBLE, searchPage, boardPage, onlinePlaylistPage,
-        loadMore.visibility == View.VISIBLE || loadJob?.isActive == true && allSongs.isNotEmpty(), loadJob?.isActive == true, list.firstVisiblePosition, list.getChildAt(0)?.top ?: 0)
+        loadMore.visibility == View.VISIBLE || loadJob?.isActive == true && (allSongs.isNotEmpty() || isCatalogPage && playlistSearchResults.isNotEmpty()), loadJob?.isActive == true, list.firstVisiblePosition, list.getChildAt(0)?.top ?: 0,
+        playlistSearchMode, playlistSearchResults, searchNextPages)
     private fun restorePage(saved: Bundle?): Boolean {
         val retained = lastNonConfigurationInstance as? PageSnapshot
         if (retained != null) {
             allSongs = retained.songs; activePlaylist = retained.playlist; selectedBoard = retained.board; selectedOnlinePlaylist = retained.onlinePlaylist
             onlineMode = retained.online; boardMode = retained.boards; onlinePlaylistMode = retained.onlineLists; searchSource = retained.source
+            playlistSearchMode = retained.searchPlaylists; playlistSearchResults = retained.foundPlaylists; searchNextPages = retained.nextPages
             searchPage = retained.searchPage; searchedText = retained.query; boardPage = retained.boardPage; onlinePlaylistPage = retained.playlistPage
-            search.setText(retained.query); search.visibility = if (retained.searchVisible) View.VISIBLE else View.GONE
+            search.setText(retained.query); suggestionJob?.cancel(); setSearchVisible(retained.searchVisible)
             updateListAction()
             pageTitle.text = getString(when { boardMode -> R.string.ui_1ee95aa94712; onlinePlaylistMode -> R.string.ui_473e57b72072; onlineMode -> R.string.ui_44ce7ae909bb; else -> R.string.ui_27c95ec6b766 })
             heading.text = when { boardMode -> "›   ${selectedBoard?.name.orEmpty()}"; onlinePlaylistMode -> "›   ${selectedOnlinePlaylist?.name.orEmpty()}"
                 onlineMode -> getString(R.string.ui_e07216a6d505, sourceLabel()); activePlaylist != null -> "›   ${activePlaylist!!.name}"; else -> getString(R.string.ui_33eeaa47c231) }
             if (preferences.saveScroll) pendingScroll = retained.first to retained.top
             filterSongs(); loadMore.visibility = if (retained.more) View.VISIBLE else View.GONE
-            if (allSongs.isEmpty() || retained.loading) reloadRestoredPage()
+            val empty = if (isCatalogPage && playlistSearchMode) playlistSearchResults.isEmpty() else allSongs.isEmpty()
+            if (retained.loading && isCatalogPage && !empty && searchPage > 0) searchOnline(append = true)
+            else if (empty || retained.loading) reloadRestoredPage()
             return true
         }
         if (saved == null || !saved.containsKey("home-mode")) return false
-        searchSource = saved.getString("home-source")?.takeIf { it in ExternalLinks.sources } ?: "kg"
+        searchSource = saved.getString("home-source")?.takeIf { it in SearchCatalog.choices } ?: SearchCatalog.ALL
+        playlistSearchMode = saved.getBoolean("home-search-playlists")
         val query = saved.getString("home-query").orEmpty()
         if (preferences.saveScroll) pendingScroll = saved.getInt("home-first") to saved.getInt("home-top")
         when (saved.getInt("home-mode")) {
@@ -388,7 +413,7 @@ class MainActivity : Activity() {
                 if (!saved.containsKey("home-playlist")) return false
                 scope.launch {
                     val playlist = playlists.list().firstOrNull { it.id == saved.getLong("home-playlist") }
-                    if (playlist != null) { loadPlaylist(playlist); search.setText(query); search.visibility = if (saved.getBoolean("home-search-visible")) View.VISIBLE else View.GONE }
+                    if (playlist != null) { loadPlaylist(playlist); search.setText(query); setSearchVisible(saved.getBoolean("home-search-visible")) }
                     else openLocalPage(false)
                 }
             }
@@ -397,7 +422,7 @@ class MainActivity : Activity() {
     }
     private fun reloadRestoredPage() {
         when { boardMode -> selectedBoard?.let { loadBoard(it) }; onlinePlaylistMode -> selectedOnlinePlaylist?.let { loadOnlinePlaylist(it) }
-            onlineMode -> if (search.text.isNotBlank()) searchOnline() else { status.text = getString(R.string.ui_bd997b86cde1) }
+            onlineMode -> if (search.text.isNotBlank()) searchOnline() else { setCatalogStatus("") }
             activePlaylist != null -> { val query = search.text.toString(); loadPlaylist(activePlaylist!!); search.setText(query) }
             hasAudioPermission() -> loadSongs(); else -> showLocalPermissionPrompt() }
     }
@@ -533,6 +558,7 @@ class MainActivity : Activity() {
         navigationDrawer?.close(false)
         navigationDrawer = null
         navigationItems.clear()
+        searchTabLabels.clear(); searchTabIndicators.clear(); tableHeader = null
         val primary = palette.primary
         val foreground = palette.foreground
         val root = HomeNavigationLayout(this).apply {
@@ -574,10 +600,14 @@ class MainActivity : Activity() {
         }
         if (!uiLayout.expanded && !preferences.menuOnRight) header.addView(menu, LinearLayout.LayoutParams(dp(48), dp(48)))
         header.addView(pageTitle, LinearLayout.LayoutParams(0, -2, 1f))
-        header.addView(lx.icon(59687, getString(R.string.ui_727036c7fc2a)) { showSyncSettings() }, LinearLayout.LayoutParams(dp(48), dp(48)))
+        searchTabs = buildSearchTabs()
+        header.addView(searchTabs, LinearLayout.LayoutParams(-2, -2))
+        headerSyncButton = lx.icon(59687, getString(R.string.ui_727036c7fc2a)) { showSyncSettings() }
+        header.addView(headerSyncButton, LinearLayout.LayoutParams(dp(48), dp(48)))
         if (uiLayout.expanded || preferences.menuOnRight) header.addView(menu, LinearLayout.LayoutParams(dp(48), dp(48)))
         main.addView(header)
         val listHeader = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(dp(if (uiLayout.expanded) 12 else 0), dp(2), dp(4), dp(2)) }
+        listHeaderView = listHeader
         heading = TextView(this).apply {
             text = getString(R.string.ui_33eeaa47c231); textSize = 14f; setTextColor(foreground); gravity = Gravity.CENTER_VERTICAL
             background = lx.touch(); isFocusable = true; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
@@ -594,13 +624,12 @@ class MainActivity : Activity() {
             background = lx.touch(); isFocusable = true
             setOnClickListener {
                 if (boardMode || onlinePlaylistMode) showOnlineListActions()
-                else search.visibility = if (search.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+                else setSearchVisible(search.visibility != View.VISIBLE)
             }
             setOnLongClickListener { showBatchSongs(); true }
         }
         listHeader.addView(listActionButton, LinearLayout.LayoutParams(dp(48), dp(48)))
         main.addView(listHeader)
-        main.addView(View(this).apply { setBackgroundColor(palette.divider) }, LinearLayout.LayoutParams(-1, dp(1)))
         search = AutoCompleteTextView(this).apply {
             threshold = 1
             setOnItemClickListener { _, _, _, _ -> if (onlineMode && !boardMode && !onlinePlaylistMode) searchOnline() }
@@ -613,7 +642,24 @@ class MainActivity : Activity() {
                 if (actionId == EditorInfo.IME_ACTION_SEARCH && onlineMode) { searchOnline(); true } else false
             }
         }
-        main.addView(search, LinearLayout.LayoutParams(-1, dp(48)).apply { setMargins(dp(16), dp(8), dp(16), dp(4)) })
+        searchSourceButton = lx.label(sourceLabel(), 14f).apply {
+            tag = "search-source"; maxWidth = dp(144); gravity = Gravity.CENTER
+            setPadding(dp(12), 0, dp(12), 0); background = lx.touch(); isFocusable = true
+            setOnClickListener { showSearchSources() }
+        }
+        searchClearButton = lx.label("×", 23f, palette.primary).apply {
+            tag = "search-clear"; gravity = Gravity.CENTER; background = lx.touch(); isFocusable = true
+            contentDescription = getString(R.string.search_clear)
+            setOnClickListener { search.text.clear(); search.requestFocus() }
+        }
+        searchRow = LinearLayout(this).apply {
+            tag = "search-row"; gravity = Gravity.CENTER_VERTICAL
+            addView(searchSourceButton, LinearLayout.LayoutParams(-2, dp(48)))
+            addView(search, LinearLayout.LayoutParams(0, dp(48), 1f))
+            addView(searchClearButton, LinearLayout.LayoutParams(dp(48), dp(48)))
+        }
+        main.addView(searchRow, LinearLayout.LayoutParams(-1, -2))
+        main.addView(View(this).apply { setBackgroundColor(palette.divider) }, LinearLayout.LayoutParams(-1, dp(1)))
         status = TextView(this).apply {
             text = getString(R.string.ui_2e14553ec90c); textSize = 12f; setTextColor(palette.muted); setPadding(dp(16), dp(6), dp(16), dp(6))
             setOnClickListener { if (!onlineMode && activePlaylist == null && !hasAudioPermission()) requestAudioAccess(AudioAction.OpenLibrary) }
@@ -629,10 +675,13 @@ class MainActivity : Activity() {
         val empty = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER
             setPadding(dp(24), dp(16), dp(24), dp(16)); isClickable = false
-            addView(lx.label(59669.toChar().toString(), 52f, palette.primary).apply { typeface = iconFont; gravity = Gravity.CENTER; alpha = .35f })
-            addView(lx.label(getString(R.string.layout_empty_hint), 13f, palette.muted).apply {
+            emptyIcon = lx.label(59669.toChar().toString(), 52f, palette.primary).apply { typeface = iconFont; gravity = Gravity.CENTER; alpha = .35f }
+            addView(emptyIcon)
+            emptyHint = lx.label(getString(R.string.layout_empty_hint), 13f, palette.muted).apply {
+                tag = "search-empty"
                 maxLines = 3; gravity = Gravity.CENTER; setPadding(0, dp(16), 0, 0)
-            }, LinearLayout.LayoutParams(-1, -2))
+            }
+            addView(emptyHint, LinearLayout.LayoutParams(-1, -2))
         }
         listContainer.addView(empty, FrameLayout.LayoutParams(-1, -1)); list.emptyView = empty
         main.addView(listContainer, LinearLayout.LayoutParams(-1, 0, 1f))
@@ -687,21 +736,31 @@ class MainActivity : Activity() {
         palette.background(root); palette.textStyle(root)
         setContentView(root)
         updateNavigationSelection()
+        updateSearchChrome()
         ScreenInsets.install(window, root)
         if (restoreNavigation) { root.post { navigationDrawer?.open(false) }; restoreNavigation = false }
         search.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
-                if (!onlineMode) filterSongs() else updateSuggestions(s?.toString().orEmpty())
+                if (!onlineMode) filterSongs() else if (isCatalogPage) {
+                    if (s.isNullOrBlank()) resetCatalogResults()
+                    else if (catalogLoading) { loadJob?.cancel(); searchGeneration++; catalogLoading = false; setCatalogStatus("") }
+                    updateSearchChrome(); updateSuggestions(s?.toString().orEmpty())
+                }
             }
             override fun afterTextChanged(s: Editable?) = Unit
         })
         list.setOnItemClickListener { _, _, position, _ ->
+            if (isCatalogPage && playlistSearchMode) {
+                playlistSearchResults.getOrNull(position)?.let { loadOnlinePlaylist(it) }
+                return@setOnItemClickListener
+            }
             val song = visibleSongs.getOrNull(position) ?: return@setOnItemClickListener
             if (PermissionPolicy.requiresLibraryAccess(this, song) && !hasAudioPermission()) requestAudioAccess(AudioAction.Play(visibleSongs.toList(), position))
             else performAudioAction(AudioAction.Play(visibleSongs.toList(), position))
         }
         list.setOnItemLongClickListener { _, _, position, _ ->
+            if (isCatalogPage && playlistSearchMode) return@setOnItemLongClickListener false
             val song = visibleSongs.getOrNull(position) ?: return@setOnItemLongClickListener false
             showSongActions(song)
             true
@@ -711,6 +770,105 @@ class MainActivity : Activity() {
             override fun onStartTrackingTouch(bar: SeekBar?) { changingSeek = true }
             override fun onStopTrackingTouch(bar: SeekBar?) { changingSeek = false; service?.seekTo(bar?.progress ?: 0) }
         })
+    }
+    private fun buildSearchTabs() = LinearLayout(this).apply {
+        tag = "search-tabs"
+        listOf(false to R.string.search_songs, true to R.string.layout_songlists).forEach { (playlists, label) ->
+            val text = lx.label(getString(label), 16f).apply { gravity = Gravity.CENTER; setPadding(dp(8), 0, dp(8), 0) }
+            val indicator = View(this@MainActivity).apply { setBackgroundColor(palette.primary); importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO }
+            val tab = LinearLayout(this@MainActivity).apply {
+                tag = if (playlists) "search-tab-playlists" else "search-tab-songs"
+                orientation = LinearLayout.VERTICAL; minimumWidth = dp(56); background = lx.touch(); isFocusable = true
+                setOnClickListener { selectSearchCategory(playlists) }
+                addView(text, LinearLayout.LayoutParams(-2, dp(44)))
+                addView(indicator, LinearLayout.LayoutParams(-1, dp(2)).apply { setMargins(dp(8), 0, dp(8), 0) })
+            }
+            searchTabLabels[playlists] = text; searchTabIndicators[playlists] = indicator
+            addView(tab, LinearLayout.LayoutParams(-2, -2))
+        }
+    }
+    private fun selectSearchCategory(playlists: Boolean) {
+        if (playlistSearchMode == playlists) return
+        playlistSearchMode = playlists
+        resetCatalogResults()
+        if (search.text.isNotBlank()) searchOnline()
+    }
+    private fun setSearchVisible(visible: Boolean) {
+        search.visibility = if (visible) View.VISIBLE else View.GONE
+        updateSearchChrome()
+    }
+    private fun updateSearchChrome() {
+        val catalog = isCatalogPage
+        val compact = catalog && !uiLayout.expanded
+        searchTabs.visibility = if (catalog) View.VISIBLE else View.GONE
+        headerSyncButton.visibility = if (compact) View.GONE else View.VISIBLE
+        listHeaderView.visibility = if (compact) View.GONE else View.VISIBLE
+        searchTabLabels.forEach { (playlists, label) ->
+            val selected = playlistSearchMode == playlists
+            label.isSelected = selected; (label.parent as View).isSelected = selected
+            label.setTextColor(if (selected) palette.primary else palette.foreground)
+            searchTabIndicators.getValue(playlists).visibility = if (selected) View.VISIBLE else View.INVISIBLE
+        }
+        searchRow.visibility = search.visibility
+        (searchRow.layoutParams as LinearLayout.LayoutParams).setMargins(if (compact) 0 else dp(16), if (compact) 0 else dp(8), if (compact) 0 else dp(16), if (compact) 0 else dp(4))
+        searchSourceButton.visibility = if (compact) View.VISIBLE else View.GONE
+        searchSourceButton.text = sourceLabel()
+        searchSourceButton.contentDescription = "${getString(R.string.ui_9b980a0136e4)}: ${sourceLabel()}"
+        searchClearButton.visibility = if (catalog) View.VISIBLE else View.GONE
+        searchClearButton.isEnabled = search.text.isNotEmpty(); searchClearButton.alpha = if (searchClearButton.isEnabled) .8f else .35f
+        search.background = if (compact) null else lx.shape(lx.panel, border = palette.divider)
+        search.setPadding(if (compact) 0 else dp(16), dp(8), if (compact) 0 else dp(16), dp(8))
+        search.hint = getString(if (compact) R.string.search_placeholder else R.string.ui_7ad45199f05a)
+        search.contentDescription = if (catalog) getString(if (playlistSearchMode) R.string.ui_d6319126b753 else R.string.ui_7ad45199f05a) else null
+        search.setHintTextColor(if (compact && !palette.theme.dark) Color.argb(128, Color.red(palette.primary), Color.green(palette.primary), Color.blue(palette.primary)) else palette.muted)
+        emptyIcon.visibility = if (catalog) View.GONE else View.VISIBLE
+        emptyHint.text = getString(when {
+            !catalog -> R.string.layout_empty_hint
+            catalogLoading -> R.string.ui_c37059a3d9df
+            search.text.isBlank() -> R.string.search_empty
+            else -> R.string.search_no_results
+        })
+        emptyHint.textSize = if (catalog) 20f else 13f
+        emptyHint.setPadding(0, if (catalog) 0 else dp(16), 0, 0)
+        tableHeader?.visibility = if (catalog && playlistSearchMode) View.GONE else View.VISIBLE
+        status.visibility = if (compact && status.text.isBlank()) View.GONE else View.VISIBLE
+    }
+    private fun setCatalogStatus(message: CharSequence) {
+        status.setTextColor(palette.muted); status.contentDescription = null; status.text = message
+        updateSearchChrome()
+    }
+    private fun resetCatalogResults() {
+        loadJob?.cancel(); suggestionJob?.cancel(); searchGeneration++; catalogLoading = false
+        allSongs = emptyList(); visibleSongs = emptyList(); playlistSearchResults = emptyList()
+        searchPage = 0; searchedText = ""; searchNextPages = emptyMap(); pendingScroll = null
+        list.adapter = null; loadMore.visibility = View.GONE
+        (search as? AutoCompleteTextView)?.apply { dismissDropDown(); setAdapter(ArrayAdapter(this@MainActivity, android.R.layout.simple_dropdown_item_1line, emptyList<String>())) }
+        setCatalogStatus(if (uiLayout.expanded) getString(R.string.ui_bd997b86cde1) else "")
+    }
+    private fun renderPlaylistSearchResults() {
+        updateNavigationSelection()
+        setCatalogStatus(getString(R.string.search_playlist_count, playlistSearchResults.size))
+        val first = pendingScroll?.first ?: list.firstVisiblePosition
+        val top = pendingScroll?.second ?: (list.getChildAt(0)?.top ?: 0)
+        list.adapter = object : ArrayAdapter<OnlinePlaylist>(this, android.R.layout.simple_list_item_1, playlistSearchResults) {
+            override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
+                val playlist = getItem(position)!!
+                return LinearLayout(this@MainActivity).apply {
+                    tag = "search-playlist-result"; gravity = Gravity.CENTER_VERTICAL; minimumHeight = dp(64)
+                    setPadding(dp(12), dp(8), dp(12), dp(8)); background = lx.touch()
+                    addView(lx.label(59659.toChar().toString(), 24f, palette.primary).apply { typeface = iconFont; gravity = Gravity.CENTER }, LinearLayout.LayoutParams(dp(40), dp(48)))
+                    addView(LinearLayout(this@MainActivity).apply {
+                        orientation = LinearLayout.VERTICAL; setPadding(dp(8), 0, dp(8), 0)
+                        addView(lx.label(playlist.name, 14f))
+                        addView(lx.label(listOf(UiPreferences.sourceName(this@MainActivity, playlist.source), playlist.author).filter { it.isNotBlank() }.joinToString(" · "), 11f, palette.muted))
+                    }, LinearLayout.LayoutParams(0, -2, 1f))
+                    addView(lx.label("›", 24f, palette.muted))
+                    palette.textStyle(this)
+                }
+            }
+        }
+        if (first < playlistSearchResults.size) list.setSelectionFromTop(first, top)
+        pendingScroll = null
     }
     private fun navigateToPage(page: Int) {
         when (page) {
@@ -867,14 +1025,13 @@ class MainActivity : Activity() {
     }
     private fun openLocalPage(requestPermission: Boolean) {
         onlineMode = false; boardMode = false; onlinePlaylistMode = false; updateListAction(); pageTitle.text = getString(R.string.ui_27c95ec6b766); loadMore.visibility = View.GONE
-        activePlaylist = null; heading.text = getString(R.string.ui_33eeaa47c231); search.text.clear(); search.visibility = View.GONE
+        activePlaylist = null; heading.text = getString(R.string.ui_33eeaa47c231); search.text.clear(); setSearchVisible(false)
         if (hasAudioPermission()) loadSongs() else if (requestPermission) requestAudioAccess(AudioAction.OpenLibrary) else showLocalPermissionPrompt()
     }
     private fun openSearchPage(showTools: Boolean = true) {
         onlineMode = true; boardMode = false; onlinePlaylistMode = false; updateListAction(); pageTitle.text = getString(R.string.ui_44ce7ae909bb); activePlaylist = null; heading.text = getString(R.string.ui_e07216a6d505, sourceLabel()); loadMore.visibility = View.GONE
-        loadJob?.cancel(); allSongs = emptyList(); visibleSongs = emptyList(); search.text.clear(); search.visibility = View.VISIBLE
-        status.text = getString(R.string.ui_bd997b86cde1); list.adapter = null; search.requestFocus()
-        if (showTools && preferences.hotSearch) showSearchTools()
+        search.text.clear(); setSearchVisible(true); resetCatalogResults()
+        if (showTools && preferences.hotSearch && uiLayout.expanded) showSearchTools()
     }
     private fun showDislikeRules() {
         val store = DislikeStore(applicationContext)
@@ -1127,6 +1284,7 @@ class MainActivity : Activity() {
     }
     private fun updateListAction() {
         updateNavigationSelection()
+        if (::searchRow.isInitialized && ::emptyHint.isInitialized && ::status.isInitialized) updateSearchChrome()
         val menu = boardMode || onlinePlaylistMode
         listActionButton.text = (if (menu) 59667 else 59660).toChar().toString()
         listActionButton.contentDescription = if (menu) getString(R.string.ui_7b1b6d54c192) else getString(R.string.ui_073a0d57165c)
@@ -1224,38 +1382,8 @@ class MainActivity : Activity() {
         }
     }
     private fun showPlaylistSearch() {
-        AlertDialog.Builder(this).setTitle(getString(R.string.ui_d8f2ca6f12b4))
-            .setItems(arrayOf(getString(R.string.ui_6f5fe8042a63), getString(R.string.ui_2a6eaaa1f30c), getString(R.string.ui_3ef42060a2e5), getString(R.string.ui_a62864e8c353), getString(R.string.ui_017e2d45158b))) { _, which ->
-                val source = arrayOf("kg", "kw", "tx", "wy", "mg")[which]
-                val input = EditText(this).apply { setSingleLine(true); hint = getString(R.string.ui_7c5a4bea69d3) }
-                AlertDialog.Builder(this).setTitle(getString(R.string.ui_d6319126b753)).setView(input).setNegativeButton(getString(R.string.ui_2cd0f3be8738), null)
-                    .setPositiveButton(getString(R.string.ui_44ce7ae909bb)) { _, _ ->
-                        val query = input.text.toString().trim()
-                        if (query.isEmpty()) toast(getString(R.string.ui_ed43b8a78d98)) else searchPlaylists(source, query)
-                    }.show()
-            }.setNegativeButton(getString(R.string.ui_2cd0f3be8738), null).show()
-    }
-    private fun searchPlaylists(source: String, query: String, page: Int = 1) {
-        loadJob?.cancel()
-        status.text = getString(R.string.ui_3d3ec32220b1)
-        loadJob = scope.launch {
-            try {
-                val items = PlaylistSearch().search(source, query, page)
-                if (items.isEmpty()) {
-                    status.text = getString(R.string.ui_fd45345182bb, java.lang.String.valueOf(if (page > 1) getString(R.string.ui_38844b135cf7) else ""))
-                    if (page > 1) searchPlaylists(source, query, page - 1)
-                    return@launch
-                }
-                val labels = items.map { if (it.author.isBlank()) it.name else "${it.name} · ${it.author}" } + getString(R.string.ui_ea36ef28dfcd)
-                AlertDialog.Builder(this@MainActivity).setTitle(getString(R.string.ui_ca3e84f738ad, java.lang.String.valueOf(query), java.lang.String.valueOf(page)))
-                    .setItems(labels.toTypedArray()) { _, which ->
-                        if (which == items.size) searchPlaylists(source, query, page + 1) else loadOnlinePlaylist(items[which])
-                    }.setNegativeButton(if (page > 1) getString(R.string.ui_c9b9ae7a6144) else getString(R.string.ui_2cd0f3be8738)) { _, _ ->
-                        if (page > 1) searchPlaylists(source, query, page - 1)
-                    }.show()
-            } catch (e: CancellationException) { throw e }
-            catch (e: Exception) { status.text = getString(R.string.ui_be54d7d43555, java.lang.String.valueOf(e.localizedMessage)) }
-        }
+        playlistSearchMode = true
+        openSearchPage(false)
     }
     private fun fetchOnlinePlaylists(source: String, page: Int = 1, category: String = "全部", categoryLabel: String = category) {
         loadJob?.cancel()
@@ -1305,7 +1433,7 @@ class MainActivity : Activity() {
         val more = append && onlinePlaylistMode && selectedOnlinePlaylist == playlist && onlinePlaylistPage > 0
         val page = if (more) onlinePlaylistPage + 1 else 1
         onlineMode = true; boardMode = false; onlinePlaylistMode = true; updateListAction(); pageTitle.text = getString(R.string.ui_473e57b72072); activePlaylist = null
-        selectedOnlinePlaylist = playlist; heading.text = "›   ${playlist.name}"; search.visibility = View.GONE
+        selectedOnlinePlaylist = playlist; heading.text = "›   ${playlist.name}"; setSearchVisible(false)
         if (!more) { allSongs = emptyList(); visibleSongs = emptyList(); list.adapter = null; onlinePlaylistPage = 0 }
         loadJob?.cancel(); loadMore.visibility = View.GONE; status.text = getString(R.string.ui_aed6f82d382c)
         loadJob = scope.launch {
@@ -1332,7 +1460,7 @@ class MainActivity : Activity() {
         val more = append && boardMode && selectedBoard == board && boardPage > 0
         val page = if (more) boardPage + 1 else 1
         onlineMode = true; boardMode = true; onlinePlaylistMode = false; updateListAction(); pageTitle.text = getString(R.string.ui_1ee95aa94712); activePlaylist = null
-        selectedBoard = board; heading.text = "›   ${board.name}"; search.visibility = View.GONE
+        selectedBoard = board; heading.text = "›   ${board.name}"; setSearchVisible(false)
         if (!more) { allSongs = emptyList(); visibleSongs = emptyList(); list.adapter = null; boardPage = 0 }
         loadJob?.cancel(); loadMore.visibility = View.GONE; status.text = getString(R.string.ui_4760ac1e18cc)
         loadJob = scope.launch {
@@ -1346,13 +1474,20 @@ class MainActivity : Activity() {
             catch (e: Exception) { if (boardMode) { status.text = getString(R.string.ui_22a7c1cdbc29, java.lang.String.valueOf(e.localizedMessage)); if (more) loadMore.visibility = View.VISIBLE } }
         }
     }
-    private fun sourceLabel(): String = when (searchSource) { "kw" -> getString(R.string.ui_2a6eaaa1f30c); "tx" -> getString(R.string.ui_3ef42060a2e5); "wy" -> getString(R.string.ui_a62864e8c353); "mg" -> getString(R.string.ui_017e2d45158b); else -> getString(R.string.ui_6f5fe8042a63) }
+    private fun sourceLabel(): String = sourceLabel(searchSource)
+    private fun sourceLabel(source: String): String = when (source) {
+        SearchCatalog.ALL -> getString(R.string.search_all_sources)
+        "kw" -> getString(R.string.ui_2a6eaaa1f30c); "tx" -> getString(R.string.ui_3ef42060a2e5)
+        "wy" -> getString(R.string.ui_a62864e8c353); "mg" -> getString(R.string.ui_017e2d45158b); else -> getString(R.string.ui_6f5fe8042a63)
+    }
     private fun showSearchSources() {
-        val ids = arrayOf("kg", "kw", "tx", "wy", "mg")
-        AlertDialog.Builder(this).setTitle(getString(R.string.ui_9b980a0136e4)).setItems(arrayOf(getString(R.string.ui_6f5fe8042a63), getString(R.string.ui_2a6eaaa1f30c), getString(R.string.ui_3ef42060a2e5), getString(R.string.ui_a62864e8c353), getString(R.string.ui_017e2d45158b))) { _, index ->
-            searchSource = ids[index]; heading.text = getString(R.string.ui_e07216a6d505, java.lang.String.valueOf(sourceLabel())); loadMore.visibility = View.GONE
-            loadJob?.cancel(); allSongs = emptyList(); list.adapter = null
-            if (search.text.isNotBlank()) searchOnline() else status.text = getString(R.string.ui_bd997b86cde1)
+        val ids = SearchCatalog.choices
+        AlertDialog.Builder(this).setTitle(getString(R.string.ui_9b980a0136e4))
+            .setSingleChoiceItems(ids.map { sourceLabel(it) }.toTypedArray(), ids.indexOf(searchSource)) { dialog, index ->
+            dialog.dismiss(); searchSource = ids[index]
+            heading.text = getString(R.string.ui_e07216a6d505, sourceLabel())
+            resetCatalogResults()
+            if (search.text.isNotBlank()) searchOnline()
         }.show()
     }
     private fun showPlayerDetails() {
@@ -2112,9 +2247,8 @@ class MainActivity : Activity() {
         }
     }
     private fun searchTerm(term: String) {
-        onlineMode = true; boardMode = false; onlinePlaylistMode = false; activePlaylist = null; updateListAction()
-        pageTitle.text = getString(R.string.ui_44ce7ae909bb); heading.text = getString(R.string.ui_e07216a6d505, java.lang.String.valueOf(sourceLabel()))
-        search.visibility = View.VISIBLE; search.setText(term); searchOnline()
+        if (!isCatalogPage) openSearchPage(false)
+        setSearchVisible(true); search.setText(term); searchOnline()
     }
     private fun showSearchTools() {
         val history = SearchHistory(this)
@@ -2160,32 +2294,52 @@ class MainActivity : Activity() {
         }
     }
     private fun searchOnline(append: Boolean = false) {
+        if (!isCatalogPage) return
         val query = search.text.toString().trim()
         if (query.isEmpty()) { toast(getString(R.string.ui_c975aa812f44)); return }
         SearchHistory(this).add(query)
         suggestionJob?.cancel(); (search as? AutoCompleteTextView)?.dismissDropDown()
         val more = append && query == searchedText && searchPage > 0
-        val page = if (more) searchPage + 1 else 1
         val source = searchSource
+        val playlists = playlistSearchMode
+        val cursor = if (more) searchNextPages else null
         loadJob?.cancel()
-        status.text = getString(R.string.ui_c37059a3d9df)
+        val generation = ++searchGeneration
+        if (!more) { allSongs = emptyList(); visibleSongs = emptyList(); playlistSearchResults = emptyList(); searchPage = 0; list.adapter = null }
+        catalogLoading = true
+        setCatalogStatus(getString(R.string.ui_c37059a3d9df))
         loadMore.visibility = View.GONE
+        fun current() = generation == searchGeneration && isCatalogPage && source == searchSource && playlists == playlistSearchMode && search.text.toString().trim() == query
         loadJob = scope.launch {
             try {
-                val result = OnlineSearch().search(query, page = page, source = source)
-                if (onlineMode && source == searchSource) {
-                    allSongs = if (more) (allSongs + result).distinctBy { it.source to it.id } else result
-                    searchedText = query; searchPage = page
+                val result = if (playlists) searchCatalog.playlists(query, source, cursor) else searchCatalog.songs(query, source, cursor)
+                if (!current()) return@launch
+                catalogLoading = false
+                searchedText = query; searchPage++; searchNextPages = result.nextPages
+                if (playlists) {
+                    val items = result.items.filterIsInstance<OnlinePlaylist>()
+                    playlistSearchResults = (if (more) playlistSearchResults + items else items).distinctBy { Triple(it.source, it.id, it.digest) }
+                    renderPlaylistSearchResults()
+                } else {
+                    val items = result.items.filterIsInstance<Song>()
+                    allSongs = (if (more) allSongs + items else items).distinctBy { it.source to it.id }
                     filterSongs()
-                    loadMore.visibility = if (result.size >= if (source in setOf("mg", "wy")) 20 else 30) View.VISIBLE else View.GONE
                 }
+                loadMore.visibility = if (result.hasMore) View.VISIBLE else View.GONE
+                if (result.failedSources.isNotEmpty()) setCatalogStatus("${status.text}\n${getString(R.string.search_partial, result.failedSources.joinToString { sourceLabel(it) })}")
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) {
-                if (onlineMode) { status.text = getString(R.string.ui_3ce71e5b6037, java.lang.String.valueOf(e.localizedMessage)); if (more) loadMore.visibility = View.VISIBLE }
+                if (current()) {
+                    catalogLoading = false
+                    setCatalogStatus(if (e is SearchUnavailableException && source == SearchCatalog.ALL) getString(R.string.search_unavailable)
+                        else getString(R.string.ui_3ce71e5b6037, java.lang.String.valueOf((e.cause ?: e).localizedMessage)))
+                    loadMore.visibility = View.VISIBLE
+                }
             }
         }
     }
     private fun filterSongs() {
+        if (isCatalogPage && playlistSearchMode) { renderPlaylistSearchResults(); return }
         updateNavigationSelection()
         tableHeader?.apply { removeAllViews(); addView(buildTableHeader()) }
         val query = search.text.toString().trim()
@@ -2195,6 +2349,8 @@ class MainActivity : Activity() {
             status.setTextColor(palette.primary); status.contentDescription = getString(R.string.ui_ccdab23ef0b3)
             getString(R.string.ui_799c8f89223c)
         } else if (allSongs.isEmpty()) getString(R.string.ui_88034b35be15) else getString(R.string.ui_119b62e66b9d, java.lang.String.valueOf(visibleSongs.size))
+        if (isCatalogPage && query.isEmpty() && allSongs.isEmpty() && !catalogLoading) status.text = if (uiLayout.expanded) getString(R.string.ui_bd997b86cde1) else ""
+        updateSearchChrome()
         val restore = pendingScroll
         val firstVisible = if (preferences.saveScroll) (restore?.first ?: list.firstVisiblePosition).coerceAtMost((visibleSongs.size - 1).coerceAtLeast(0)) else 0
         val top = restore?.second ?: (list.getChildAt(0)?.top ?: 0)
