@@ -1,5 +1,20 @@
 # 原生迁移验证记录
 
+## 2026-11-06：Fragment 设置页与即时主题配色
+
+设置主页面由 `SettingsFragment` 和 Activity 返回栈承载，移除「完成」按钮。主题选择立即更新设置页、主页和系统栏；换色保留同一个 Activity、Fragment、播放服务、分类和滚动位置。手动选主题会关闭跟随系统；语言、字号和导航布局修改立即重建界面并恢复设置状态。
+
+- Android 12（YYA-H618）独立测试包最终 14 项专项设备测试全部通过，无失败或跳过，覆盖 `SettingsFragmentTest` 7 项、`SearchPageTest` 5 项和真实 MediaPlayer 播放连续性/语言字号恢复 2 项。使用本地 HTTP、静音 PCM 和受控搜索结果，不下载真实音乐。
+- 验证亮色到深色连续切换、返回键、主页滚动位置、分类/音源链接草稿跨重建恢复、换色不中断音源导入及聚合搜索；修复界面恢复时输入监听误清结果或取消搜索的问题。按 360×800、600×800、1024×768、640×360 dp 绘制设置页面，并检查深色英文 130% 字号；尺寸验证在同一设备完成。
+- JVM 单元测试 20 项通过。Debug Lint 为 0 错误、151 警告、1 提示；Release Lint 为 0 错误、147 警告。签名 Release `lx-music-native-v0.9.2.apk`（code 92）构建成功，`apksigner verify --verbose` 通过。
+
+最终设备记录位于 `build/fragment-validation/device-final-tests.txt`，构建和签名记录位于同目录 `release-build.txt`、`signature-verification.txt`，截图位于 `screenshots/`。测试使用独立 `.fragmentcheck` 包，完成后已卸载。复现专项可运行：
+
+```powershell
+.\gradlew.bat :app:testDebugUnitTest :app:lintDebug :app:lintRelease :app:assembleRelease
+.\gradlew.bat :app:connectedDebugAndroidTest '-Pandroid.testInstrumentationRunnerArguments.class=cn.toside.music.nativeapp.ui.SettingsFragmentTest,cn.toside.music.nativeapp.ui.SearchPageTest,cn.toside.music.nativeapp.player.PlaybackSettingsTest#settingsFragmentThemeChangesKeepTheSameActivityAndAudioPlaying,cn.toside.music.nativeapp.player.PlaybackSettingsTest#languageAndFontChangesKeepPlaylistSearchAndScrollWhileAudioContinues' '-Pandroid.testInstrumentationRunnerArguments.adaptiveScreenshots=true'
+```
+
 ## 2026-11-05：设置适配与在线音源导入
 
 设备为 YYA-H618 / Android 12（API 31）；JDK 17、Gradle 8.13、SDK 36。Debug 构建成功，14 项 JVM 单元测试通过；24 项相关设备测试全部通过，无失败或跳过，覆盖设置页、音源下载/脚本库及主页导航、屏幕适配、语言与主题回归。状态文案修正后 6 项设置页测试再次通过；最终 Debug Lint 为 0 错误、64 警告、1 提示。
@@ -14,7 +29,7 @@
 设置与下载专项可复现为：
 
 ```powershell
-.\gradlew.bat :app:assembleDebug :app:testDebugUnitTest :app:lintDebug :app:connectedDebugAndroidTest '-Pandroid.testInstrumentationRunnerArguments.class=cn.toside.music.nativeapp.ui.SettingsDialogTest,cn.toside.music.nativeapp.source.OnlineSourceImportTest' '-Pandroid.testInstrumentationRunnerArguments.adaptiveScreenshots=true'
+.\gradlew.bat :app:assembleDebug :app:testDebugUnitTest :app:lintDebug :app:connectedDebugAndroidTest '-Pandroid.testInstrumentationRunnerArguments.class=cn.toside.music.nativeapp.ui.SettingsFragmentTest,cn.toside.music.nativeapp.source.OnlineSourceImportTest' '-Pandroid.testInstrumentationRunnerArguments.adaptiveScreenshots=true'
 ```
 
 日期：2026-11-04。设备：YYA-H618，Android 12（API 31）。JDK 17，Gradle 8.13，Android SDK 36。

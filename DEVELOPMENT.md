@@ -26,7 +26,7 @@
 
 音源管理支持文件/网络导入、多个脚本切换、停用、导出、删除和更新提示，也支持本地歌词/封面动作。开启自动换源时，原平台请求失败后会匹配音源支持的其他平台；匹配按歌曲名、歌手、五秒时长容差和录音版本区分现场、伴奏、混音等版本。歌曲菜单可手动搜索其他来源，或使用系统分享/剪贴板分享 LX 深链。外部音频会复制到私有目录以保存访问能力，后续播放该副本无需媒体库权限。
 
-设置页参考 [桌面版设置导航](https://github.com/lyswhut/lx-music-desktop/blob/master/src/renderer/views/Setting/index.vue)及[移动版设置](https://github.com/lyswhut/lx-music-mobile/tree/master/src/screens/Home/Views/Setting)。`SettingsDialog` 根据当前窗口宽度切换布局：600 dp 起显示侧边分类，较窄窗口显示顶部横向分类；分类和滚动位置、待导入链接在 Activity 重建后恢复。原设置键保持不变，主题、语言、字号及导航布局在关闭设置后应用。
+设置页参考 [桌面版设置导航](https://github.com/lyswhut/lx-music-desktop/blob/master/src/renderer/views/Setting/index.vue)及[移动版设置](https://github.com/lyswhut/lx-music-mobile/tree/master/src/screens/Home/Views/Setting)，使用 Activity 内的 `SettingsFragment` 和返回栈承载；返回键和返回箭头均返回原页面，移除原对话框的「完成」按钮。`SettingsPage` 根据当前窗口宽度切换布局：600 dp 起显示侧边分类，较窄窗口显示顶部横向分类，选中项尽量居中。选择主题后立即更新设置页、主界面和系统栏配色，保留当前分类、滚动位置和播放，不需要关闭设置，也不会重建 Activity；手动选择主题会关闭自动主题。主题切换期间正在下载的音源继续运行。语言、字号和导航布局修改后立即重建界面，Fragment 自动恢复当前分类和音源链接草稿；主页面的数据和滚动位置由 ViewModel 保留。原设置键保持不变。
 
 「自定义音源」内直接提供在线导入表单。`OnlineSourceImport` 使用可取消的 OkHttp 请求，支持重定向、30 秒总超时、2 MB 响应上限，拒绝空内容与 HTML 页面；下载后交由原 `UserSource.import` 校验和原子保存。关闭设置会取消未完成的请求，失败后现有选择仍可使用。专项测试使用本地 HTTP 服务及测试脚本，不依赖真实第三方音源。
 

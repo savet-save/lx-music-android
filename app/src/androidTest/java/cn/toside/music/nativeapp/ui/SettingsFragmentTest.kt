@@ -1,6 +1,5 @@
 package cn.toside.music.nativeapp.ui
 
-import android.app.Dialog
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Canvas
@@ -8,9 +7,14 @@ import android.os.Bundle
 import android.os.SystemClock
 import android.view.View
 import android.view.ViewGroup
+import android.view.KeyEvent
 import android.widget.EditText
 import android.widget.Switch
 import android.widget.TextView
+import android.widget.ListView
+import android.widget.ScrollView
+import android.net.Uri
+import cn.toside.music.nativeapp.data.Song
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
@@ -25,11 +29,19 @@ import org.junit.runner.RunWith
 import java.io.File
 
 @RunWith(AndroidJUnit4::class)
-class SettingsDialogTest {
+class SettingsFragmentTest {
     private val instrumentation get() = InstrumentationRegistry.getInstrumentation()
     private val noActions = SettingsActions({}, { _, _ -> }, {}, {}, {}, {}, {})
     private fun field(activity: MainActivity, name: String): Any? = MainActivity::class.java.getDeclaredField(name).apply { isAccessible = true }.get(activity)
     private fun invoke(activity: MainActivity, method: String) = MainActivity::class.java.getDeclaredMethod(method).apply { isAccessible = true }.invoke(activity)
+    private fun settings(activity: MainActivity): SettingsFragment {
+        var fragment: SettingsFragment? = null
+        await {
+            fragment = activity.supportFragmentManager.findFragmentByTag(SettingsFragment.TAG) as? SettingsFragment
+            fragment?.isResumed == true && fragment?.view != null
+        }
+        return fragment!!
+    }
     private fun descendants(view: View): List<View> = listOf(view) + if (view is ViewGroup) (0 until view.childCount).flatMap { descendants(view.getChildAt(it)) } else emptyList()
     private fun start(): MainActivity {
         var activity = instrumentation.startActivitySync(Intent(instrumentation.targetContext, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
@@ -39,14 +51,14 @@ class SettingsDialogTest {
         }
         return activity
     }
-    private fun await(check: () -> Boolean) {
+    private fun await(description: (() -> String)? = null, check: () -> Boolean) {
         repeat(150) {
             var done = false
             instrumentation.runOnMainSync { done = check() }
             if (done) return
             SystemClock.sleep(50)
         }
-        throw AssertionError("Timed out waiting for settings")
+        throw AssertionError(description?.invoke() ?: "Timed out waiting for settings")
     }
     private fun measure(view: View, width: Int, height: Int) {
         val density = view.resources.displayMetrics.density
@@ -67,8 +79,8 @@ class SettingsDialogTest {
             listOf(AdaptiveLayout(360, 800), AdaptiveLayout(600, 800), AdaptiveLayout(1024, 768), AdaptiveLayout(640, 360)).forEach { layout ->
                 lateinit var root: View
                 instrumentation.runOnMainSync {
-                    val dialog = SettingsDialog(activity, scope, { field(activity, "service") as? PlaybackService }, noActions, layout) {}
-                    root = dialog.createContent()
+                    val page = SettingsPage(activity, scope, { field(activity, "service") as? PlaybackService }, noActions, layout) {}
+                    root = page.createContent()
                 }
                 listOf("basic", "playback", "sources", "list", "theme", "cache", "sync", "about").forEach { category ->
                     instrumentation.runOnMainSync {
@@ -100,22 +112,21 @@ class SettingsDialogTest {
         var activity = start()
         try {
             instrumentation.runOnMainSync { invoke(activity, "showSources") }
-            var dialog = field(activity, "settingsDialog") as SettingsDialog
+            var fragment = settings(activity)
             instrumentation.runOnMainSync {
-                (descendants(dialog.window!!.decorView).first { it.tag == "settings-source-url" } as EditText).setText("https://example.org/draft.js")
+                (descendants(fragment.requireView()).first { it.tag == "settings-source-url" } as EditText).setText("https://example.org/draft.js")
             }
             val monitor = instrumentation.addMonitor(MainActivity::class.java.name, null, false)
             instrumentation.runOnMainSync { activity.recreate() }
             activity = instrumentation.waitForMonitorWithTimeout(monitor, 5000) as MainActivity
             instrumentation.removeMonitor(monitor)
-            await { (field(activity, "settingsDialog") as? Dialog)?.isShowing == true }
-            dialog = field(activity, "settingsDialog") as SettingsDialog
+            fragment = settings(activity)
             instrumentation.runOnMainSync {
-                val root = dialog.window!!.decorView
+                val root = fragment.requireView()
                 assertTrue(descendants(root).first { it.tag == "settings-category-sources" }.isSelected)
                 assertEquals("https://example.org/draft.js", (descendants(root).first { it.tag == "settings-source-url" } as EditText).text.toString())
-                assertEquals("sources", dialog.saveState().getString("category"))
-                dialog.dismiss()
+                assertEquals("sources", fragment.savePageState()?.getString("category"))
+                activity.closeSettings()
             }
         } finally { instrumentation.runOnMainSync { activity.finish() } }
     }
@@ -126,8 +137,8 @@ class SettingsDialogTest {
         try {
             SourceHttpFixture().use { server ->
                 instrumentation.runOnMainSync { invoke(activity, "showSources") }
-                val dialog = field(activity, "settingsDialog") as SettingsDialog
-                val root = dialog.window!!.decorView
+                val fragment = settings(activity)
+                val root = fragment.requireView()
                 await { (descendants(root).first { it.tag == "settings-source-list" } as ViewGroup).childCount > 0 }
                 if (before.selected == null) instrumentation.runOnMainSync {
                     assertFalse(descendants(root).filterIsInstance<TextView>().any { it.text.toString() == activity.getString(R.string.settings_selected) })
@@ -148,7 +159,7 @@ class SettingsDialogTest {
                 instrumentation.runOnMainSync {
                     assertEquals(1, descendants(root).filterIsInstance<TextView>().count { it.text.startsWith(activity.getString(R.string.settings_selected)) })
                     assertEquals("", (descendants(root).first { it.tag == "settings-source-url" } as EditText).text.toString())
-                    dialog.dismiss()
+                    activity.closeSettings()
                 }
             }
         } finally {
@@ -161,11 +172,13 @@ class SettingsDialogTest {
         val activity = start()
         val player = field(activity, "service") as PlaybackService
         val before = player.sourceCatalog()
+        val preferences = instrumentation.targetContext.getSharedPreferences("app-settings", 0)
+        val savedTheme = listOf("theme.id", "common.isAutoTheme").associateWith { preferences.all[it] }
         try {
             SourceHttpFixture().use { server ->
                 instrumentation.runOnMainSync { invoke(activity, "showSources") }
-                val dialog = field(activity, "settingsDialog") as SettingsDialog
-                val root = dialog.window!!.decorView
+                val fragment = settings(activity)
+                val root = fragment.requireView()
                 instrumentation.runOnMainSync {
                     (descendants(root).first { it.tag == "settings-source-url" } as EditText).setText("${server.address}/slow")
                     descendants(root).first { it.tag == "settings-source-import" }.performClick()
@@ -175,34 +188,111 @@ class SettingsDialogTest {
                     descendants(root).first { it.tag == "settings-category-sources" }.performClick()
                     assertFalse(descendants(root).first { it.tag == "settings-source-import" }.isEnabled)
                     assertFalse(descendants(root).first { it.tag == "settings-source-url" }.isEnabled)
-                    dialog.dismiss()
                 }
+                val target = if ((field(activity, "palette") as UiPalette).theme.id == "blue") "green" else "blue"
+                instrumentation.runOnMainSync { preferences.edit().putString("theme.id", target).putBoolean("common.isAutoTheme", false).commit() }
+                await { (field(activity, "palette") as UiPalette).theme.id == target }
+                instrumentation.runOnMainSync {
+                    assertSame(fragment, activity.supportFragmentManager.findFragmentByTag(SettingsFragment.TAG))
+                    assertFalse(descendants(root).first { it.tag == "settings-source-import" }.isEnabled)
+                    assertFalse(descendants(root).first { it.tag == "settings-source-url" }.isEnabled)
+                    activity.closeSettings()
+                }
+                await { activity.supportFragmentManager.findFragmentByTag(SettingsFragment.TAG) == null }
             }
             assertEquals(before.selected, player.sourceCatalog().selected)
             assertEquals(before.entries.map { it.id }, player.sourceCatalog().entries.map { it.id })
-        } finally { instrumentation.runOnMainSync { activity.finish() } }
+        } finally {
+            instrumentation.runOnMainSync { activity.finish() }
+            preferences.edit().apply { savedTheme.forEach { (key, value) -> when (value) { is String -> putString(key, value); is Boolean -> putBoolean(key, value); else -> remove(key) } } }.commit()
+        }
     }
-    @Test fun closingSettingsAppliesThemeAndRecreatesTheActivity() {
+    @Test fun choosingThemesUpdatesBothScreensImmediatelyAndKeepsNavigationState() {
         val preferences = instrumentation.targetContext.getSharedPreferences("app-settings", 0)
         val saved = listOf("theme.id", "theme.darkId", "theme.lightId", "common.isAutoTheme").associateWith { preferences.all[it] }
-        var activity = start()
+        val activity = start()
         try {
+            lateinit var home: View
+            instrumentation.runOnMainSync {
+                MainActivity::class.java.getDeclaredMethod("openSearchPage", Boolean::class.javaPrimitiveType).apply { isAccessible = true }.invoke(activity, false)
+                val songs = (1L..40L).map { Song(it, Uri.EMPTY, "Song $it", "Artist", 60_000, "kw", "{}") }
+                MainActivity::class.java.getDeclaredField("allSongs").apply { isAccessible = true }.set(activity, songs)
+                invoke(activity, "filterSongs")
+                home = activity.findViewById<ViewGroup>(android.R.id.content).getChildAt(0)
+                (field(activity, "list") as ListView).setSelectionFromTop(5, 0)
+            }
+            await { (field(activity, "list") as ListView).firstVisiblePosition == 5 }
+            val first = (field(activity, "list") as ListView).firstVisiblePosition
+            val player = field(activity, "service")
             instrumentation.runOnMainSync { invoke(activity, "showSettings") }
-            val dialog = field(activity, "settingsDialog") as SettingsDialog
+            val fragment = settings(activity)
+            val root = fragment.requireView()
+            assertSame(activity.window.decorView.windowToken, root.windowToken)
+            assertEquals(View.GONE, home.visibility)
+            assertEquals(1, activity.supportFragmentManager.backStackEntryCount)
+            instrumentation.runOnMainSync { descendants(root).first { it.tag == "settings-category-theme" }.performClick() }
             val target = if ((field(activity, "palette") as UiPalette).theme.id == "blue") "green" else "blue"
             instrumentation.runOnMainSync {
-                preferences.edit().putBoolean("common.isAutoTheme", false).putString("theme.id", target).commit()
+                preferences.edit().putBoolean("common.isAutoTheme", true).commit()
+                descendants(root).first { it.tag == "settings-theme-$target" }.performClick()
             }
-            val monitor = instrumentation.addMonitor(MainActivity::class.java.name, null, false)
-            instrumentation.runOnMainSync { dialog.dismiss() }
-            activity = instrumentation.waitForMonitorWithTimeout(monitor, 5000) as MainActivity
-            instrumentation.removeMonitor(monitor)
-            await { !activity.isDestroyed && field(activity, "service") != null }
-            assertEquals(target, (field(activity, "palette") as UiPalette).theme.id)
-            assertFalse((field(activity, "settingsDialog") as? Dialog)?.isShowing == true)
+            await { (field(activity, "palette") as UiPalette).theme.id == target }
+            assertFalse(activity.isDestroyed); assertSame(player, field(activity, "service"))
+            assertFalse(preferences.getBoolean("common.isAutoTheme", true))
+            assertSame(fragment, settings(activity)); assertEquals("theme", fragment.savePageState()?.getString("category"))
+            instrumentation.runOnMainSync {
+                val palette = field(activity, "palette") as UiPalette
+                val title = descendants(root).filterIsInstance<TextView>().first { it.isAccessibilityHeading && it.text.toString() == activity.getString(R.string.ui_788db1cfec2a) }
+                assertEquals(palette.primary, title.currentTextColor)
+                val scroll = descendants(root).first { it.tag == "settings-content" } as ScrollView
+                scroll.scrollTo(0, 100)
+                capture("fragment-theme-light", root)
+                descendants(root).first { it.tag == "settings-theme-black" }.performClick()
+            }
+            await { (field(activity, "palette") as UiPalette).theme.id == "black" }
+            await { (descendants(root).first { it.tag == "settings-content" } as ScrollView).scrollY == 100 }
+            assertSame(fragment, settings(activity)); assertSame(player, field(activity, "service"))
+            instrumentation.runOnMainSync { capture("fragment-theme-dark", root) }
+            instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
+            await { activity.supportFragmentManager.findFragmentByTag(SettingsFragment.TAG) == null }
+            await({ "Home scroll expected $first; actual ${(field(activity, "list") as ListView).firstVisiblePosition}; pending ${field(activity, "pendingScroll")}; visible ${(field(activity, "list") as ListView).isShown}; count ${(field(activity, "list") as ListView).count}" }) {
+                (field(activity, "list") as ListView).isShown && (field(activity, "list") as ListView).firstVisiblePosition == first
+            }
+            assertEquals("black", (field(activity, "palette") as UiPalette).theme.id)
+            assertEquals((field(activity, "palette") as UiPalette).primary, (field(activity, "toggle") as TextView).currentTextColor)
+            assertEquals(40, (field(activity, "list") as ListView).adapter.count)
         } finally {
             instrumentation.runOnMainSync { activity.finish() }
             preferences.edit().apply { saved.forEach { (key, value) -> when (value) { is String -> putString(key, value); is Boolean -> putBoolean(key, value); else -> remove(key) } } }.commit()
+        }
+    }
+    @Test fun languageAndFontChangesRestoreTheOpenFragmentAndSourceDraftImmediately() {
+        val preferences = instrumentation.targetContext.getSharedPreferences("app-settings", 0)
+        val saved = listOf("common.langId", "common.fontScale").associateWith { preferences.all[it] }
+        var activity = start()
+        try {
+            instrumentation.runOnMainSync { invoke(activity, "showSources") }
+            val fragment = settings(activity)
+            instrumentation.runOnMainSync {
+                (descendants(fragment.requireView()).first { it.tag == "settings-source-url" } as EditText).setText("https://example.org/fragment-draft.js")
+            }
+            val monitor = instrumentation.addMonitor(MainActivity::class.java.name, null, false)
+            instrumentation.runOnMainSync { preferences.edit().putString("common.langId", "en").putString("common.fontScale", "1.3").commit() }
+            val replacement = instrumentation.waitForMonitorWithTimeout(monitor, 5000)
+            instrumentation.removeMonitor(monitor)
+            assertNotNull(replacement); activity = replacement as MainActivity
+            val restored = settings(activity)
+            instrumentation.runOnMainSync {
+                assertEquals("Settings", activity.getString(R.string.settings_title))
+                assertEquals("sources", restored.savePageState()?.getString("category"))
+                assertEquals("https://example.org/fragment-draft.js", (descendants(restored.requireView()).first { it.tag == "settings-source-url" } as EditText).text.toString())
+                assertEquals(1, activity.supportFragmentManager.backStackEntryCount)
+                activity.closeSettings()
+            }
+            await { activity.supportFragmentManager.findFragmentByTag(SettingsFragment.TAG) == null }
+        } finally {
+            instrumentation.runOnMainSync { activity.finish() }
+            preferences.edit().apply { saved.forEach { (key, value) -> if (value is String) putString(key, value) else remove(key) } }.commit()
         }
     }
     @Test fun darkEnglishLargeFontsAndTogglePersistenceRemainUsable() {
@@ -216,8 +306,8 @@ class SettingsDialogTest {
             val current = start(); activity = current
             instrumentation.runOnMainSync {
                 assertEquals("Settings", current.getString(R.string.settings_title))
-                val dialog = SettingsDialog(current, scope, { null }, noActions, AdaptiveLayout(360, 800), Bundle().apply { putString("category", "playback") }) {}
-                val root = dialog.createContent(); measure(root, 360, 800)
+                val page = SettingsPage(current, scope, { null }, noActions, AdaptiveLayout(360, 800), Bundle().apply { putString("category", "playback") }) {}
+                val root = page.createContent(); measure(root, 360, 800)
                 val toggle = descendants(root).filterIsInstance<Switch>().first { it.tag == "settings-player.startupAutoPlay" }
                 val old = toggle.isChecked; toggle.performClick()
                 assertEquals(!old, preferences.getBoolean("player.startupAutoPlay", false))

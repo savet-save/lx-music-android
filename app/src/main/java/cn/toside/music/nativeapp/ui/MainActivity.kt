@@ -63,7 +63,6 @@ import android.content.res.Configuration
 import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
-import android.app.Activity
 import android.app.AlertDialog
 import android.app.Dialog
 import android.net.Uri
@@ -73,6 +72,7 @@ import android.text.InputType
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowInsetsController
 import android.view.inputmethod.EditorInfo
 import android.widget.ArrayAdapter
 import android.widget.AutoCompleteTextView
@@ -86,6 +86,10 @@ import android.widget.SeekBar
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import androidx.fragment.app.FragmentActivity
+import androidx.fragment.app.FragmentContainerView
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -98,7 +102,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
-class MainActivity : Activity() {
+class MainActivity : FragmentActivity() {
     override fun attachBaseContext(newBase: Context) { super.attachBaseContext(UiPreferences.context(newBase)) }
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var service: PlaybackService? = null
@@ -125,8 +129,10 @@ class MainActivity : Activity() {
     private var lyricDelayMs = 0
     private var lyricAppearance = LyricAppearance(21, LyricAlignment.LEFT)
     private var playbackSettingsDialog: AlertDialog? = null
-    private var settingsDialog: SettingsDialog? = null
     private var pendingSettingsState: Bundle? = null
+    private var settingsOpening = false
+    private var settingsAppearancePosted = false
+    private var settingsRecreateRequested = false
     private var sourceUpdateJob: Job? = null
     private var sourceUpdateDialog: AlertDialog? = null
     private var pendingSourceExportId: String? = null
@@ -227,7 +233,15 @@ class MainActivity : Activity() {
         val online: Boolean, val boards: Boolean, val onlineLists: Boolean, val source: String, val query: String, val searchVisible: Boolean,
         val searchPage: Int, val boardPage: Int, val playlistPage: Int, val more: Boolean, val loading: Boolean, val first: Int, val top: Int,
         val searchPlaylists: Boolean, val foundPlaylists: List<OnlinePlaylist>, val nextPages: Map<String, Int>)
+    private class RetainedPageState : ViewModel() { var page: PageSnapshot? = null }
+    private val retainedPageState by lazy {
+        ViewModelProvider(this, object : ViewModelProvider.Factory {
+            @Suppress("UNCHECKED_CAST")
+            override fun <T : ViewModel> create(modelClass: Class<T>): T = RetainedPageState() as T
+        })[RetainedPageState::class.java]
+    }
     private var pendingScroll: Pair<Int, Int>? = null
+    private var restoringSearchText = false
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
             service = (binder as PlaybackService.LocalBinder).service
@@ -259,8 +273,7 @@ class MainActivity : Activity() {
             waitingForServiceDownload?.let { song -> waitingForServiceDownload = null; downloadSong(song) }
             if (intent.getBooleanExtra("open-player", false)) { intent.removeExtra("open-player"); showPlayerDetails() }
             handleIncomingIntent()
-            pendingSettingsState?.let { saved -> pendingSettingsState = null; openSettings(state = saved) }
-            settingsDialog?.takeIf { it.isShowing }?.refreshSources()
+            settingsFragment()?.refreshSources()
         }
         override fun onServiceDisconnected(name: ComponentName?) { service = null; stateJob?.cancel(); lyricJob?.cancel(); artworkJob?.cancel(); sourceUpdateJob?.cancel() }
     }
@@ -275,7 +288,7 @@ class MainActivity : Activity() {
         val activeTheme = NativeThemes(this).active()
         setTheme(if (activeTheme.dark) R.style.NativeDark else R.style.NativeLight)
         super.onCreate(savedInstanceState)
-        pendingSettingsState = savedInstanceState?.getBundle("settings-state")
+        pendingSettingsState = savedInstanceState?.getBundle("settings-state")?.takeIf { settingsFragment() == null }
         restoreNavigation = savedInstanceState?.getBoolean("navigation-open") == true
         palette = UiPalette(this, activeTheme)
         uiLayout = AdaptiveLayout(resources.configuration.screenWidthDp, resources.configuration.screenHeightDp)
@@ -300,6 +313,10 @@ class MainActivity : Activity() {
         incomingHandled = savedInstanceState?.getBoolean("incoming-handled", false) ?: false
         waitingForAudioSettings = savedInstanceState?.getBoolean("waitingForAudioSettings", false) ?: false
         buildUi()
+        supportFragmentManager.addOnBackStackChangedListener {
+            settingsOpening = false
+            updateSettingsVisibility()
+        }
         if (preferences.bool("common.isAgreePact")) {
             if (!restorePage(savedInstanceState)) { if (hasAudioPermission()) loadSongs() else showLocalPermissionPrompt() }
         } else pactDialog = showPact(this, scope) {
@@ -350,9 +367,14 @@ class MainActivity : Activity() {
             else if (song != null) toast(getString(R.string.ui_cbe111f9db69))
         }
     }
-    override fun onDestroy() { settingsDialog?.dismiss(); pactDialog?.dismiss(); playerDialog?.dismiss(); playbackSettingsDialog?.dismiss(); syncSettingsDialog?.dismiss(); syncConflictDialog?.dismiss(); scope.cancel(); super.onDestroy() }
+    override fun onPostResume() {
+        super.onPostResume()
+        pendingSettingsState?.let { saved -> pendingSettingsState = null; openSettings(state = saved) }
+    }
+    override fun onDestroy() { pactDialog?.dismiss(); playerDialog?.dismiss(); playbackSettingsDialog?.dismiss(); syncSettingsDialog?.dismiss(); syncConflictDialog?.dismiss(); scope.cancel(); super.onDestroy() }
     override fun onSaveInstanceState(outState: Bundle) {
         val page = pageSnapshot()
+        retainedPageState.page = page
         outState.putBoolean("navigation-open", navigationDrawer?.isOpen == true)
         outState.putInt("home-mode", when { page.boards -> 2; page.onlineLists -> 3; page.online -> 1; else -> 0 })
         outState.putString("home-source", page.source); outState.putString("home-query", page.query.take(2000)); outState.putBoolean("home-search-visible", page.searchVisible)
@@ -372,23 +394,24 @@ class MainActivity : Activity() {
         outState.putBoolean("waitingForAudioSettings", waitingForAudioSettings)
         outState.putBoolean("waitingForDownloadSettings", waitingForDownloadSettings)
         pendingSourceExportId?.let { outState.putString("source-export-id", it) }
-        settingsDialog?.takeIf { it.isShowing }?.let { outState.putBundle("settings-state", it.saveState()) }
+        pendingSettingsState?.let { outState.putBundle("settings-state", it) }
         super.onSaveInstanceState(outState)
     }
-    @Deprecated("Retained page data contains no Activity, Context or Views")
-    override fun onRetainNonConfigurationInstance(): Any = pageSnapshot()
     private fun pageSnapshot() = PageSnapshot(allSongs, activePlaylist, selectedBoard, selectedOnlinePlaylist, onlineMode, boardMode, onlinePlaylistMode,
         searchSource, search.text.toString(), search.visibility == View.VISIBLE, searchPage, boardPage, onlinePlaylistPage,
-        loadMore.visibility == View.VISIBLE || loadJob?.isActive == true && (allSongs.isNotEmpty() || isCatalogPage && playlistSearchResults.isNotEmpty()), loadJob?.isActive == true, list.firstVisiblePosition, list.getChildAt(0)?.top ?: 0,
+        loadMore.visibility == View.VISIBLE || loadJob?.isActive == true && (allSongs.isNotEmpty() || isCatalogPage && playlistSearchResults.isNotEmpty()), loadJob?.isActive == true,
+        pendingScroll?.first ?: list.firstVisiblePosition, pendingScroll?.second ?: (list.getChildAt(0)?.top ?: 0),
         playlistSearchMode, playlistSearchResults, searchNextPages)
-    private fun restorePage(saved: Bundle?): Boolean {
-        val retained = lastNonConfigurationInstance as? PageSnapshot
+    private fun restorePage(saved: Bundle?, restartLoads: Boolean = true): Boolean {
+        val retained = retainedPageState.page
         if (retained != null) {
             allSongs = retained.songs; activePlaylist = retained.playlist; selectedBoard = retained.board; selectedOnlinePlaylist = retained.onlinePlaylist
             onlineMode = retained.online; boardMode = retained.boards; onlinePlaylistMode = retained.onlineLists; searchSource = retained.source
             playlistSearchMode = retained.searchPlaylists; playlistSearchResults = retained.foundPlaylists; searchNextPages = retained.nextPages
             searchPage = retained.searchPage; searchedText = retained.query; boardPage = retained.boardPage; onlinePlaylistPage = retained.playlistPage
-            search.setText(retained.query); suggestionJob?.cancel(); setSearchVisible(retained.searchVisible)
+            restoringSearchText = true
+            try { search.setText(retained.query) } finally { restoringSearchText = false }
+            suggestionJob?.cancel(); setSearchVisible(retained.searchVisible)
             updateListAction()
             pageTitle.text = getString(when { boardMode -> R.string.ui_1ee95aa94712; onlinePlaylistMode -> R.string.ui_473e57b72072; onlineMode -> R.string.ui_44ce7ae909bb; else -> R.string.ui_27c95ec6b766 })
             heading.text = when { boardMode -> "›   ${selectedBoard?.name.orEmpty()}"; onlinePlaylistMode -> "›   ${selectedOnlinePlaylist?.name.orEmpty()}"
@@ -396,8 +419,10 @@ class MainActivity : Activity() {
             if (preferences.saveScroll) pendingScroll = retained.first to retained.top
             filterSongs(); loadMore.visibility = if (retained.more) View.VISIBLE else View.GONE
             val empty = if (isCatalogPage && playlistSearchMode) playlistSearchResults.isEmpty() else allSongs.isEmpty()
-            if (retained.loading && isCatalogPage && !empty && searchPage > 0) searchOnline(append = true)
-            else if (empty || retained.loading) reloadRestoredPage()
+            if (restartLoads) {
+                if (retained.loading && isCatalogPage && !empty && searchPage > 0) searchOnline(append = true)
+                else if (empty || retained.loading) reloadRestoredPage()
+            }
             return true
         }
         if (saved == null || !saved.containsKey("home-mode")) return false
@@ -469,7 +494,7 @@ class MainActivity : Activity() {
             try {
                 val script = withContext(Dispatchers.IO) { contentResolver.openInputStream(uri)?.use { it.readBounded(2 * 1024 * 1024).toString(Charsets.UTF_8) } ?: error(getString(R.string.ui_5903b3b5a9ca)) }
                 (service ?: error(getString(R.string.ui_7ca47a28e695))).importSource(script); toast(getString(R.string.ui_18710cc58894))
-                settingsDialog?.refreshSources()
+                settingsFragment()?.refreshSources()
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) { toast(getString(R.string.ui_0874f11320ab, java.lang.String.valueOf(e.localizedMessage))) }
         }
@@ -670,6 +695,10 @@ class MainActivity : Activity() {
             main.addView(tableHeader)
         }
         list = ListView(this).apply { divider = null; isVerticalScrollBarEnabled = false }
+        list.addOnLayoutChangeListener { view, _, _, _, _, _, _, _, _ ->
+            val target = view as ListView
+            if (target.isShown && target.childCount > 0 && target.firstVisiblePosition == pendingScroll?.first) pendingScroll = null
+        }
         val listContainer = FrameLayout(this)
         listContainer.addView(list, FrameLayout.LayoutParams(-1, -1))
         val empty = LinearLayout(this).apply {
@@ -734,7 +763,7 @@ class MainActivity : Activity() {
         }
         root.addView(seek, LinearLayout.LayoutParams(-1, dp(18)))
         palette.background(root); palette.textStyle(root)
-        setContentView(root)
+        installHomeContent(root)
         updateNavigationSelection()
         updateSearchChrome()
         ScreenInsets.install(window, root)
@@ -742,6 +771,7 @@ class MainActivity : Activity() {
         search.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                if (restoringSearchText) return
                 if (!onlineMode) filterSongs() else if (isCatalogPage) {
                     if (s.isNullOrBlank()) resetCatalogResults()
                     else if (catalogLoading) { loadJob?.cancel(); searchGeneration++; catalogLoading = false; setCatalogStatus("") }
@@ -868,7 +898,6 @@ class MainActivity : Activity() {
             }
         }
         if (first < playlistSearchResults.size) list.setSelectionFromTop(first, top)
-        pendingScroll = null
     }
     private fun navigateToPage(page: Int) {
         when (page) {
@@ -1199,9 +1228,23 @@ class MainActivity : Activity() {
     private fun showSettings() = openSettings()
     private fun showSources() = openSettings("sources")
     private fun openSettings(category: String? = null, state: Bundle? = null) {
-        if (settingsDialog?.isShowing == true) return
-        val saved = state ?: category?.let { Bundle().apply { putString("category", it) } }
-        settingsDialog = SettingsDialog(this, scope, { service }, SettingsActions(
+        if (settingsOpening || settingsFragment() != null) return
+        val saved = state ?: Bundle().apply { category?.let { putString("category", it) } }
+        if (supportFragmentManager.isStateSaved) { pendingSettingsState = saved; return }
+        (getSystemService(INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager).hideSoftInputFromWindow(currentFocus?.windowToken, 0)
+        navigationDrawer?.close(false)
+        if (preferences.saveScroll && pendingScroll == null) pendingScroll = list.firstVisiblePosition to (list.getChildAt(0)?.top ?: 0)
+        settingsOpening = true
+        updateSettingsVisibility()
+        supportFragmentManager.beginTransaction().setReorderingAllowed(true)
+            .replace(R.id.settings_container, SettingsFragment.create(saved), SettingsFragment.TAG)
+            .addToBackStack(SettingsFragment.TAG).commit()
+    }
+    private fun settingsFragment() = (supportFragmentManager.findFragmentByTag(SettingsFragment.TAG) as? SettingsFragment)
+        ?.takeIf { it.isAdded && !it.isRemoving }
+
+    internal fun settingsPlayer(): PlaybackService? = service
+    internal fun settingsActions() = SettingsActions(
             importLocal = {
                 @Suppress("DEPRECATION")
                 startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply { addCategory(Intent.CATEGORY_OPENABLE); type = "*/*" }, REQUEST_SOURCE)
@@ -1210,7 +1253,78 @@ class MainActivity : Activity() {
             playback = ::showPlaybackSettings, quality = ::showPlaybackQuality,
             desktopLyrics = { showDesktopLyricSettings(this) { service?.refreshLyricPreferences() } },
             sync = ::showSyncSettings, about = { showAbout(this, scope) }
-        ), uiLayout, saved) { service?.refreshPreferences(); filterSongs(); service?.state?.value?.let(::renderPlayer) }.also { it.show() }
+        )
+    internal fun refreshSettingsPreferences() {
+        service?.refreshPreferences(); filterSongs(); service?.state?.value?.let(::renderPlayer)
+    }
+    internal fun closeSettings() {
+        if (!supportFragmentManager.isStateSaved) supportFragmentManager.popBackStack()
+    }
+    private fun installHomeContent(root: View) {
+        val content = findViewById<ViewGroup>(android.R.id.content)
+        val existing = content?.findViewById<FragmentContainerView>(R.id.settings_container)
+        if (existing == null) {
+            setContentView(root)
+            addContentView(FragmentContainerView(this).apply {
+                id = R.id.settings_container; visibility = View.GONE; isClickable = true
+            }, FrameLayout.LayoutParams(-1, -1))
+        } else {
+            val parent = requireNotNull(content)
+            (0 until parent.childCount).map { parent.getChildAt(it) }.filter { it !== existing }.forEach { parent.removeView(it) }
+            parent.addView(root, 0, FrameLayout.LayoutParams(-1, -1))
+        }
+        updateSettingsVisibility()
+    }
+    private fun updateSettingsVisibility() {
+        val content = findViewById<ViewGroup>(android.R.id.content) ?: return
+        val container = content.findViewById<FragmentContainerView>(R.id.settings_container) ?: return
+        val opened = settingsOpening || settingsFragment() != null
+        val home = (0 until content.childCount).map { content.getChildAt(it) }.firstOrNull { it !== container }
+        container.visibility = if (opened) View.VISIBLE else View.GONE
+        home?.visibility = if (opened) View.GONE else View.VISIBLE
+        (if (opened) container else home)?.requestApplyInsets()
+        if (!opened && ::list.isInitialized) {
+            val target = list
+            target.post {
+                val restore = pendingScroll ?: return@post
+                if (list === target && target.isShown && restore.first < target.count) target.setSelectionFromTop(restore.first, restore.second)
+            }
+        }
+    }
+    internal fun refreshSettingsAppearance(recreate: Boolean) {
+        settingsRecreateRequested = settingsRecreateRequested || recreate
+        if (settingsAppearancePosted) return
+        settingsAppearancePosted = true
+        window.decorView.post {
+            settingsAppearancePosted = false
+            val recreateActivity = settingsRecreateRequested; settingsRecreateRequested = false
+            if (isDestroyed || isFinishing || isChangingConfigurations) return@post
+            if (recreateActivity) recreate() else applyThemeInPlace()
+        }
+    }
+    @Suppress("DEPRECATION")
+    private fun applyThemeInPlace() {
+        val page = pageSnapshot()
+        val previousQuery = searchedText
+        val previousStatus = status.text
+        val moreVisibility = loadMore.visibility
+        val theme = NativeThemes(this).active()
+        setTheme(if (theme.dark) R.style.NativeDark else R.style.NativeLight)
+        palette = UiPalette(this, theme); lx = LxStyles(this, palette, iconFont)
+        retainedPageState.page = page
+        buildUi(); restorePage(null, restartLoads = false)
+        searchedText = previousQuery
+        status.text = previousStatus; loadMore.visibility = moreVisibility; updateSearchChrome()
+        service?.state?.value?.let(::renderPlayer); updateArtwork()
+        settingsFragment()?.applyTheme()
+        window.statusBarColor = palette.surface; window.navigationBarColor = palette.surface
+        if (Build.VERSION.SDK_INT >= 30) {
+            val light = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
+            window.insetsController?.setSystemBarsAppearance(if (theme.dark) 0 else light, light)
+        } else {
+            val light = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
+            window.decorView.systemUiVisibility = if (theme.dark) window.decorView.systemUiVisibility and light.inv() else window.decorView.systemUiVisibility or light
+        }
     }
     private fun showPlaybackQueue() {
         val player = service ?: return
@@ -2393,7 +2507,7 @@ class MainActivity : Activity() {
         }
         if (firstVisible < visibleSongs.size) {
             list.setSelectionFromTop(firstVisible, top)
-            if (restore != null) list.post { if (list.firstVisiblePosition == firstVisible) pendingScroll = null }
+            if (restore != null) list.post { if (list.isShown && list.childCount > 0 && list.firstVisiblePosition == firstVisible) pendingScroll = null }
         }
     }
     private fun renderPlayer(state: PlayerState) {

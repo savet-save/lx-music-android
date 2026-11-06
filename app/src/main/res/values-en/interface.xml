@@ -9,7 +9,7 @@
     <string name="matching_cache_count">Cross-provider match cache: %1$d entries</string>
     <string name="matching_cache_clear">Clear cross-provider match cache</string>
     <string name="app_name">LX Music Native</string>
-    <string name="interface_language">Language (applied when settings close)</string>
+    <string name="interface_language">Language</string>
     <string name="language_system">Follow system</string>
     <string name="home_page_swipe">Swipe horizontally to change home pages</string>
     <string name="reserve_status_bar">Reserve status bar height in landscape</string>

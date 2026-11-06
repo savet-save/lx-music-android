@@ -9,7 +9,7 @@
     <string name="matching_cache_count">跨平台匹配缓存：%1$d 项</string>
     <string name="matching_cache_clear">清除跨平台匹配缓存</string>
     <string name="app_name">LX Music 原生版</string>
-    <string name="interface_language">语言（关闭设置后应用）</string>
+    <string name="interface_language">语言</string>
     <string name="language_system">跟随系统</string>
     <string name="home_page_swipe">左右滑动切换主页</string>
     <string name="reserve_status_bar">横屏时保留状态栏高度</string>

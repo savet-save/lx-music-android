@@ -2,7 +2,6 @@ package cn.toside.music.nativeapp.ui
 
 import android.app.Activity
 import android.app.AlertDialog
-import android.app.Dialog
 import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.Typeface
@@ -47,22 +46,21 @@ internal class SettingsActions(
 )
 
 /** Desktop category sidebar on wide windows, mobile category tabs on narrow windows. */
-internal class SettingsDialog(
+internal class SettingsPage(
     private val activity: Activity,
     parentScope: CoroutineScope,
     private val player: () -> PlaybackService?,
     private val actions: SettingsActions,
     private val layout: AdaptiveLayout,
     state: Bundle? = null,
+    private val onClose: () -> Unit = {},
     private val refresh: () -> Unit,
-) : Dialog(activity, if (NativeThemes(activity).active().dark) R.style.NativeDark else R.style.NativeLight) {
+) {
     private val preferences = AppPreferences(activity)
-    private val palette = UiPalette(activity, NativeThemes(activity).active())
-    private val styles = LxStyles(activity, palette, Typeface.createFromAsset(activity.assets, "fonts/icomoon.ttf"))
+    private var palette = UiPalette(activity, NativeThemes(activity).active())
+    private val icons = Typeface.createFromAsset(activity.assets, "fonts/icomoon.ttf")
+    private var styles = LxStyles(activity, palette, icons)
     private val scope = CoroutineScope(parentScope.coroutineContext + SupervisorJob(parentScope.coroutineContext[Job]))
-    private val originalAppearance = appearanceKeys.map { preferences.string(it, "") }
-    private val originalStatusBar = preferences.bool("common.alwaysKeepStatusbarHeight")
-    private val originalTheme = themeKeys.map { preferences.bool(it) }
     private var pageJob: Job? = null
     private var importJob: Job? = null
     private var current = state?.getString("category")?.takeIf { id -> categories.any { it.first == id } } ?: "basic"
@@ -80,21 +78,14 @@ internal class SettingsDialog(
     private var progress: ProgressBar? = null
     private var sourceMessage: String? = null
 
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        setContentView(createContent())
-        window?.apply {
-            setBackgroundDrawableResource(android.R.color.transparent)
-            setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
-            ScreenInsets.install(this, findViewById(android.R.id.content))
-        }
-        setOnDismissListener {
-            scope.cancel()
-            if (!activity.isFinishing && !activity.isChangingConfigurations && !activity.isDestroyed &&
-                (originalAppearance != appearanceKeys.map { preferences.string(it, "") } ||
-                    originalStatusBar != preferences.bool("common.alwaysKeepStatusbarHeight") ||
-                    originalTheme != themeKeys.map { preferences.bool(it) })) activity.recreate()
-        }
+    internal val backgroundColor get() = palette.surface
+    internal fun close() { scope.cancel() }
+    internal fun applyTheme(): View {
+        if (::scroll.isInitialized) positions[current] = scroll.scrollY
+        sourceInput?.let { sourceUrl = it.text.toString() }
+        palette = UiPalette(activity, NativeThemes(activity).active())
+        styles = LxStyles(activity, palette, icons)
+        return createContent()
     }
 
     internal fun saveState() = Bundle().apply {
@@ -104,12 +95,11 @@ internal class SettingsDialog(
 
     // Measure the same real Views offscreen to cover phone, tablet and split-screen dimensions.
     internal fun createContent(): View {
-        tabs.clear()
+        tabs.clear(); tabStrip = null
         val root = column().apply { tag = "settings-root"; setBackgroundColor(palette.surface) }
         val header = LinearLayout(activity).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(dp(8), dp(4), dp(12), dp(4)) }
-        header.addView(button("‹") { dismiss() }.apply { contentDescription = text(R.string.ui_3fd47edce45b); textSize = 30f; setPadding(0, 0, 0, 0) }, LinearLayout.LayoutParams(dp(48), dp(48)))
+        header.addView(button("‹") { onClose() }.apply { contentDescription = text(R.string.ui_3fd47edce45b); textSize = 30f; setPadding(0, 0, 0, 0) }, LinearLayout.LayoutParams(dp(48), dp(48)))
         header.addView(label(text(R.string.settings_title), 21f).apply { setTypeface(null, Typeface.BOLD) }, LinearLayout.LayoutParams(0, -2, 1f))
-        header.addView(button(text(R.string.ui_c0b3fbff51cc)) { dismiss() })
         root.addView(header); divider(root)
         val body = LinearLayout(activity).apply { orientation = if (layout.expanded) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL }
         val nav = LinearLayout(activity).apply {
@@ -131,17 +121,18 @@ internal class SettingsDialog(
             body.addView(View(activity).apply { setBackgroundColor(palette.divider) }, LinearLayout.LayoutParams(dp(1), -1))
         } else body.addView(HorizontalScrollView(activity).apply {
             tabStrip = this; isHorizontalScrollBarEnabled = false; addView(nav)
-            addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> tabs[current]?.let { scrollTo(it.left - dp(8), 0) } }
+            addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> centerSelectedCategory(animate = false) }
         }, LinearLayout.LayoutParams(-1, -2))
         content = column().apply { setPadding(dp(if (layout.expanded) 28 else 20), dp(12), dp(if (layout.expanded) 28 else 20), dp(32)) }
         scroll = ScrollView(activity).apply { tag = "settings-content"; isFillViewport = true; addView(content) }
         body.addView(scroll, if (layout.expanded) LinearLayout.LayoutParams(0, -1, 1f) else LinearLayout.LayoutParams(-1, 0, 1f))
         root.addView(body, LinearLayout.LayoutParams(-1, 0, 1f)); render()
+        palette.textStyle(root)
         return root
     }
 
     private fun select(id: String) {
-        if (id == current) return
+        if (id == current) { centerSelectedCategory(animate = true); return }
         positions[current] = scroll.scrollY
         sourceInput?.let { sourceUrl = it.text.toString() }
         current = id; render()
@@ -166,8 +157,24 @@ internal class SettingsDialog(
             "about" -> { note("LX Music"); action(text(R.string.ui_4fd38bc4f6d4), click = actions.about) }
         }
         val selected = current
-        scroll.post { if (current == selected) scroll.scrollTo(0, positions[current] ?: 0) }
-        tabs[current]?.post { tabs[current]?.let { tabStrip?.smoothScrollTo(it.left - dp(8), 0) } }
+        val target = scroll
+        target.addOnLayoutChangeListener(object : View.OnLayoutChangeListener {
+            override fun onLayoutChange(view: View, left: Int, top: Int, right: Int, bottom: Int, oldLeft: Int, oldTop: Int, oldRight: Int, oldBottom: Int) {
+                target.removeOnLayoutChangeListener(this)
+                if (current == selected && scroll === target) target.scrollTo(0, positions[selected] ?: 0)
+            }
+        })
+        tabs[current]?.post { centerSelectedCategory(animate = true) }
+    }
+
+    private fun centerSelectedCategory(animate: Boolean) {
+        val strip = tabStrip ?: return
+        val tab = tabs[current] ?: return
+        val viewport = strip.width - strip.paddingLeft - strip.paddingRight
+        if (viewport <= 0 || tab.width <= 0) return
+        val maxScroll = ((strip.getChildAt(0)?.width ?: 0) - viewport).coerceAtLeast(0)
+        val target = (tab.left + (tab.width - viewport) / 2).coerceIn(0, maxScroll)
+        if (animate) strip.smoothScrollTo(target, 0) else strip.scrollTo(target, 0)
     }
 
     private fun basic() {
@@ -297,9 +304,13 @@ internal class SettingsDialog(
         val themes = NativeThemes(activity)
         themes.all().forEach { theme ->
             action(themes.name(theme), if (theme.id == preferences.string("theme.id", "green")) text(R.string.settings_selected) else "") {
+                preferences.set("common.isAutoTheme", false)
                 preferences.set("theme.id", theme.id); preferences.set(if (theme.dark) "theme.darkId" else "theme.lightId", theme.id)
                 positions[current] = scroll.scrollY; render()
-            }.addView(View(activity).apply { background = styles.shape(theme.primary, 12) }, 0, LinearLayout.LayoutParams(dp(24), dp(24)).apply { marginEnd = dp(12) })
+            }.apply {
+                tag = "settings-theme-${theme.id}"
+                addView(View(activity).apply { background = styles.shape(theme.primary, 12) }, 0, LinearLayout.LayoutParams(dp(24), dp(24)).apply { marginEnd = dp(12) })
+            }
         }
         note(text(R.string.settings_apply_hint))
     }
@@ -380,7 +391,7 @@ internal class SettingsDialog(
         private val categories = listOf("basic" to R.string.settings_basic, "playback" to R.string.settings_playback,
             "sources" to R.string.settings_sources, "list" to R.string.ui_6e34875b6fe3, "theme" to R.string.ui_788db1cfec2a,
             "cache" to R.string.ui_e3ca04a9cb13, "sync" to R.string.ui_727036c7fc2a, "about" to R.string.settings_about)
-        private val appearanceKeys = listOf("common.drawerLayoutPosition", "common.fontScale", "common.langId", "theme.id", "theme.darkId", "theme.lightId")
-        private val themeKeys = listOf("common.isAutoTheme", "theme.hideBgDark", "theme.dynamicBg", "theme.fontShadow")
+        internal val recreationKeys = setOf("common.drawerLayoutPosition", "common.fontScale", "common.langId", "common.alwaysKeepStatusbarHeight")
+        internal val themeKeys = setOf("theme.id", "theme.darkId", "theme.lightId", "common.isAutoTheme", "theme.hideBgDark", "theme.dynamicBg", "theme.fontShadow")
     }
 }

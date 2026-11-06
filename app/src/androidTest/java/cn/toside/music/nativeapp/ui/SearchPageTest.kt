@@ -20,6 +20,7 @@ import cn.toside.music.nativeapp.data.Song
 import cn.toside.music.nativeapp.online.OnlinePlaylist
 import cn.toside.music.nativeapp.online.SearchCatalog
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -111,6 +112,50 @@ class SearchPageTest {
         while (target != null && !target.isClickable) target = target.parent
         assertTrue(target?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true)
         instrumentation.waitForIdleSync()
+    }
+
+    @Test fun themeChangesKeepThePendingSearchWithoutRestartingRequests() {
+        val requests = AtomicInteger()
+        val response = CompletableDeferred<Unit>()
+        val catalog = SearchCatalog(songSearch = { source, query, _ ->
+            requests.incrementAndGet(); response.await(); listOf(song(source, query))
+        })
+        val preferences = instrumentation.targetContext.getSharedPreferences("app-settings", 0)
+        val saved = listOf("theme.id", "theme.lightId", "theme.darkId", "common.isAutoTheme").associateWith { preferences.all[it] }
+        try {
+            Fixture(catalog).use { fixture ->
+                val activity = fixture.activity
+                instrumentation.runOnMainSync { (field(activity, "search") as EditText).setText("pending theme"); submit(activity) }
+                repeat(100) { if (requests.get() < SearchCatalog.sources.size) SystemClock.sleep(20) }
+                assertEquals(SearchCatalog.sources.size, requests.get())
+                val originalJob = field(activity, "loadJob") as Job
+                instrumentation.runOnMainSync { invoke(activity, "showSettings") }
+                instrumentation.waitForIdleSync()
+                val fragment = activity.supportFragmentManager.findFragmentByTag(SettingsFragment.TAG) as SettingsFragment
+                val target = if ((field(activity, "palette") as UiPalette).theme.id == "blue") "green" else "blue"
+                instrumentation.runOnMainSync {
+                    fragment.requireView().findViewWithTag<View>("settings-category-theme").performClick()
+                    fragment.requireView().findViewWithTag<View>("settings-theme-$target").performClick()
+                }
+                instrumentation.waitForIdleSync()
+                assertEquals(target, (field(activity, "palette") as UiPalette).theme.id)
+                assertSame(originalJob, field(activity, "loadJob")); assertTrue(originalJob.isActive)
+                assertEquals(SearchCatalog.sources.size, requests.get())
+                assertTrue(field(activity, "catalogLoading") as Boolean)
+                response.complete(Unit); waitForSearch(activity)
+                assertEquals(SearchCatalog.sources.size, (field(activity, "allSongs") as List<*>).size)
+                instrumentation.runOnMainSync { activity.closeSettings() }
+                instrumentation.waitForIdleSync()
+                assertEquals("pending theme", (field(activity, "search") as EditText).text.toString())
+                assertEquals(SearchCatalog.sources.size, requests.get())
+                assertEquals(SearchCatalog.sources.size, (field(activity, "list") as ListView).adapter.count)
+            }
+        } finally {
+            response.complete(Unit)
+            preferences.edit().apply { saved.forEach { (key, value) -> when (value) {
+                is String -> putString(key, value); is Boolean -> putBoolean(key, value); else -> remove(key)
+            } } }.commit()
+        }
     }
 
     @Test fun phoneSearchStartsAggregatedAndProviderPickerAndBothLayoutsFit() {

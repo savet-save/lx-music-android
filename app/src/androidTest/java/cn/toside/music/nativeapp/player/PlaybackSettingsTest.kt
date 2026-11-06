@@ -15,6 +15,7 @@ import cn.toside.music.nativeapp.lyrics.Lyrics
 import cn.toside.music.nativeapp.ui.DesktopLyricSettings
 import cn.toside.music.nativeapp.ui.MainActivity
 import cn.toside.music.nativeapp.ui.UiPalette
+import cn.toside.music.nativeapp.ui.SettingsFragment
 
 import android.app.AlertDialog
 import android.app.Dialog
@@ -613,6 +614,30 @@ class PlaybackSettingsTest {
             waitFor { fixture.player.state.value.playing }
             assertSame(replacement, field(fixture.player, "nativePlayer"))
             assertTrue(fixture.player.state.value.position >= 3000)
+        }
+    }
+    @Test fun settingsFragmentThemeChangesKeepTheSameActivityAndAudioPlaying() = runBlocking {
+        withPlayback { fixture ->
+            fixture.play()
+            val activity = fixture.activity; val player = fixture.player
+            invoke(activity, "showSettings")
+            waitFor { (activity.supportFragmentManager.findFragmentByTag(SettingsFragment.TAG) as? SettingsFragment)?.view != null }
+            val fragment = activity.supportFragmentManager.findFragmentByTag(SettingsFragment.TAG) as SettingsFragment
+            val target = if ((field(activity, "palette") as UiPalette).theme.id == "blue") "green" else "blue"
+            main {
+                fragment.requireView().findViewWithTag<View>("settings-category-theme").performClick()
+                fragment.requireView().findViewWithTag<View>("settings-theme-$target").performClick()
+            }
+            waitFor { (field(activity, "palette") as UiPalette).theme.id == target }
+            assertFalse(activity.isDestroyed); assertSame(player, field(activity, "service"))
+            assertSame(fragment, activity.supportFragmentManager.findFragmentByTag(SettingsFragment.TAG))
+            assertTrue(player.state.value.playing); assertTrue(fixture.media().isPlaying)
+            val position = player.state.value.position
+            waitFor { player.state.value.position > position + 200 }
+            assertEquals(fixture.song, player.state.value.song)
+            main { activity.closeSettings() }
+            waitFor { activity.supportFragmentManager.findFragmentByTag(SettingsFragment.TAG) == null }
+            assertTrue(player.state.value.playing)
         }
     }
     @Test fun languageAndFontChangesKeepPlaylistSearchAndScrollWhileAudioContinues() = runBlocking {
