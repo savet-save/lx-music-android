@@ -135,6 +135,8 @@ class MainActivity : Activity() {
     private lateinit var uiLayout: AdaptiveLayout
     private lateinit var lx: LxStyles
     private val navigationItems = mutableMapOf<Int, TextView>()
+    private var navigationDrawer: HomeDrawerLayout? = null
+    private var restoreNavigation = false
     private var tableHeader: FrameLayout? = null
     private var playerRestorePending = false
     private var restoreDetailLyrics = false
@@ -255,6 +257,7 @@ class MainActivity : Activity() {
         setTheme(if (activeTheme.dark) R.style.NativeDark else R.style.NativeLight)
         super.onCreate(savedInstanceState)
         pendingSettingsState = savedInstanceState?.getBundle("settings-state")
+        restoreNavigation = savedInstanceState?.getBoolean("navigation-open") == true
         palette = UiPalette(this, activeTheme)
         uiLayout = AdaptiveLayout(resources.configuration.screenWidthDp, resources.configuration.screenHeightDp)
         playlists = Playlists(applicationContext)
@@ -331,6 +334,7 @@ class MainActivity : Activity() {
     override fun onDestroy() { settingsDialog?.dismiss(); pactDialog?.dismiss(); playerDialog?.dismiss(); playbackSettingsDialog?.dismiss(); syncSettingsDialog?.dismiss(); syncConflictDialog?.dismiss(); scope.cancel(); super.onDestroy() }
     override fun onSaveInstanceState(outState: Bundle) {
         val page = pageSnapshot()
+        outState.putBoolean("navigation-open", navigationDrawer?.isOpen == true)
         outState.putInt("home-mode", when { page.boards -> 2; page.onlineLists -> 3; page.online -> 1; else -> 0 })
         outState.putString("home-source", page.source); outState.putString("home-query", page.query.take(2000)); outState.putBoolean("home-search-visible", page.searchVisible)
         outState.putInt("home-first", page.first); outState.putInt("home-top", page.top)
@@ -526,6 +530,9 @@ class MainActivity : Activity() {
             } }.show()
     }
     private fun buildUi() {
+        navigationDrawer?.close(false)
+        navigationDrawer = null
+        navigationItems.clear()
         val primary = palette.primary
         val foreground = palette.foreground
         val root = HomeNavigationLayout(this).apply {
@@ -537,7 +544,7 @@ class MainActivity : Activity() {
                 val location = IntArray(2); getLocationOnScreen(location)
                 val inSearch = ::search.isInitialized && search.visibility == View.VISIBLE &&
                     search.getGlobalVisibleRect(searchBounds) && y + location[1] >= searchBounds.top && y + location[1] <= searchBounds.bottom
-                preferences.bool("common.homePageScroll", true) && (!::miniBar.isInitialized || y < miniBar.top) && !inSearch
+                navigationDrawer?.isOpen != true && preferences.bool("common.homePageScroll", true) && (!::miniBar.isInitialized || y < miniBar.top) && !inSearch
             }
             navigate = { direction ->
                 val current = when { boardMode -> 2; onlinePlaylistMode -> 3; onlineMode -> 1; else -> 0 }
@@ -554,7 +561,9 @@ class MainActivity : Activity() {
         if (uiLayout.expanded && !preferences.menuOnRight) workspace.addView(buildSidebar(), LinearLayout.LayoutParams(dp(uiLayout.sidebarWidth), -1))
         workspace.addView(main, LinearLayout.LayoutParams(0, -1, 1f))
         if (uiLayout.expanded && preferences.menuOnRight) workspace.addView(buildSidebar(), LinearLayout.LayoutParams(dp(uiLayout.sidebarWidth), -1))
-        root.addView(workspace, LinearLayout.LayoutParams(-1, 0, 1f))
+        val homeContent = if (uiLayout.expanded) workspace else HomeDrawerLayout(this, workspace, buildPhoneNavigation(), preferences.menuOnRight)
+            .also { navigationDrawer = it }
+        root.addView(homeContent, LinearLayout.LayoutParams(-1, 0, 1f))
         val header = LinearLayout(this).apply {
             gravity = Gravity.CENTER_VERTICAL; minimumHeight = dp(56)
             setPadding(dp(if (uiLayout.expanded) 20 else 4), dp(4), dp(8), dp(4))
@@ -568,7 +577,6 @@ class MainActivity : Activity() {
         header.addView(lx.icon(59687, getString(R.string.ui_727036c7fc2a)) { showSyncSettings() }, LinearLayout.LayoutParams(dp(48), dp(48)))
         if (uiLayout.expanded || preferences.menuOnRight) header.addView(menu, LinearLayout.LayoutParams(dp(48), dp(48)))
         main.addView(header)
-        if (!uiLayout.expanded) main.addView(buildPageTabs())
         val listHeader = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(dp(if (uiLayout.expanded) 12 else 0), dp(2), dp(4), dp(2)) }
         heading = TextView(this).apply {
             text = getString(R.string.ui_33eeaa47c231); textSize = 14f; setTextColor(foreground); gravity = Gravity.CENTER_VERTICAL
@@ -680,6 +688,7 @@ class MainActivity : Activity() {
         setContentView(root)
         updateNavigationSelection()
         ScreenInsets.install(window, root)
+        if (restoreNavigation) { root.post { navigationDrawer?.open(false) }; restoreNavigation = false }
         search.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
@@ -711,15 +720,40 @@ class MainActivity : Activity() {
             3 -> selectedOnlinePlaylist?.let { loadOnlinePlaylist(it) } ?: showOnlinePlaylists()
         }
     }
-    private fun buildPageTabs() = LinearLayout(this).apply {
-        tag = "home-tabs"; setPadding(dp(8), 0, dp(8), dp(4))
-        val labels = listOf(R.string.ui_27c95ec6b766, R.string.layout_search, R.string.ui_1ee95aa94712, R.string.layout_songlists)
-        labels.forEachIndexed { page, label ->
-            val item = lx.label(getString(label)).apply {
-                gravity = Gravity.CENTER; isFocusable = true; setOnClickListener { navigateToPage(page) }
+    private fun buildPhoneNavigation() = LinearLayout(this).apply {
+        tag = "home-drawer-panel"; orientation = LinearLayout.VERTICAL; setBackgroundColor(palette.surface)
+        addView(lx.label("LX Music", 28f, palette.primary).apply {
+            gravity = Gravity.CENTER; setBackgroundColor(lx.selected)
+        }, LinearLayout.LayoutParams(-1, dp(if (uiLayout.compactPlayer) 72 else 144)))
+        fun entry(parent: LinearLayout, code: Int, label: Int, page: Int? = null, click: () -> Unit) {
+            val row = LinearLayout(this@MainActivity).apply {
+                gravity = Gravity.CENTER_VERTICAL; background = lx.touch(); minimumHeight = dp(56)
+                setPadding(dp(12), dp(4), dp(12), dp(4)); isFocusable = true
+                setOnClickListener { navigationDrawer?.close(); click() }
             }
-            navigationItems[page] = item; addView(item, LinearLayout.LayoutParams(0, dp(48), 1f))
+            val icon = if (label == R.string.ui_b0d269c8707c) ImageView(this@MainActivity).apply {
+                setImageResource(android.R.drawable.ic_lock_power_off); imageTintList = ColorStateList.valueOf(palette.muted)
+                setPadding(dp(11), dp(13), dp(11), dp(13))
+            } else lx.label(code.toChar().toString(), 21f, palette.muted).apply { typeface = iconFont; gravity = Gravity.CENTER }
+            icon.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            row.addView(icon, LinearLayout.LayoutParams(dp(44), dp(48)))
+            val text = lx.label(getString(label), 16f).apply { maxLines = 2; setPadding(dp(8), 0, 0, 0) }
+            row.addView(text, LinearLayout.LayoutParams(0, -2, 1f))
+            if (page != null) { navigationItems[page] = text; row.tag = "navigation-$page" }
+            parent.addView(row, LinearLayout.LayoutParams(-1, -2))
         }
+        val items = LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.VERTICAL; setPadding(0, dp(8), 0, dp(8))
+        }
+        entry(items, 59660, R.string.layout_search, 1) { navigateToPage(1) }
+        entry(items, 59659, R.string.layout_songlists, 3) { navigateToPage(3) }
+        entry(items, 59658, R.string.ui_1ee95aa94712, 2) { navigateToPage(2) }
+        entry(items, 59657, R.string.ui_27c95ec6b766, 0) { navigateToPage(0) }
+        entry(items, 59655, R.string.settings_title) { showSettings() }
+        addView(ScrollView(this@MainActivity).apply { isVerticalScrollBarEnabled = false; addView(items) }, LinearLayout.LayoutParams(-1, 0, 1f))
+        entry(this, 59680, R.string.ui_38844b135cf7) { showNavigationActions() }
+        if (preferences.showBack) entry(this, 59680, R.string.ui_f75a93326a3c) { moveTaskToBack(true) }
+        if (preferences.showExit) entry(this, 59670, R.string.ui_b0d269c8707c) { confirmExit() }
     }
     private fun buildSidebar() = LinearLayout(this).apply {
         tag = "home-sidebar"; orientation = LinearLayout.VERTICAL; setBackgroundColor(lx.panel)
@@ -755,9 +789,9 @@ class MainActivity : Activity() {
             val selected = current == page
             item.isSelected = selected; item.setTextColor(if (selected) palette.primary else palette.muted)
             item.setTypeface(null, if (selected) Typeface.BOLD else Typeface.NORMAL)
-            val target = if (uiLayout.expanded) item.parent as View else item
+            val target = item.parent as ViewGroup
             target.isSelected = selected; target.background = lx.touch(if (selected) lx.selected else Color.TRANSPARENT)
-            if (uiLayout.expanded) ((item.parent as ViewGroup).getChildAt(0) as TextView).setTextColor(if (selected) palette.primary else palette.muted)
+            (target.getChildAt(0) as TextView).setTextColor(if (selected) palette.primary else palette.muted)
         }
     }
     private fun buildTableHeader() = LinearLayout(this).apply {
@@ -770,19 +804,29 @@ class MainActivity : Activity() {
         addView(View(this@MainActivity), LinearLayout.LayoutParams(dp(48), 1))
     }
     private fun showNavigation() {
+        val drawer = navigationDrawer
+        if (drawer != null) {
+            (getSystemService(INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager).hideSoftInputFromWindow(search.windowToken, 0)
+            drawer.open()
+        } else showNavigationActions()
+    }
+    private fun confirmExit() {
+        AlertDialog.Builder(this).setTitle(getString(R.string.ui_0c5f909e92d2)).setMessage(getString(R.string.ui_2474ed447b00))
+            .setNegativeButton(getString(R.string.ui_2cd0f3be8738), null).setPositiveButton(getString(R.string.ui_498e1d59b4d7)) { _, _ ->
+                service?.pause()
+                startService(Intent(this, PlaybackService::class.java).setAction(PlaybackService.ACTION_EXIT))
+                startService(Intent(this, SyncService::class.java).setAction(SyncService.ACTION_EXIT))
+                finishAndRemoveTask()
+            }.show()
+    }
+    private fun showNavigationActions() {
         val labels = mutableListOf(getString(R.string.ui_a9531e47b75d), getString(R.string.ui_c2dd14825672), getString(R.string.ui_87a2113eb66f), getString(R.string.ui_1ee95aa94712), getString(R.string.ui_259597bf6ca7), getString(R.string.ui_3158c8d56b7b), getString(R.string.ui_a5cd0a9169e8), getString(R.string.ui_3facd3e00be5), getString(R.string.ui_599818eb56df), getString(R.string.ui_727036c7fc2a), getString(R.string.ui_2a3ec620e12c), getString(R.string.ui_8c38525734c0), getString(R.string.ui_486b54a7b0af), getString(R.string.ui_6e763b71e69c), getString(R.string.ui_f01b6815d826), getString(R.string.ui_cad84b75d661), getString(R.string.ui_426744e26e7e), getString(R.string.ui_ac7aa03a458f), getString(R.string.settings_title), getString(R.string.ui_788db1cfec2a), getString(R.string.ui_4fd38bc4f6d4), getString(R.string.ui_bb1d19b85634))
         if (preferences.showBack) labels.add(getString(R.string.ui_f75a93326a3c))
         if (preferences.showExit) labels.add(getString(R.string.ui_b0d269c8707c))
         val navigation = AlertDialog.Builder(this).setTitle("LX Music").setItems(labels.toTypedArray()) { _, which ->
             if (labels[which] == getString(R.string.ui_f75a93326a3c)) { moveTaskToBack(true); return@setItems }
             if (labels[which] == getString(R.string.ui_b0d269c8707c)) {
-                AlertDialog.Builder(this).setTitle(getString(R.string.ui_0c5f909e92d2)).setMessage(getString(R.string.ui_2474ed447b00))
-                    .setNegativeButton(getString(R.string.ui_2cd0f3be8738), null).setPositiveButton(getString(R.string.ui_498e1d59b4d7)) { _, _ ->
-                        service?.pause()
-                        startService(Intent(this, PlaybackService::class.java).setAction(PlaybackService.ACTION_EXIT))
-                        startService(Intent(this, SyncService::class.java).setAction(SyncService.ACTION_EXIT))
-                        finishAndRemoveTask()
-                    }.show()
+                confirmExit()
                 return@setItems
             }
             if (which == 0) openLocalPage(true)

@@ -66,11 +66,13 @@ class AdaptiveLayoutTest {
             val root = activity.findViewById<ViewGroup>(android.R.id.content).getChildAt(0)
             assertEquals(if (expanded) "home-expanded" else "home-compact", root.tag)
             assertEquals(expanded, descendants(root).any { it.tag == "home-sidebar" })
-            assertEquals(!expanded, descendants(root).any { it.tag == "home-tabs" })
+            assertFalse(descendants(root).any { it.tag == "home-tabs" })
+            assertEquals(!expanded, descendants(root).any { it.tag == "home-drawer-host" })
             @Suppress("UNCHECKED_CAST") val navigation = field(activity, "navigationItems") as Map<Int, TextView>
             instrumentation.runOnMainSync {
                 val searchItem = navigation.getValue(1)
-                (if (expanded) searchItem.parent as View else searchItem).performClick()
+                if (!expanded) invoke(activity, "showNavigation")
+                (searchItem.parent as View).performClick()
                 assertEquals(true, field(activity, "onlineMode")); assertTrue(searchItem.isSelected)
                 val songs = (1L..12L).map { Song(it, Uri.EMPTY, "示例歌曲 $it · A song with a long title", "示例歌手 Artist", 215000, "kw", """{"albumName":"示例专辑 Album"}""") }
                 MainActivity::class.java.getDeclaredField("allSongs").apply { isAccessible = true }.set(activity, songs)
