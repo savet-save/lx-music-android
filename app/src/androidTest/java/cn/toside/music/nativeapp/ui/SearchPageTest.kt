@@ -95,12 +95,11 @@ class SearchPageTest {
         instrumentation.waitForIdleSync()
         if (Build.VERSION.SDK_INT >= 29) {
             instrumentation.runOnMainSync {
-                fun descendants(view: View): List<View> = listOf(view) + if (view is ViewGroup) (0 until view.childCount).flatMap { descendants(view.getChildAt(it)) } else emptyList()
-                val list = WindowInspector.getGlobalWindowViews().flatMap(::descendants).filterIsInstance<ListView>().firstOrNull { view ->
-                    view.adapter != null && (0 until view.adapter.count).any { view.adapter.getItem(it).toString() == label }
-                }
-                assertNotNull("Provider choice must be present: $label", list)
-                val position = (0 until list!!.adapter.count).first { list.adapter.getItem(it).toString() == label }
+                val list = WindowInspector.getGlobalWindowViews().firstNotNullOfOrNull { root ->
+                    root.findViewWithTag<ListView>("platform-menu")?.takeIf(View::isShown)
+                } ?: error("Provider menu must be visible")
+                val position = (0 until list.count).firstOrNull { list.getItemAtPosition(it) == label }
+                    ?: error("Provider choice must be present: $label")
                 list.performItemClick(list.getChildAt(position - list.firstVisiblePosition), position, list.adapter.getItemId(position))
             }
             instrumentation.waitForIdleSync()

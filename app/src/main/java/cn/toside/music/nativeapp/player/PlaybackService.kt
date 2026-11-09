@@ -283,6 +283,23 @@ class PlaybackService : Service() {
         refreshLyricPreferences()
         scope.launch { withContext(Dispatchers.IO) { AudioStreamCache.existing()?.updateLimit(preferences.audioCacheBytes) } }
     }
+    private suspend fun <T> attemptMetadata(load: suspend () -> T): Result<T> = try {
+        Result.success(load())
+    } catch (e: CancellationException) { throw e }
+    catch (e: Exception) { Result.failure(e) }
+
+    private suspend fun <T : Any> loadOnlineMetadata(song: Song, load: suspend (Song) -> T?): T? {
+        val primary = attemptMetadata { load(song) }
+        primary.getOrNull()?.let { return it }
+        if (preferences.bool("player.autoSwitchSource", true)) {
+            val matches = attemptMetadata { matcher.find(song) }.getOrNull().orEmpty()
+            for (match in matches) {
+                attemptMetadata { load(match) }.getOrNull()?.let { return it }
+            }
+        }
+        return primary.getOrThrow()
+    }
+
     private fun loadArtwork(song: Song?) {
         artworkLoadJob?.cancel()
         val key = song?.let { "${it.source}:${it.id}" }
@@ -291,7 +308,8 @@ class PlaybackService : Service() {
         artworkLoadJob = scope.launch {
             try {
                 val loader = Artwork(this@PlaybackService)
-                var bitmap = try { loader.load(song) } catch (e: CancellationException) { throw e } catch (_: Exception) { null }
+                var bitmap = if (song.source == "local") attemptMetadata { loader.load(song) }.getOrNull()
+                    else loadOnlineMetadata(song, loader::load)
                 if (bitmap == null && song.source == "local") {
                     val url = sourceMutex.withLock {
                         if (!userSource.supports("local", "pic")) null else userSource.sourceRequest("local", "pic", JSONObject()
@@ -299,7 +317,7 @@ class PlaybackService : Service() {
                     }
                     if (!url.isNullOrBlank()) bitmap = loader.loadUrl(url)
                 }
-                mutableArtwork.value = PlayerArtwork(key, bitmap); publish()
+                if (mutableState.value.song == song) { mutableArtwork.value = PlayerArtwork(key, bitmap); publish() }
             } catch (e: CancellationException) { throw e }
             catch (_: Exception) { }
         }
@@ -314,11 +332,11 @@ class PlaybackService : Service() {
             try {
                 if (forceOnline) lyrics.clearOnlineCache(song)
                 var lines = lyrics.load(song.id, song.source)
+                val fromCache = lines.isNotEmpty()
                 if (lines.isEmpty() && song.source == "local") {
                     val text = try { LocalTags.lyric(this@PlaybackService, song) }
                     catch (e: CancellationException) { throw e } catch (_: Exception) { "" }
                     lines = LrcParser.parse(text)
-                    if (lines.isNotEmpty()) lyrics.cache(song, lines)
                 }
                 if (lines.isEmpty() && song.source == "local") {
                     val info = JSONObject().put("name", song.title).put("singer", song.artist).put("songmid", song.id)
@@ -330,13 +348,15 @@ class PlaybackService : Service() {
                                 LrcParser.parse(data.optString("tlyric")), LrcParser.parse(data.optString("rlyric")))
                         }
                     }
-                    if (lines.isNotEmpty()) lyrics.cache(song, lines)
                 }
                 if (lines.isEmpty() && song.source != "local") {
-                    lines = OnlineLyrics().forSong(song)
-                    lyrics.cache(song, lines)
+                    val online = OnlineLyrics()
+                    lines = loadOnlineMetadata(song) { candidate ->
+                        online.forSong(candidate).takeIf { result -> result.any { it.text.isNotBlank() } }
+                    }.orEmpty()
                 }
                 if (mutableState.value.song == song) { mutableLyrics.value = PlayerLyrics(key, lines); publish() }
+                if (!fromCache && lines.isNotEmpty()) attemptMetadata { lyrics.cache(song, lines) }
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) { if (mutableState.value.song == song) mutableLyrics.value = PlayerLyrics(key, error = message(R.string.playback_lyrics_error, e.localizedMessage.orEmpty())) }
         }
@@ -389,18 +409,22 @@ class PlaybackService : Service() {
             sleepJob = null
         }
     }
-    suspend fun resolveUrl(song: Song): String {
+    suspend fun resolveUrl(song: Song): String = resolveUrl(song, null)
+    internal suspend fun resolveDownloadUrl(song: Song, quality: String): String = resolveUrl(song, quality)
+
+    private suspend fun resolveUrl(song: Song, downloadQuality: String?): String {
         require(song.source != "local") { message(R.string.playback_local_download) }
         val info = song.sourceInfo ?: error(message(R.string.playback_source_missing))
-        val quality = getSharedPreferences("player", MODE_PRIVATE).getString("quality", "128k") ?: "128k"
-        try { return sourceMutex.withLock { userSource.musicUrl(song.source, JSONObject(info), quality) } }
+        val quality = downloadQuality ?: getSharedPreferences("player", MODE_PRIVATE).getString("quality", "128k") ?: "128k"
+        val exact = downloadQuality != null
+        try { return sourceMutex.withLock { userSource.musicUrl(song.source, JSONObject(info), quality, exact) } }
         catch (e: CancellationException) { throw e }
         catch (original: Exception) {
             if (!preferences.bool("player.autoSwitchSource", true) || original.message.orEmpty().contains("429")) throw original
             val supported = sourceMutex.withLock { ExternalLinks.sources.filter { it != song.source && userSource.supports(it, "musicUrl") } }
             if (supported.isEmpty()) throw original
             for (alternative in matcher.find(song).filter { it.source in supported }) {
-                try { return sourceMutex.withLock { userSource.musicUrl(alternative.source, JSONObject(alternative.sourceInfo!!), quality) } }
+                try { return sourceMutex.withLock { userSource.musicUrl(alternative.source, JSONObject(alternative.sourceInfo!!), quality, exact) } }
                 catch (e: CancellationException) { throw e }
                 catch (_: Exception) { }
             }

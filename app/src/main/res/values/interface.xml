@@ -1,5 +1,6 @@
 <resources>
     <string name="pact_title">项目使用协议</string>
+    <string name="pact_notice">请先阅读并接受本协议，再继续使用本软件。</string>
     <string name="pact_accept">接受</string>
     <string name="pact_reject">不接受并退出</string>
     <string name="pact_countdown">接受（%1$d）</string>

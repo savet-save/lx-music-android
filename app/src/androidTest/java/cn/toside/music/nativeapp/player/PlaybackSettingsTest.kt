@@ -14,6 +14,7 @@ import cn.toside.music.nativeapp.lyrics.LyricLine
 import cn.toside.music.nativeapp.lyrics.Lyrics
 import cn.toside.music.nativeapp.ui.DesktopLyricSettings
 import cn.toside.music.nativeapp.ui.MainActivity
+import cn.toside.music.nativeapp.ui.PlayerLyricScroll
 import cn.toside.music.nativeapp.ui.UiPalette
 import cn.toside.music.nativeapp.ui.SettingsFragment
 import cn.toside.music.nativeapp.online.PlaylistBrowserRepository
@@ -44,10 +45,12 @@ import android.provider.Settings
 import android.util.AtomicFile
 import android.util.TypedValue
 import android.view.Gravity
+import android.os.SystemClock
 import android.view.View
 import android.view.ViewGroup
 import android.view.accessibility.AccessibilityNodeInfo
-import android.widget.LinearLayout
+import android.view.MotionEvent
+import android.view.ViewConfiguration
 import android.widget.ListView
 import android.widget.RadioButton
 import android.widget.SeekBar
@@ -390,6 +393,24 @@ class PlaybackSettingsTest {
                 waitFor { fixture.player.state.value.playing }
                 assertNull(fixture.player.state.value.error)
                 waitFor { fixture.player.artworkState.value.bitmap != null }
+
+                val activity = fixture.activity
+                val heading = field(activity, "heading") as TextView
+                fun selectPage(tag: String) = main { activity.window.decorView.findViewWithTag<View>(tag).performClick() }
+                selectPage("navigation-1")
+                assertEquals(true, field(activity, "onlineMode"))
+                selectPage("navigation-0")
+                assertEquals(activity.getString(R.string.ui_33eeaa47c231), heading.text.toString())
+                assertTrue((field(activity, "visibleSongs") as List<*>).all { (it as Song).source == "local" })
+                val favorites = Playlists(context).use { it.loveList() }
+                main { heading.performClick() }
+                val favoriteTag = "playlist-choice-$favorites"
+                waitFor { activity.window.decorView.findViewWithTag<View>(favoriteTag)?.isShown == true }
+                assertTrue(activity.window.decorView.findViewWithTag<View>("playlist-choice-local").isShown)
+                selectPage(favoriteTag)
+                waitFor { (field(activity, "activePlaylist") as? Playlist)?.syncId == "love" }
+                assertEquals(song, fixture.player.state.value.song)
+                assertTrue(fixture.player.state.value.playing)
             }
         } finally {
             allowCover.countDown(); server.close(); worker.join(1000)
@@ -476,16 +497,30 @@ class PlaybackSettingsTest {
                 assertFalse(fixture.media().isPlaying)
                 assertEquals(500, LyricOffsets(context).get(fixture.song))
                 main { dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick(); fixture.player.seekTo(1200) }
-                waitFor { (field(fixture.activity, "detailLyrics") as LinearLayout).childCount == 3 }
-                val container = field(fixture.activity, "detailLyrics") as LinearLayout
+                val scroll = field(fixture.activity, "detailScroll") as PlayerLyricScroll
+                val container = scroll.lines
+                waitFor { container.childCount == 3 && scroll.height > 0 }
                 val first = container.getChildAt(0) as TextView
                 val second = container.getChildAt(1) as TextView
                 assertEquals(TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, 25f, context.resources.displayMetrics), first.textSize, 0.1f)
                 assertEquals(Gravity.RIGHT, first.gravity and Gravity.HORIZONTAL_GRAVITY_MASK)
                 assertEquals(Color.rgb(77, 175, 124), first.currentTextColor)
                 assertEquals(Color.GRAY, second.currentTextColor)
-                main { second.performClick() }
-                assertEquals(1500, fixture.player.state.value.position)
+                main {
+                    val down = SystemClock.uptimeMillis()
+                    val y = scroll.height / 2f
+                    val slop = ViewConfiguration.get(scroll.context).scaledTouchSlop + 1
+                    fun touch(action: Int, at: Float) {
+                        val event = MotionEvent.obtain(down, SystemClock.uptimeMillis(), action, scroll.width / 2f, at, 0)
+                        try { scroll.dispatchTouchEvent(event) } finally { event.recycle() }
+                    }
+                    scroll.scrollTo(0, first.top + first.height / 2 - scroll.height / 2)
+                    touch(MotionEvent.ACTION_DOWN, y)
+                    touch(MotionEvent.ACTION_MOVE, y - slop)
+                    touch(MotionEvent.ACTION_MOVE, y - slop - first.height)
+                    touch(MotionEvent.ACTION_UP, y - slop - first.height)
+                }
+                waitFor { fixture.player.state.value.position == 1500 }
                 assertEquals(Color.GRAY, first.currentTextColor)
                 assertEquals(Color.rgb(77, 175, 124), second.currentTextColor)
                 fixture.restart()

@@ -7,6 +7,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.SystemClock
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.View
 import android.widget.TextView
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -68,7 +69,16 @@ class PermissionFlowTest {
             assertEquals(context.packageName, instrumentation.uiAutomation.rootInActiveWindow?.packageName?.toString())
             // Ensure the first-use path is exercised without changing the device's permission flags.
             preferences.edit().remove("audio-requested").commit()
-            instrumentation.runOnMainSync { status.performClick() }
+            val heading = MainActivity::class.java.getDeclaredField("heading").apply { isAccessible = true }.get(activity) as TextView
+            instrumentation.runOnMainSync { heading.performClick() }
+            assertTrue("我的歌单应显示固定的本地音乐入口", waitUntil {
+                var clicked = false
+                instrumentation.runOnMainSync {
+                    val item = activity.window.decorView.findViewWithTag<View>("playlist-choice-local")
+                    clicked = item?.isShown == true && item.performClick()
+                }
+                clicked
+            })
             assertTrue("点击本地音乐后应能拒绝系统权限请求", choosePermission(false))
             assertTrue(waitUntil { status.text.toString().contains("重试") })
             instrumentation.waitForIdleSync()

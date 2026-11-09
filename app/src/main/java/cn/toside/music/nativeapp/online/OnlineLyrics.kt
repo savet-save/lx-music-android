@@ -10,6 +10,7 @@ import cn.toside.music.nativeapp.utils.readBounded
 
 import android.text.Html
 import android.util.Base64
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -51,8 +52,9 @@ class OnlineLyrics {
     private fun kuwo(song: Song): List<LyricLine> {
         val info = JSONObject(song.sourceInfo ?: return emptyList())
         val id = URLEncoder.encode(info.getString("songmid"), "UTF-8")
-        val raw = fetch("http://mlyric.kuwo.cn/mobi.s?f=web&type=lyric&lrcx=1&rid=$id&encode=utf8")
-        return parseKuwo(decodeKuwo(raw))
+        val url = "http://mlyric.kuwo.cn/mobi.s?f=web&type=lyric&rid=$id&encode=utf8"
+        val timed = optionalLines { parseKuwo(decodeKuwo(fetch("$url&lrcx=1"))) }
+        return timed.ifEmpty { parseKuwo(decodeKuwo(fetch("$url&lrcx=0"))) }
     }
     internal fun decodeKuwo(raw: ByteArray): String {
         if (raw.size < 10 || !raw.copyOfRange(0, 10).toString(Charsets.UTF_8).equals("tp=content", true)) return ""
@@ -107,23 +109,33 @@ class OnlineLyrics {
             return LyricFormats.netease(result)
         } finally { connection.disconnect() }
     }
-    private fun migu(song: Song): List<LyricLine> {
+    private suspend fun migu(song: Song): List<LyricLine> {
         val info = JSONObject(song.sourceInfo ?: return emptyList())
-        val headers = mapOf("Referer" to "https://app.c.nf.migu.cn/", "channel" to "0146921")
+        val headers = mapOf("Referer" to "https://app.c.nf.migu.cn/", "channel" to "0146921",
+            "User-Agent" to "Mozilla/5.0 (Linux; Android 11) AppleWebKit/537.36 Mobile Safari/537.36")
+        fun url(data: JSONObject, key: String): String? = data.optString(key).trim()
+            .takeIf { it.startsWith("https://") || it.startsWith("http://") }
+        val details = if (url(info, "mrcUrl") == null && url(info, "lrcUrl") == null) OnlineSongDetails.migu(info) else null
         fun text(key: String): String {
-            val url = info.optString(key)
-            if (!url.startsWith("https://") && !url.startsWith("http://")) return ""
-            return fetch(url, headers).toString(Charsets.UTF_8)
+            val address = url(info, key) ?: details?.let { url(it, key) } ?: return ""
+            return fetch(address, headers).toString(Charsets.UTF_8)
         }
-        val main = if (info.optString("mrcUrl").isNotBlank()) LyricFormats.timedSentences(MrcCipher.decrypt(text("mrcUrl")), false)
-            else LrcParser.parse(text("lrcUrl"))
-        val translation = runCatching { LrcParser.parse(text("trcUrl")) }.getOrDefault(emptyList())
+        val main = optionalLines {
+            val timed = text("mrcUrl")
+            if (timed.isBlank()) emptyList() else LyricFormats.timedSentences(MrcCipher.decrypt(timed), false)
+        }.ifEmpty { LrcParser.parse(text("lrcUrl")) }
+        val translation = optionalLines { LrcParser.parse(text("trcUrl")) }
         return LyricFormats.merge(main, translation, emptyList())
     }
-    private fun qq(song: Song): List<LyricLine> {
+    private inline fun optionalLines(load: () -> List<LyricLine>): List<LyricLine> = try { load() }
+    catch (e: CancellationException) { throw e }
+    catch (_: Exception) { emptyList() }
+
+    private suspend fun qq(song: Song): List<LyricLine> {
         val info = JSONObject(song.sourceInfo ?: return emptyList())
-        val id = info.optLong("songId", 0)
-        if (id <= 0) return emptyList()
+        val id = info.optLong("songId").takeIf { it > 0 }
+            ?: OnlineSongDetails.qq(info.optString("songmid"))?.optLong("id")?.takeIf { it > 0 }
+            ?: return emptyList()
         val param = JSONObject().put("format", "json").put("crypt", 1).put("ct", 19).put("cv", 1873)
             .put("interval", 0).put("lrc_t", 0).put("qrc", 1).put("qrc_t", 0).put("roma", 1).put("roma_t", 0)
             .put("songID", id).put("trans", 1).put("trans_t", 0).put("type", -1)

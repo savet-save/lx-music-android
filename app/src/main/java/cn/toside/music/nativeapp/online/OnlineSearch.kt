@@ -118,7 +118,8 @@ class OnlineSearch {
             val duration = item.optLong("interval", 0).coerceAtLeast(0)
             val types = JSONArray(); val typeMap = JSONObject()
             listOf("128k" to "size_128mp3", "320k" to "size_320mp3", "flac" to "size_flac", "flac24bit" to "size_hires").forEach { (type, field) ->
-                if (file.optLong(field) > 0) { types.put(JSONObject().put("type", type).put("size", JSONObject.NULL)); typeMap.put(type, JSONObject().put("size", JSONObject.NULL)) }
+                val bytes = file.optLong(field)
+                if (bytes > 0) { types.put(JSONObject().put("type", type).put("size", JSONObject.NULL)); typeMap.put(type, JSONObject().put("size", JSONObject.NULL).put("bytes", bytes)) }
             }
             val albumId = album.optString("mid")
             val info = JSONObject().put("name", title).put("singer", singer).put("source", "tx").put("songmid", mid)
@@ -166,8 +167,9 @@ class OnlineSearch {
                 val info = JSONObject().put("name", title).put("singer", singer).put("source", "mg").put("songmid", id)
                     .put("copyrightId", copyright).put("albumName", item.optString("album")).put("albumId", item.opt("albumId") ?: "")
                     .put("interval", "%02d:%02d".format(duration / 60, duration % 60))
-                    .put("img", item.optString("img3", item.optString("img2", item.optString("img1"))))
-                    .put("lrcUrl", item.optString("lrcUrl")).put("mrcUrl", item.optString("mrcurl")).put("trcUrl", item.optString("trcUrl"))
+                    .put("img", playlistCover(item.optString("img3"), item.optString("img2"), item.optString("img1")))
+                    .put("lrcUrl", item.optString("lrcUrl")).put("mrcUrl", item.optString("mrcUrl").takeUnless { it.isBlank() || it == "null" }
+                        ?: item.optString("mrcurl")).put("trcUrl", item.optString("trcUrl"))
                     .put("types", types).put("_types", typeMap).put("typeUrl", JSONObject())
                 add(Song(id.toLongOrNull() ?: id.hashCode().toLong(), Uri.EMPTY, title, singer, duration * 1000, "mg", info.toString()))
             }
@@ -208,11 +210,16 @@ class OnlineSearch {
             val album = item.optJSONObject("al") ?: JSONObject(); val privilege = item.optJSONObject("privilege") ?: JSONObject()
             val title = item.optString("name"); val duration = item.optLong("dt", 0).coerceAtLeast(0)
             val types = JSONArray(); val typeMap = JSONObject(); val bitrate = privilege.optInt("maxbr")
-            fun quality(type: String) { types.put(JSONObject().put("type", type).put("size", JSONObject.NULL)); typeMap.put(type, JSONObject().put("size", JSONObject.NULL)) }
-            if (bitrate >= 128000) quality("128k")
-            if (bitrate >= 320000) quality("320k")
-            if (bitrate >= 999000) quality("flac")
-            if (privilege.optString("maxBrLevel") == "hires") quality("flac24bit")
+            fun quality(type: String, field: String) {
+                types.put(JSONObject().put("type", type).put("size", JSONObject.NULL))
+                val metadata = JSONObject().put("size", JSONObject.NULL)
+                item.optJSONObject(field)?.optLong("size")?.takeIf { it > 0 }?.let { metadata.put("bytes", it) }
+                typeMap.put(type, metadata)
+            }
+            if (bitrate >= 128000) quality("128k", "l")
+            if (bitrate >= 320000) quality("320k", "h")
+            if (bitrate >= 999000) quality("flac", "sq")
+            if (privilege.optString("maxBrLevel") == "hires") quality("flac24bit", "hr")
             val info = JSONObject().put("name", title).put("singer", singer).put("source", "wy").put("songmid", item.opt("id") ?: id)
                 .put("albumName", album.optString("name")).put("albumId", album.opt("id") ?: "")
                 .put("interval", "%02d:%02d".format(duration / 60000, duration / 1000 % 60)).put("img", album.optString("picUrl"))
@@ -236,8 +243,9 @@ class OnlineSearch {
             val typeMap = JSONObject()
             listOf(Triple("128k", "FileSize", "FileHash"), Triple("320k", "HQFileSize", "HQFileHash"),
                 Triple("flac", "SQFileSize", "SQFileHash"), Triple("flac24bit", "ResFileSize", "ResFileHash")).forEach { (type, sizeKey, hashKey) ->
-                if (item.optLong(sizeKey, 0) > 0) {
-                    val quality = JSONObject().put("size", JSONObject.NULL).put("hash", item.optString(hashKey))
+                val bytes = item.optLong(sizeKey, 0)
+                if (bytes > 0) {
+                    val quality = JSONObject().put("size", JSONObject.NULL).put("hash", item.optString(hashKey)).put("bytes", bytes)
                     typeMap.put(type, quality)
                     qualities.put(JSONObject().put("type", type).put("size", JSONObject.NULL).put("hash", item.optString(hashKey)))
                 }

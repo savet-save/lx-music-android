@@ -6,5 +6,6 @@
     <fragment android:id="@+id/playlist_browser" android:name="cn.toside.music.nativeapp.ui.PlaylistBrowserFragment" />
     <fragment android:id="@+id/playlist_songs" android:name="cn.toside.music.nativeapp.ui.MusicPageFragment" />
     <fragment android:id="@+id/charts_page" android:name="cn.toside.music.nativeapp.ui.ChartsFragment" />
+    <fragment android:id="@+id/downloads_page" android:name="cn.toside.music.nativeapp.ui.DownloadsFragment" />
     <fragment android:id="@+id/settings_page" android:name="cn.toside.music.nativeapp.ui.SettingsFragment" />
 </navigation>

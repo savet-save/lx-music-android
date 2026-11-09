@@ -18,6 +18,40 @@ import org.json.JSONObject
 
 @RunWith(AndroidJUnit4::class)
 class PlaylistsTest {
+    @Test fun createsFavoritesAndUpgradesWithoutReplacingExistingFavorites() = runBlocking {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val song = Song(1, Uri.EMPTY, "favorite", "artist", 1000, "kw", """{"songmid":"1"}""")
+        for (hadFavorites in listOf(false, true)) {
+            val name = "playlist-favorites-$hadFavorites-${System.nanoTime()}.db"
+            val path = context.getDatabasePath(name)
+            try {
+                val (favoriteId, customId) = Playlists(context, name).use { lists ->
+                    val favorites = lists.list().single()
+                    assertEquals("love", favorites.syncId)
+                    assertTrue(lists.songs(favorites.id).isEmpty())
+                    if (hadFavorites) assertTrue(lists.add(favorites.id, song))
+                    favorites.id to lists.create("custom")
+                }
+                SQLiteDatabase.openDatabase(path.absolutePath, null, SQLiteDatabase.OPEN_READWRITE).use { db ->
+                    if (!hadFavorites) db.delete("playlists", "sync_id = 'love'", null)
+                    db.version = 5
+                }
+                Playlists(context, name).use { lists ->
+                    val items = lists.list()
+                    assertEquals(listOf("love", "custom"), items.map { if (it.syncId == "love") it.syncId else it.name })
+                    val favorites = items.first()
+                    assertEquals(favorites.id, lists.loveList())
+                    assertEquals(customId, items.last().id)
+                    assertEquals(if (hadFavorites) listOf(song) else emptyList<Song>(), lists.songs(favorites.id))
+                    if (hadFavorites) assertEquals(favoriteId, favorites.id)
+                    assertEquals(if (hadFavorites) 1 else 0, lists.syncSnapshot(emptyMap()).getJSONArray("loveList").length())
+                    try { lists.delete(favorites.id); org.junit.Assert.fail("favorites must be protected") }
+                    catch (_: IllegalArgumentException) { }
+                }
+            } finally { context.deleteDatabase(name) }
+        }
+    }
+
     @Test fun localEditsProduceReplayableSyncEventsAndPreserveMovedMetadata() = runBlocking {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val name = "playlist-edits-${System.nanoTime()}.db"; val lists = Playlists(context, name)
@@ -52,7 +86,7 @@ class PlaylistsTest {
         val playlists = Playlists(context, name)
         try {
             val id = playlists.create("list")
-            val syncId = playlists.list().single().syncId
+            val syncId = playlists.list().single { it.id == id }.syncId
             val first = Song(1, Uri.EMPTY, "first", "artist", 1000, "kw", """{"songmid":"1","types":[],"_types":{}}""")
             assertTrue(playlists.add(id, first))
             val action = JSONObject("""{"action":"list_music_add","data":{"id":"$syncId","addMusicLocationType":"bottom",
@@ -92,7 +126,7 @@ class PlaylistsTest {
             val playlists = Playlists(context, name)
             try {
                 assertEquals("song", playlists.songs(1).single().title)
-                val list = playlists.list().single()
+                val list = playlists.list().single { it.id == 1L }
                 assertEquals(if (version == 3) "retained-id" else "native_", if (version == 3) list.syncId else list.syncId.take(7))
             } finally { playlists.close(); context.deleteDatabase(name) }
         }
@@ -110,8 +144,8 @@ class PlaylistsTest {
                 "meta":{"songId":"123","albumName":"Album","qualitys":[],"_qualitys":{},"extra":"keep song"}}]}]}""")
             try { playlists.overwriteSyncSnapshot(remote, emptyMap()); org.junit.Assert.fail("missing local path must fail") }
             catch (_: IllegalStateException) { }
-            assertEquals(listOf("existing"), playlists.list().map { it.name })
-            assertEquals(oldId, playlists.list().single().id)
+            assertEquals(listOf("我的收藏", "existing"), playlists.list().map { it.name })
+            assertEquals(oldId, playlists.list().single { it.syncId != "love" }.id)
             playlists.overwriteSyncSnapshot(remote, mapOf("/music/a.mp3" to local))
             val roundTrip = playlists.syncSnapshot(mapOf(7L to "/music/a.mp3"))
             assertEquals("keep", roundTrip.getJSONArray("loveList").getJSONObject(0).getJSONObject("meta").getString("custom"))
@@ -142,7 +176,7 @@ class PlaylistsTest {
         try {
             val old = playlists.songs(1).single()
             assertEquals("local", old.source)
-            val migratedId = playlists.list().single().syncId
+            val migratedId = playlists.list().single { it.id == 1L }.syncId
             assertTrue(migratedId.startsWith("native_"))
             val newId = playlists.create("new")
             val newSyncId = playlists.list().first { it.id == newId }.syncId

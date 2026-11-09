@@ -16,7 +16,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.onStart
+import kotlinx.coroutines.flow.onSubscription
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withTimeout
@@ -133,13 +133,14 @@ internal class SyncSession(
                                 val pump = SyncOutboxPump(playlists, localFiles) { event ->
                                     send("onListSyncAction", event)
                                 }
-                                playlists.syncChanges.onStart { emit(Unit) }.collect { pump.drain() }
+                                // Register before the first drain so concurrent edits can wake the pump again.
+                                playlists.syncChanges.onSubscription { emit(Unit) }.collect { pump.drain() }
                             }
                             if (SyncFeature.DISLIKE in features) launch {
                                 val pump = SyncDislikeOutboxPump(dislikes) { event ->
                                     send("onDislikeSyncAction", event)
                                 }
-                                dislikes.syncChanges.onStart { emit(Unit) }.collect { pump.drain() }
+                                dislikes.syncChanges.onSubscription { emit(Unit) }.collect { pump.drain() }
                             }
                         } }
                         catch (e: kotlinx.coroutines.CancellationException) { throw e }

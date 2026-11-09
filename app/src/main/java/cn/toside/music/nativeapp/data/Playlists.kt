@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import java.io.Closeable
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.Locale
@@ -28,7 +29,7 @@ private data class LocalSongRow(val song: Song, val raw: String?)
 private data class SyncList(val id: String, val name: String, val metadata: JSONObject?, val songs: List<SyncSong>)
 
 /** Persistent playlists are separate from the platform media library. */
-class Playlists(context: Context, name: String = "playlists.db") : SQLiteOpenHelper(context, name, null, 5) {
+class Playlists(context: Context, name: String = "playlists.db") : SQLiteOpenHelper(context, name, null, 6), Closeable {
     private val preferences = AppPreferences(context)
     private class Signals {
         val outgoing = MutableSharedFlow<Unit>(extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
@@ -40,7 +41,10 @@ class Playlists(context: Context, name: String = "playlists.db") : SQLiteOpenHel
     internal val changes = signals.changes.asSharedFlow()
     private val localMutationGate get() = signals.localMutationGate
     private fun notifyLocalChanged() { signals.outgoing.tryEmit(Unit); signals.changes.tryEmit(Unit) }
-    companion object { private val stores = ConcurrentHashMap<String, Signals>() }
+    companion object {
+        private const val FAVORITES_NAME = "我的收藏"
+        private val stores = ConcurrentHashMap<String, Signals>()
+    }
     internal suspend fun <T> pauseLocalMutations(block: suspend () -> T): T = localMutationGate.withLock { block() }
     override fun onConfigure(db: SQLiteDatabase) { db.setForeignKeyConstraintsEnabled(true) }
     override fun onCreate(db: SQLiteDatabase) {
@@ -48,6 +52,10 @@ class Playlists(context: Context, name: String = "playlists.db") : SQLiteOpenHel
             "sync_id TEXT NOT NULL UNIQUE, position INTEGER NOT NULL, source TEXT, source_list_id TEXT, location_update_time INTEGER, sync_meta TEXT)")
         createSongsTable(db)
         createSyncTables(db)
+        seedFavorites(db)
+    }
+    private fun seedFavorites(db: SQLiteDatabase) {
+        db.execSQL("INSERT OR IGNORE INTO playlists(name, sync_id, position) VALUES (?, 'love', -1)", arrayOf(FAVORITES_NAME))
     }
     private fun createSyncTables(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE sync_outbox (sequence INTEGER PRIMARY KEY AUTOINCREMENT, event TEXT NOT NULL)")
@@ -82,6 +90,7 @@ class Playlists(context: Context, name: String = "playlists.db") : SQLiteOpenHel
             if (oldVersion >= 2) db.execSQL("ALTER TABLE songs ADD COLUMN sync_raw TEXT")
         }
         if (oldVersion < 5) createSyncTables(db)
+        if (oldVersion < 6) seedFavorites(db)
     }
 
     suspend fun list(): List<Playlist> = withContext(Dispatchers.IO) {
@@ -196,7 +205,7 @@ class Playlists(context: Context, name: String = "playlists.db") : SQLiteOpenHel
         }
         val parsed = mutableListOf(
             SyncList("default", "试听列表", null, parseSongs(snapshot.getJSONArray("defaultList"))),
-            SyncList("love", "我的收藏", null, parseSongs(snapshot.getJSONArray("loveList"))),
+            SyncList("love", FAVORITES_NAME, null, parseSongs(snapshot.getJSONArray("loveList"))),
         )
         val ids = mutableSetOf("default", "love", "temp")
         val users = snapshot.getJSONArray("userList")
@@ -322,10 +331,11 @@ class Playlists(context: Context, name: String = "playlists.db") : SQLiteOpenHel
         enqueue(db, JSONObject().put("action", "list_update").put("data", JSONArray().put(playlistInfo(db, id))))
         overwriteSongs(db, id, songs); id
     }
-    internal suspend fun loveList(): Long = localEdit { db ->
-        db.rawQuery("SELECT id FROM playlists WHERE sync_id = 'love'", null).use { if (it.moveToFirst()) it.getLong(0) else null } ?: db.insertOrThrow("playlists", null, ContentValues().apply {
-            put("sync_id", "love"); put("name", "我的收藏"); put("position", -1)
-        })
+    internal suspend fun loveList(): Long = withContext(Dispatchers.IO) {
+        readableDatabase.rawQuery("SELECT id FROM playlists WHERE sync_id = 'love'", null).use { row ->
+            check(row.moveToFirst()) { "内置收藏歌单不存在" }
+            row.getLong(0)
+        }
     }
     internal suspend fun replaceSongs(id: Long, songs: List<Song>) = localEdit { db -> overwriteSongs(db, id, songs) }
     internal suspend fun restoreBackup(lists: List<ImportedList>): Int = localEdit { db ->

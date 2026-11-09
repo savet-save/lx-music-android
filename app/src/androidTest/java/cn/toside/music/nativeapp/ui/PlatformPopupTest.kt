@@ -21,6 +21,8 @@ import androidx.test.filters.SdkSuppress
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.lifecycle.Lifecycle
 import cn.toside.music.nativeapp.R
+import cn.toside.music.nativeapp.data.Playlist
+import cn.toside.music.nativeapp.data.Playlists
 import cn.toside.music.nativeapp.data.Song
 import cn.toside.music.nativeapp.online.*
 import kotlinx.coroutines.Job
@@ -96,17 +98,104 @@ class PlatformPopupTest {
         val position = list.getPositionForView(row)
         list.performItemClick(row, position, list.adapter.getItemId(position))
     }
-    private fun capture(activity: MainActivity, name: String) {
+    private fun capture(activity: MainActivity, name: String, popup: ListView? = menu()) {
         if (InstrumentationRegistry.getArguments().getString("popupScreenshots") != "true") return
         val root = activity.findViewById<ViewGroup>(android.R.id.content).getChildAt(0)
         val bitmap = Bitmap.createBitmap(root.width, root.height, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap); root.draw(canvas)
-        menu()?.rootView?.let { popup ->
-            val origin = bounds(root); val position = bounds(popup)
-            canvas.save(); canvas.translate((position.left - origin.left).toFloat(), (position.top - origin.top).toFloat()); popup.draw(canvas); canvas.restore()
+        popup?.rootView?.let { popupRoot ->
+            val origin = bounds(root); val position = bounds(popupRoot)
+            canvas.save(); canvas.translate((position.left - origin.left).toFloat(), (position.top - origin.top).toFloat()); popupRoot.draw(canvas); canvas.restore()
         }
         val directory = File(instrumentation.targetContext.getExternalFilesDir(null), "popup-validation").apply { mkdirs() }
         File(directory, "$name.png").outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }; bitmap.recycle()
+    }
+
+    @Test fun playlistNamesSwitchDirectlyAndMoreOpensTheAnchoredMenu() = kotlinx.coroutines.runBlocking {
+        val context = instrumentation.targetContext
+        Playlists(context).use { lists ->
+            val favorites = lists.loveList()
+            val custom = lists.create("测试歌单")
+            val activity = instrumentation.startActivitySync(Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
+            val root = activity.window.decorView
+            fun option(tag: String) = root.findViewWithTag<View>(tag)
+            fun actions() = WindowInspector.getGlobalWindowViews().flatMap(::descendants).filterIsInstance<ListView>()
+                .firstOrNull { it.tag == "playlist-actions-menu" && it.isShown }
+            fun actionPosition(menu: ListView, key: String) = menu.getPositionForView(descendants(menu).first { it.tag == "playlist-actions-$key" })
+            fun tap(tag: String) {
+                var target = Rect()
+                main { target = bounds(requireNotNull(option(tag))) }
+                val time = SystemClock.uptimeMillis()
+                for (event in listOf(MotionEvent.ACTION_DOWN, MotionEvent.ACTION_UP)) {
+                    val motion = MotionEvent.obtain(time, SystemClock.uptimeMillis(), event, target.exactCenterX(), target.exactCenterY(), 0)
+                    try { instrumentation.sendPointerSync(motion) } finally { motion.recycle() }
+                }
+            }
+            try {
+                awaitHostFocus(activity)
+                main {
+                    val density = activity.resources.displayMetrics.density
+                    MainActivity::class.java.getDeclaredField("uiLayout").apply { isAccessible = true }.set(activity, AdaptiveLayout(360, 800))
+                    activity.window.setLayout((360 * density).toInt(), (800 * density).toInt())
+                    invoke(activity, "applyThemeInPlace")
+                }
+                awaitLayout { field(activity, "heading") as View }
+                main { (field(activity, "heading") as View).performClick() }
+                await("the playlist rows") {
+                    option("playlist-drawer-panel")?.translationX == 0f && option("playlist-more-$favorites")?.isShown == true &&
+                        option("playlist-choice-$custom")?.isShown == true
+                }
+                tap("playlist-more-$favorites")
+                await("favorites popup input focus") { actions()?.rootView?.hasWindowFocus() == true }
+                main {
+                    val popup = requireNotNull(actions())
+                    val button = bounds(requireNotNull(option("playlist-more-$favorites")))
+                    val menu = bounds(popup)
+                    assertEquals(button.bottom, menu.top)
+                    assertTrue(abs(button.right - menu.right) <= 1)
+                    assertTrue(visibleWindow(option("playlist-more-$favorites")!!).contains(menu))
+                    assertNull(field(activity, "activePlaylist"))
+                    val remove = actionPosition(popup, "DELETE")
+                    assertFalse(popup.adapter.isEnabled(remove))
+                    assertFalse(popup.adapter.isEnabled(actionPosition(popup, "RENAME")))
+                    val refresh = descendants(popup).filterIsInstance<TextView>().first { it.tag == "playlist-actions-REFRESH" }
+                    assertEquals(0, refresh.layout.getEllipsisCount(0))
+                    popup.performItemClick(popup.getChildAt(remove - popup.firstVisiblePosition), remove, remove.toLong())
+                    assertSame(popup, actions())
+                    capture(activity, "playlist-picker-phone", popup)
+                }
+                instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
+                await("popup dismissal") { actions() == null && option("playlist-choice-$custom")?.isShown == true }
+                awaitHostFocus(activity)
+                tap("playlist-choice-$custom")
+                await("single-tap playlist switch") {
+                    (field(activity, "activePlaylist") as? Playlist)?.id == custom && option("playlist-drawer-panel")?.isShown == false
+                }
+                main { (field(activity, "heading") as View).performClick() }
+                await("the selected playlist row") { option("playlist-choice-$custom")?.let { it.isShown && it.isSelected } == true && option("playlist-drawer-panel")?.translationX == 0f }
+                tap("playlist-more-$custom")
+                await("custom playlist actions") { actions()?.rootView?.hasWindowFocus() == true }
+                main {
+                    val popup = requireNotNull(actions())
+                    val rename = actionPosition(popup, "RENAME")
+                    assertTrue(popup.adapter.isEnabled(rename))
+                    popup.performItemClick(popup.getChildAt(rename - popup.firstVisiblePosition), rename, rename.toLong())
+                }
+                await("rename dialog") { WindowInspector.getGlobalWindowViews().any { it.findViewById<View>(android.R.id.button1)?.isShown == true } }
+                main {
+                    val dialog = WindowInspector.getGlobalWindowViews().first { it.findViewById<View>(android.R.id.button1)?.isShown == true }
+                    descendants(dialog).filterIsInstance<EditText>().single().setText("Renamed playlist")
+                    dialog.findViewById<View>(android.R.id.button1).performClick()
+                }
+                await("renamed row in the open drawer") { (option("playlist-choice-$custom") as? TextView)?.text?.endsWith("Renamed playlist") == true }
+                assertEquals("Renamed playlist", lists.list().single { it.id == custom }.name)
+                main { activity.onBackPressedDispatcher.onBackPressed() }
+                await("drawer dismissal") { option("playlist-drawer-panel")?.isShown == false }
+            } finally {
+                main { activity.finish() }
+                lists.delete(custom)
+            }
+        }
     }
 
     @Test fun providerMenusAnchorToSearchPlaylistsAndChartsAndDoNotResetCurrentChoices() {
