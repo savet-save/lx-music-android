@@ -1,5 +1,21 @@
 # 原生迁移验证记录
 
+## 2026-11-09 发布交由 Actions
+
+本地脚本同步版本标签后返回。新推送的 `native-v*` 标签触发 Actions 构建、签名和上传。已有标签可手动补发，手动工作流支持草稿发布。35 项发布脚本测试通过，覆盖本地交接、Actions 上传和构建期间标签变更的拦截。工作流 YAML 解析通过，实际发布待提交并推送版本标签后验证。
+
+## 2026-11-06：发布标签自动同步与签名输出兼容
+
+发布脚本读取版本后，在干净的当前提交上自动补齐 `native-vVERSION` 标签。本地和远程均缺失时创建并推送；本地已有时补推送；远程已有且指向当前提交时获取并复用。支持轻量标签和附注标签。推送目标默认 `origin`，可用 `--remote` 指定，拉取和推送地址均需对应所选 GitHub 仓库。
+
+- 已有标签指向其他提交时停止，保留原标签。网络、权限、远程配置或创建/推送失败时，输出实际原因、发布目录、`git tag TAG COMMIT` 和完整 `git push REMOTE refs/tags/TAG:refs/tags/TAG` 命令；缺少 remote 时还输出配置命令。推送失败保留本地标签，重试复用该标签。远程查询按 [Git 官方的 `--exit-code` 语义](https://git-scm.com/docs/git-ls-remote#Documentation/git-ls-remote.txt---exit-code) 区分“无匹配标签”和连接失败。
+- 正式发布先检查工作区，构建后再次确认本地提交和远程标签。远程标签在构建期间删除或更改时停止上传。`--prepare-only` 保持不创建/推送标签；缺少本地标签时给出完整手动命令。
+- 按当前本地发布流程，`native-release.yml` 改为仅 `workflow_dispatch` 手动触发，防止脚本自动推送标签时另起一份 Actions 发布。普通构建及设备回归工作流未调整。操作方式已更新至 `RELEASING.md`。
+- 同时保留前一轮签名校验修复：本机 Build Tools 37 输出 `V2 Signer: certificate SHA-256 digest:`，旧解析器只识别 `Signer #1 certificate SHA-256 digest:`，导致首个 all APK 误报。现在识别新旧标签、SDK 范围及多签名者，区分证书输出无法解析与证书不一致；公钥、Source Stamp 和 DN 中的摘要不计为 APK 签名证书。签名有效性仍由 [apksigner verify](https://developer.android.com/tools/apksigner#verify-command) 的成功退出状态确认。
+- Python 3.14 执行 33 项发布脚本测试全部通过。标签创建、推送、远程附注标签获取、复用、冲突和重试使用 `build/` 下的临时真实 Git 仓库及裸远程；网络和权限失败使用定向故障注入。正式命令行验证了未提交修改时先停止并输出创建/推送命令。SnakeYAML 验证手动发布工作流及必填标签输入通过。
+- 现有 `0.9.4/code 9004` 三个真实 APK 通过 Build Tools 36.1 和 37 的签名及同证书检查，修复前用 37 能复现原报错。临时复制并篡改的 APK 被签名工具拒绝，另行签名的 ARM64 副本被同证书检查拒绝；原始三个 APK 哈希保持不变，测试副本和临时密钥已清理。
+- 输出位于忽略的 `build/release-tag-validation/` 和 `build/release-signature-validation/`。本轮未提交代码，也未对项目远程创建、移动或推送标签，未上传真实 Release。
+
 ## 2026-11-06：菜单窗口边界断言 CI 修复
 
 用户提供的 `logs_114339440161.zip` 对应 [运行 42198892068](https://github.com/savet-save/lx-music-android/actions/runs/42198892068)，检出 `22eb172`。构建检查、13 项发布脚本测试、API 28 全部通过；API 35 仅剩 `PlatformPopupTest.providerMenusAnchorToSearchPlaylistsAndChartsAndDoNotResetCurrentChoices` 失败。完整堆栈定位到原第 71 行的水平对齐断言，由第 153 行的歌单平台菜单检查触发，本轮没有再报告窗口令牌、本地化或下载失败。
