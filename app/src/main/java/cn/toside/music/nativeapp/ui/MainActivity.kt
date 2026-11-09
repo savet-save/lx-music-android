@@ -3,6 +3,7 @@ package cn.toside.music.nativeapp.ui
 import cn.toside.music.nativeapp.R
 import cn.toside.music.nativeapp.data.AppPreferences
 import cn.toside.music.nativeapp.data.DislikeStore
+import cn.toside.music.nativeapp.data.DownloadTask
 import cn.toside.music.nativeapp.data.Downloads
 import cn.toside.music.nativeapp.data.ExternalAudio
 import cn.toside.music.nativeapp.data.ImportedList
@@ -186,9 +187,11 @@ class MainActivity : FragmentActivity() {
     private var onlinePlaylistPage = 0
     private var selectedBoard: Board? = null
     private var boardPage = 0
-    private var pendingDownload: Song? = null
+    private data class DownloadRequest(val song: Song, val quality: String, val retryKey: String? = null)
+    private var pendingDownload: DownloadRequest? = null
     private var waitingForDownloadSettings = false
-    private var waitingForServiceDownload: Song? = null
+    private var waitingForServiceDownload: DownloadRequest? = null
+    private var downloadQualityDialog: Dialog? = null
     private sealed interface AudioAction {
         data object OpenLibrary : AudioAction
         data object Resume : AudioAction
@@ -329,8 +332,8 @@ class MainActivity : FragmentActivity() {
         restoreDetailLyrics = savedInstanceState?.getBoolean("player-lyrics") == true
         pendingLyricSongId = savedInstanceState?.let { if (it.containsKey("lyricSongId")) it.getLong("lyricSongId") else null }
         pendingLyricSource = savedInstanceState?.getString("lyricSource") ?: "local"
-        savedInstanceState?.getBundle("pendingDownload")?.let { pendingDownload = songFromBundle(it) }
-        savedInstanceState?.getBundle("waitingForServiceDownload")?.let { waitingForServiceDownload = songFromBundle(it) }
+        pendingDownload = savedInstanceState?.getBundle("pendingDownload")?.let(::downloadRequestFromBundle)
+        waitingForServiceDownload = savedInstanceState?.getBundle("waitingForServiceDownload")?.let(::downloadRequestFromBundle)
         waitingForDownloadSettings = savedInstanceState?.getBoolean("waitingForDownloadSettings", false) ?: false
         pendingAudioAction = savedInstanceState?.getBundle("pendingAudioAction")?.let(::audioActionFromBundle)
         pendingSourceExportId = savedInstanceState?.getString("source-export-id")
@@ -396,7 +399,7 @@ class MainActivity : FragmentActivity() {
         super.onPostResume()
         pendingSettingsState?.let { saved -> pendingSettingsState = null; openSettings(state = saved) }
     }
-    override fun onDestroy() { pactDialog?.dismiss(); playerDialog?.dismiss(); playbackSettingsDialog?.dismiss(); syncSettingsDialog?.dismiss(); syncConflictDialog?.dismiss(); scope.cancel(); super.onDestroy() }
+    override fun onDestroy() { pactDialog?.dismiss(); playerDialog?.dismiss(); downloadQualityDialog?.dismiss(); playbackSettingsDialog?.dismiss(); syncSettingsDialog?.dismiss(); syncConflictDialog?.dismiss(); scope.cancel(); super.onDestroy() }
     override fun onSaveInstanceState(outState: Bundle) {
         val page = pageSnapshot()
         retainedPageState.page = page
@@ -409,8 +412,8 @@ class MainActivity : FragmentActivity() {
         outState.putBoolean("player-lyrics", detailShowingLyrics)
         pendingLyricSongId?.let { outState.putLong("lyricSongId", it) }
         outState.putString("lyricSource", pendingLyricSource)
-        pendingDownload?.let { outState.putBundle("pendingDownload", songToBundle(it)) }
-        waitingForServiceDownload?.let { outState.putBundle("waitingForServiceDownload", songToBundle(it)) }
+        pendingDownload?.let { outState.putBundle("pendingDownload", downloadRequestToBundle(it)) }
+        waitingForServiceDownload?.let { outState.putBundle("waitingForServiceDownload", downloadRequestToBundle(it)) }
         pendingAudioAction?.let { outState.putBundle("pendingAudioAction", audioActionToBundle(it)) }
         outState.putBoolean("waitingForAudioSettings", waitingForAudioSettings)
         outState.putBoolean("waitingForDownloadSettings", waitingForDownloadSettings)
@@ -647,7 +650,7 @@ class MainActivity : FragmentActivity() {
                 val location = IntArray(2); getLocationOnScreen(location)
                 val inSearch = ::search.isInitialized && search.visibility == View.VISIBLE &&
                     search.getGlobalVisibleRect(searchBounds) && y + location[1] >= searchBounds.top && y + location[1] <= searchBounds.bottom
-                navigation?.currentDestination?.id !in setOf(R.id.settings_page, R.id.playlist_browser) &&
+                navigation?.currentDestination?.id !in setOf(R.id.settings_page, R.id.playlist_browser, R.id.downloads_page) &&
                     navigationDrawer?.isOpen != true && playlistDrawer?.isOpen != true && chartsFragment()?.isBoardDrawerOpen != true &&
                     preferences.bool("common.homePageScroll", true) && (!::miniBar.isInitialized || y < miniBar.top) && !inSearch
             }
@@ -971,6 +974,7 @@ class MainActivity : FragmentActivity() {
             1 -> openSearchPage(false)
             2 -> showBoards()
             3 -> showOnlinePlaylists()
+            4 -> showDownloads()
         }
     }
     private fun buildPhoneNavigation() = LinearLayout(this).apply {
@@ -1002,6 +1006,7 @@ class MainActivity : FragmentActivity() {
         entry(items, 59659, R.string.layout_songlists, 3) { navigateToPage(3) }
         entry(items, 59658, R.string.ui_1ee95aa94712, 2) { navigateToPage(2) }
         entry(items, 59657, R.string.ui_27c95ec6b766, 0) { navigateToPage(0) }
+        entry(items, 59656, R.string.download_page, 4) { navigateToPage(4) }
         entry(items, 59696, R.string.ui_a9531e47b75d) { openLocalPage(true) }
         entry(items, 59666, R.string.ui_c2dd14825672) { showPlaylists() }
         entry(items, 59655, R.string.settings_title) { showSettings() }
@@ -1029,6 +1034,7 @@ class MainActivity : FragmentActivity() {
         entry(59657, R.string.ui_27c95ec6b766, 0) { navigateToPage(0) }
         entry(59658, R.string.ui_1ee95aa94712, 2) { navigateToPage(2) }
         entry(59659, R.string.ui_259597bf6ca7, 3) { navigateToPage(3) }
+        entry(59656, R.string.download_page, 4) { navigateToPage(4) }
         items.addView(View(this@MainActivity).apply { setBackgroundColor(palette.divider) }, LinearLayout.LayoutParams(-1, dp(1)).apply { setMargins(dp(10), dp(16), dp(10), dp(16)) })
         entry(59696, R.string.ui_a9531e47b75d) { openLocalPage(true) }
         entry(59666, R.string.ui_c2dd14825672) { showPlaylists() }
@@ -1039,7 +1045,7 @@ class MainActivity : FragmentActivity() {
         addView(lx.icon(59680, getString(R.string.ui_e35a36e26d52), 19f) { showNavigation() }, LinearLayout.LayoutParams(-1, dp(48)))
     }
     private fun updateNavigationSelection() {
-        val current = when { navigation?.currentDestination?.id == R.id.playlist_browser -> 3; navigation?.currentDestination?.id == R.id.charts_page -> 2; boardMode -> 2; onlinePlaylistMode -> 3; onlineMode -> 1; else -> 0 }
+        val current = when { navigation?.currentDestination?.id == R.id.downloads_page -> 4; navigation?.currentDestination?.id == R.id.playlist_browser -> 3; navigation?.currentDestination?.id == R.id.charts_page -> 2; boardMode -> 2; onlinePlaylistMode -> 3; onlineMode -> 1; else -> 0 }
         navigationItems.forEach { (page, item) ->
             val selected = current == page
             item.isSelected = selected; item.setTextColor(if (selected) palette.primary else palette.muted)
@@ -1077,9 +1083,11 @@ class MainActivity : FragmentActivity() {
     }
     private fun showNavigationActions() {
         val labels = mutableListOf(getString(R.string.ui_a9531e47b75d), getString(R.string.ui_c2dd14825672), getString(R.string.ui_87a2113eb66f), getString(R.string.ui_1ee95aa94712), getString(R.string.ui_259597bf6ca7), getString(R.string.ui_3158c8d56b7b), getString(R.string.ui_a5cd0a9169e8), getString(R.string.ui_3facd3e00be5), getString(R.string.ui_599818eb56df), getString(R.string.ui_727036c7fc2a), getString(R.string.ui_2a3ec620e12c), getString(R.string.ui_8c38525734c0), getString(R.string.ui_486b54a7b0af), getString(R.string.ui_6e763b71e69c), getString(R.string.ui_f01b6815d826), getString(R.string.ui_cad84b75d661), getString(R.string.ui_426744e26e7e), getString(R.string.ui_ac7aa03a458f), getString(R.string.settings_title), getString(R.string.ui_788db1cfec2a), getString(R.string.ui_4fd38bc4f6d4), getString(R.string.ui_bb1d19b85634))
+        labels.add(getString(R.string.download_page))
         if (preferences.showBack) labels.add(getString(R.string.ui_f75a93326a3c))
         if (preferences.showExit) labels.add(getString(R.string.ui_b0d269c8707c))
         val navigation = AlertDialog.Builder(this).setTitle("LX Music").setItems(labels.toTypedArray()) { _, which ->
+            if (labels[which] == getString(R.string.download_page)) { showDownloads(); return@setItems }
             if (labels[which] == getString(R.string.ui_f75a93326a3c)) { moveTaskToBack(true); return@setItems }
             if (labels[which] == getString(R.string.ui_b0d269c8707c)) {
                 confirmExit()
@@ -1337,6 +1345,17 @@ class MainActivity : FragmentActivity() {
         if (PermissionPolicy.requiresLibraryAccess(this, song) && !hasAudioPermission()) requestAudioAccess(action) else performAudioAction(action)
     }
     internal fun openChartSongActions(song: Song) = showSongActionsFor(song, null)
+    internal fun downloadTableLayout() = uiLayout.contentWidth >= 620
+    internal fun searchDownloadedSong(song: Song) {
+        openSearchPage(false)
+        searchTerm(listOf(song.title, song.artist).filter { it.isNotBlank() }.joinToString(" "))
+    }
+    private fun showDownloads() {
+        val nav = navigation ?: return
+        if (supportFragmentManager.isStateSaved || nav.currentDestination?.id == R.id.downloads_page) return
+        hidePageKeyboard()
+        if (!nav.popBackStack(R.id.downloads_page, false)) nav.navigate(R.id.downloads_page)
+    }
     private fun hidePageKeyboard() {
         (getSystemService(INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager).hideSoftInputFromWindow(currentFocus?.windowToken, 0)
         navigationDrawer?.close(false)
@@ -2195,7 +2214,7 @@ class MainActivity : FragmentActivity() {
                     addCategory(Intent.CATEGORY_OPENABLE); type = "*/*"
                 }, REQUEST_LYRIC)
             }
-            getString(R.string.ui_9be60bb7ddeb) -> requestDownload(song)
+            getString(R.string.ui_9be60bb7ddeb) -> chooseDownloadQuality(song)
             getString(R.string.ui_44c2c89152c7) -> if (selected != null) {
                 scope.launch {
                     try { playlists.remove(selected.id, song); if (activePlaylist?.id == selected.id) loadPlaylist(selected) }
@@ -2206,12 +2225,21 @@ class MainActivity : FragmentActivity() {
             }
         }.show()
     }
-    private fun requestDownload(song: Song) {
+    private fun chooseDownloadQuality(song: Song) {
+        if (downloadQualityDialog?.isShowing == true) return
+        downloadQualityDialog = showDownloadQuality(this, song, palette, lx) { quality -> requestDownload(DownloadRequest(song, quality)) }
+            .apply { setOnDismissListener { if (downloadQualityDialog === this) downloadQualityDialog = null } }
+    }
+    internal fun retryDownload(task: DownloadTask) {
+        val quality = task.quality ?: return
+        requestDownload(DownloadRequest(task.song, quality, task.key))
+    }
+    private fun requestDownload(request: DownloadRequest) {
         val permission = PermissionPolicy.downloadWrite(Build.VERSION.SDK_INT)
         if (permission == null || checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED) {
-            downloadSong(song); return
+            downloadSong(request); return
         }
-        pendingDownload = song
+        pendingDownload = request
         val preferences = getSharedPreferences("permission-history", MODE_PRIVATE)
         if (preferences.getBoolean("download-requested", false) && !shouldShowRequestPermissionRationale(permission)) {
             AlertDialog.Builder(this).setTitle(getString(R.string.ui_ee8644062426))
@@ -2227,13 +2255,19 @@ class MainActivity : FragmentActivity() {
         preferences.edit().putBoolean("download-requested", true).apply()
         requestPermissions(arrayOf(permission), REQUEST_DOWNLOAD)
     }
-    private fun downloadSong(song: Song) {
-        val player = service ?: run { waitingForServiceDownload = song; return }
+    private fun downloadRequestToBundle(request: DownloadRequest) = songToBundle(request.song).apply {
+        putString("download-quality", request.quality); putString("download-retry", request.retryKey)
+    }
+    private fun downloadRequestFromBundle(bundle: Bundle) = DownloadRequest(songFromBundle(bundle),
+        bundle.getString("download-quality") ?: "128k", bundle.getString("download-retry"))
+
+    private fun downloadSong(request: DownloadRequest) {
+        val player = service ?: run { waitingForServiceDownload = request; return }
         scope.launch {
             try {
-                val uri = Uri.parse(player.resolveUrl(song))
-                Downloads(applicationContext).enqueue(song, uri)
-                toast(getString(R.string.ui_6b7ce36f8aa9))
+                if (Downloads(applicationContext).start(request.song, request.quality, request.retryKey, player::resolveDownloadUrl)) {
+                    toast(getString(R.string.ui_6b7ce36f8aa9))
+                }
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) { toast(getString(R.string.ui_42fb22bc6277, java.lang.String.valueOf(e.localizedMessage))) }
         }

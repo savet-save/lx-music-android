@@ -173,22 +173,25 @@ class UserSource(private val context: Context) {
         return withTimeout(20_000) { initialized.await() }
     }
 
-    suspend fun musicUrl(source: String, info: JSONObject, quality: String = "128k"): String {
-        return sourceRequest(source, "musicUrl", info, quality).getJSONObject("data").getString("url")
+    suspend fun musicUrl(source: String, info: JSONObject, quality: String = "128k", exactQuality: Boolean = false): String {
+        return sourceRequest(source, "musicUrl", info, quality, exactQuality).getJSONObject("data").getString("url")
     }
     internal suspend fun supports(source: String, action: String): Boolean = withContext(dispatcher) {
         val actions = sourceInfo.optJSONObject("sources")?.optJSONObject(source)?.optJSONArray("actions") ?: return@withContext false
         (0 until actions.length()).any { actions.optString(it) == action }
     }
-    internal suspend fun sourceRequest(source: String, action: String, info: JSONObject, quality: String = "128k"): JSONObject {
+    internal suspend fun sourceRequest(source: String, action: String, info: JSONObject, quality: String = "128k", exactQuality: Boolean = false): JSONObject {
         val result = withContext(dispatcher) {
             check(runtime != null) { "请先导入并启用自定义音源" }
+            val supported = sourceInfo.optJSONObject("sources")?.optJSONObject(source)?.optJSONArray("qualitys") ?: JSONArray()
+            val available = (0 until supported.length()).map { supported.optString(it) }.toSet()
+            val selectedQuality = if (exactQuality) {
+                check(quality in available || available.isEmpty() && quality == "128k") { "音源不支持所选音质" }
+                quality
+            } else selectQuality(quality, info.optJSONObject("_types") ?: JSONObject(), available)
             val requestKey = UUID.randomUUID().toString()
             val deferred = CompletableDeferred<JSONObject>()
             pending[requestKey] = deferred
-            val supported = sourceInfo.optJSONObject("sources")?.optJSONObject(source)?.optJSONArray("qualitys") ?: JSONArray()
-            val available = (0 until supported.length()).map { supported.optString(it) }.toSet()
-            val selectedQuality = selectQuality(quality, info.optJSONObject("_types") ?: JSONObject(), available)
             val data = JSONObject().put("requestKey", requestKey).put("data", JSONObject().put("source", source)
                 .put("action", action).put("info", JSONObject().put("type", selectedQuality).put("musicInfo", info)))
             try { callJs("request", data.toString()) } catch (e: Exception) { pending.remove(requestKey); deferred.completeExceptionally(e) }

@@ -11,9 +11,12 @@ import cn.toside.music.nativeapp.DownloadTestScheduler
 import cn.toside.music.nativeapp.utils.PermissionPolicy
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.net.InetAddress
@@ -22,6 +25,31 @@ import kotlin.concurrent.thread
 
 @RunWith(AndroidJUnit4::class)
 class DownloadsTest {
+    @Test fun removingTaskWhileResolvingPreventsLateEnqueue() = runBlocking {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val downloads = Downloads(context)
+        val song = Song(-124, Uri.EMPTY, "待解析下载测试", "测试", 0, "kg", "{}")
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val result = async {
+            downloads.start(song, "128k") { _, _ ->
+                entered.complete(Unit); release.await(); "http://127.0.0.1:1/test.mp3"
+            }
+        }
+        try {
+            entered.await()
+            val task = downloads.list().single { it.song == song }
+            assertEquals(DownloadStatus.RESOLVING, task.status)
+            downloads.remove(task)
+            release.complete(Unit)
+            assertFalse(result.await())
+            assertFalse(downloads.list().any { it.song == song })
+        } finally {
+            release.complete(Unit)
+            downloads.list().filter { it.song == song }.forEach { downloads.remove(it) }
+        }
+    }
+
     @Test fun downloadManagerWritesAndCompletes() = runBlocking {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val context = instrumentation.targetContext
@@ -64,6 +92,10 @@ class DownloadsTest {
             assertEquals("DownloadManager status=$status reason=$reason; scheduler: ${scheduler.diagnostics}", DownloadManager.STATUS_SUCCESSFUL, status)
             val contents = ParcelFileDescriptor.AutoCloseInputStream(manager.openDownloadedFile(downloadId)).bufferedReader().use { it.readText() }
             assertEquals("test audio", contents)
+            val restored = Downloads(context).list().single { it.systemId == downloadId }
+            assertEquals(song.title, restored.song.title)
+            assertEquals(DownloadStatus.COMPLETE, restored.status)
+            assertEquals(100, restored.percent)
         } finally {
             id?.let { manager.remove(it) }
             server.close(); worker.join(2_000)

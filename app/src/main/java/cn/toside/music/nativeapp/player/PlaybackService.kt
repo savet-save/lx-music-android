@@ -409,18 +409,22 @@ class PlaybackService : Service() {
             sleepJob = null
         }
     }
-    suspend fun resolveUrl(song: Song): String {
+    suspend fun resolveUrl(song: Song): String = resolveUrl(song, null)
+    internal suspend fun resolveDownloadUrl(song: Song, quality: String): String = resolveUrl(song, quality)
+
+    private suspend fun resolveUrl(song: Song, downloadQuality: String?): String {
         require(song.source != "local") { message(R.string.playback_local_download) }
         val info = song.sourceInfo ?: error(message(R.string.playback_source_missing))
-        val quality = getSharedPreferences("player", MODE_PRIVATE).getString("quality", "128k") ?: "128k"
-        try { return sourceMutex.withLock { userSource.musicUrl(song.source, JSONObject(info), quality) } }
+        val quality = downloadQuality ?: getSharedPreferences("player", MODE_PRIVATE).getString("quality", "128k") ?: "128k"
+        val exact = downloadQuality != null
+        try { return sourceMutex.withLock { userSource.musicUrl(song.source, JSONObject(info), quality, exact) } }
         catch (e: CancellationException) { throw e }
         catch (original: Exception) {
             if (!preferences.bool("player.autoSwitchSource", true) || original.message.orEmpty().contains("429")) throw original
             val supported = sourceMutex.withLock { ExternalLinks.sources.filter { it != song.source && userSource.supports(it, "musicUrl") } }
             if (supported.isEmpty()) throw original
             for (alternative in matcher.find(song).filter { it.source in supported }) {
-                try { return sourceMutex.withLock { userSource.musicUrl(alternative.source, JSONObject(alternative.sourceInfo!!), quality) } }
+                try { return sourceMutex.withLock { userSource.musicUrl(alternative.source, JSONObject(alternative.sourceInfo!!), quality, exact) } }
                 catch (e: CancellationException) { throw e }
                 catch (_: Exception) { }
             }
