@@ -17,15 +17,15 @@ import android.widget.TextView
 import kotlin.math.ceil
 import kotlin.math.roundToInt
 
-/** An anchored, scrollable provider menu, shared by search, playlists and charts. */
-internal class PlatformPopup {
+/** An anchored, scrollable menu with an optional selection and disabled rows. */
+internal class PlatformPopup(private val tagPrefix: String = "platform", private val outlined: Boolean = false) {
     private var window: PopupWindow? = null
 
     fun dismiss() { window?.dismiss() }
 
     @SuppressLint("RtlHardcoded") // Compare the resolved physical gravity when clamping to window edges.
     fun show(anchor: View, ids: List<String>, labels: List<String>, selected: String,
-             palette: UiPalette, alignEnd: Boolean = false, onSelected: (String) -> Unit) {
+             palette: UiPalette, alignEnd: Boolean = false, disabled: Set<String> = emptySet(), onSelected: (String) -> Unit) {
         dismiss()
         if (!anchor.isAttachedToWindow || !anchor.isShown || ids.isEmpty()) return
         require(ids.size == labels.size)
@@ -52,25 +52,30 @@ internal class PlatformPopup {
         val above = (location[1] - frame.top).coerceAtLeast(0)
         val availableHeight = maxOf(below, above)
         if (frame.isEmpty || availableHeight == 0) return
-        val width = maxOf(dp(88), ceil(labels.maxOf { sample.paint.measureText(it) }).toInt() + dp(28))
+        val labelWidth = ceil(labels.maxOf { sample.paint.measureText(it) }).toInt()
+        val width = maxOf(dp(88), labelWidth + dp(if (outlined) 40 else 28))
             .coerceAtMost(minOf(dp(224), frame.width()).coerceAtLeast(1))
         val popup = PopupWindow(context)
         val list = ListView(context).apply {
-            tag = "platform-menu"; divider = null; isVerticalScrollBarEnabled = false
+            tag = "$tagPrefix-menu"; divider = null; isVerticalScrollBarEnabled = false
             adapter = object : BaseAdapter() {
                 override fun getCount() = ids.size
                 override fun getItem(position: Int) = labels[position]
                 override fun getItemId(position: Int) = position.toLong()
+                override fun areAllItemsEnabled() = disabled.isEmpty()
+                override fun isEnabled(position: Int) = ids[position] !in disabled
                 override fun getView(position: Int, convertView: View?, parent: ViewGroup): View =
                     ((convertView as? TextView) ?: label()).apply {
-                        text = labels[position]; tag = "platform-${ids[position]}"
+                        text = labels[position]; tag = "$tagPrefix-${ids[position]}"
                         isSelected = ids[position] == selected
                         isActivated = ids[position] == selected
-                        setTextColor(if (isActivated) palette.primary else palette.foreground)
+                        this.isEnabled = ids[position] !in disabled
+                        setTextColor(when { !this.isEnabled -> palette.faint; isActivated -> palette.primary; else -> palette.foreground })
                         layoutParams = android.widget.AbsListView.LayoutParams(-1, rowHeight)
                     }
             }
             setOnItemClickListener { _, _, position, _ ->
+                if (ids[position] in disabled) return@setOnItemClickListener
                 popup.dismiss()
                 if (ids[position] != selected) onSelected(ids[position])
             }
@@ -84,7 +89,11 @@ internal class PlatformPopup {
             height = minOf(rowHeight * ids.size, availableHeight, dp(360))
             isFocusable = true; isOutsideTouchable = true; isClippingEnabled = true
             inputMethodMode = PopupWindow.INPUT_METHOD_NOT_NEEDED
-            setBackgroundDrawable(GradientDrawable().apply { setColor(palette.surface); cornerRadius = dp(2).toFloat() })
+            setBackgroundDrawable(GradientDrawable().apply {
+                setColor(palette.surface)
+                cornerRadius = dp(2).toFloat()
+                if (outlined) setStroke(dp(1), palette.divider)
+            })
             elevation = dp(6).toFloat()
             setOnDismissListener {
                 anchor.removeOnAttachStateChangeListener(detach)

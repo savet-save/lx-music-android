@@ -4,6 +4,8 @@
     <string name="playlist_recommended">Recommended</string>
     <string name="playlist_default">Default</string>
     <string name="playlist_favorites">My Favorites</string>
+    <string name="playlist_actions_for">Playlist actions for %1$s</string>
+    <string name="playlist_close_picker">Close playlist picker</string>
     <string name="playlist_open">Open</string>
     <string name="playlist_category">Playlist categories</string>
     <string name="playlist_retry">Retry</string>

@@ -1,6 +1,5 @@
 package cn.toside.music.nativeapp.ui
 
-import cn.toside.music.nativeapp.R
 import cn.toside.music.nativeapp.utils.PermissionPolicy
 
 import android.content.Intent
@@ -8,6 +7,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.SystemClock
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.View
 import android.widget.TextView
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -71,13 +71,13 @@ class PermissionFlowTest {
             preferences.edit().remove("audio-requested").commit()
             val heading = MainActivity::class.java.getDeclaredField("heading").apply { isAccessible = true }.get(activity) as TextView
             instrumentation.runOnMainSync { heading.performClick() }
-            val localLabel = activity.getString(R.string.ui_a9531e47b75d)
             assertTrue("我的歌单应显示固定的本地音乐入口", waitUntil {
-                val root = instrumentation.uiAutomation.rootInActiveWindow ?: return@waitUntil false
-                if (root.findAccessibilityNodeInfosByText(activity.getString(R.string.playlist_favorites)).isEmpty()) return@waitUntil false
-                var item = root.findAccessibilityNodeInfosByText(localLabel).firstOrNull { it.text?.toString() == localLabel }
-                while (item != null && !item.isClickable) item = item.parent
-                item?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true
+                var clicked = false
+                instrumentation.runOnMainSync {
+                    val item = activity.window.decorView.findViewWithTag<View>("playlist-choice-local")
+                    clicked = item?.isShown == true && item.performClick()
+                }
+                clicked
             })
             assertTrue("点击本地音乐后应能拒绝系统权限请求", choosePermission(false))
             assertTrue(waitUntil { status.text.toString().contains("重试") })
