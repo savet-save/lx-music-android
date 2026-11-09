@@ -83,17 +83,15 @@ internal class OnlineComments {
     private suspend fun resolveTx(info: JSONObject): String {
         info.optString("songId").takeIf { it.isNotBlank() && it != "0" }?.let { return it }
         val mid = info.getString("songmid"); resolvedIds["tx:$mid"]?.let { return it }
-        val data = NativeHttp.json("https://u.y.qq.com/cgi-bin/musicu.fcg", JSONObject().put("comm", JSONObject().put("ct", "19").put("cv", "1859").put("uin", "0"))
-            .put("req", JSONObject().put("module", "music.pf_song_detail_svr").put("method", "get_song_detail_yqq")
-                .put("param", JSONObject().put("song_type", 0).put("song_mid", mid))))
-        return data.getJSONObject("req").getJSONObject("data").getJSONObject("track_info").getString("id").also { resolvedIds["tx:$mid"] = it }
+        val track = checkNotNull(OnlineSongDetails.qq(mid)) { "获取歌曲信息失败" }
+        return track.getString("id").also { resolvedIds["tx:$mid"] = it }
     }
     private suspend fun resolveMg(info: JSONObject): String {
         val mid = info.getString("songmid")
         if (mid != info.optString("copyrightId")) return mid
         resolvedIds["mg:$mid"]?.let { return it }
-        val data = NativeHttp.json("https://c.musicapp.migu.cn/MIGUM2.0/v1.0/content/resourceinfo.do?resourceType=2", form = mapOf("resourceId" to mid))
-        return data.getJSONArray("resource").getJSONObject(0).getString("songId").also { resolvedIds["mg:$mid"] = it }
+        val track = checkNotNull(OnlineSongDetails.migu(info)) { "获取歌曲信息失败" }
+        return track.getString("songId").also { resolvedIds["mg:$mid"] = it }
     }
     internal fun parse(source: String, data: JSONObject, hot: Boolean, page: Int, size: Int = 20, reply: Boolean = false): CommentPage {
         val items: JSONArray?; val total: Long

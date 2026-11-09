@@ -1,10 +1,14 @@
 package cn.toside.music.nativeapp.ui
 
+import cn.toside.music.nativeapp.R
 import cn.toside.music.nativeapp.data.AppPreferences
 
-import android.app.AlertDialog
+import android.app.Dialog
 import android.content.Intent
 import android.net.Uri
+import android.widget.Button
+import android.widget.LinearLayout
+import android.widget.ScrollView
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import kotlinx.coroutines.delay
@@ -30,15 +34,32 @@ class PactTest {
         try {
             preferences.set("common.isAgreePact", false); preferences.set("player.startupAutoPlay", false)
             activity = open()
-            val rejected = pact.get(activity) as AlertDialog
+            val rejected = pact.get(activity) as Dialog
             assertTrue(rejected.isShowing); assertNull(service.get(activity)); assertFalse(incoming.getBoolean(activity))
-            assertFalse(rejected.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled)
-            instrumentation.runOnMainSync { rejected.getButton(AlertDialog.BUTTON_NEGATIVE).performClick() }
+            val locked = rejected.findViewById<Button>(R.id.pact_accept_button)
+            val reject = rejected.findViewById<Button>(R.id.pact_reject_button)
+            val scroll = rejected.findViewById<ScrollView>(R.id.pact_scroll)
+            val configuration = activity.resources.configuration
+            val expanded = minOf(configuration.screenWidthDp, configuration.smallestScreenWidthDp) >= 600
+            instrumentation.waitForIdleSync()
+            instrumentation.runOnMainSync {
+                val actions = locked.parent as LinearLayout
+                assertSame(actions, reject.parent)
+                assertEquals(if (expanded) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL, actions.orientation)
+                assertTrue(scroll.canScrollVertically(1))
+                assertTrue(scroll.bottom <= actions.top)
+                assertFalse(locked.isEnabled)
+                locked.performClick()
+                assertTrue(rejected.isShowing)
+                assertFalse(preferences.bool("common.isAgreePact"))
+                reject.performClick()
+            }
             withTimeout(5000) { while (!activity!!.isDestroyed) delay(50) }
             assertFalse(preferences.bool("common.isAgreePact"))
-            activity = open(); val accepting = pact.get(activity) as AlertDialog
-            withTimeout(25_000) { while (!accepting.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled) delay(50) }
-            instrumentation.runOnMainSync { accepting.getButton(AlertDialog.BUTTON_POSITIVE).performClick() }
+            activity = open(); val accepting = pact.get(activity) as Dialog
+            val accept = accepting.findViewById<Button>(R.id.pact_accept_button)
+            withTimeout(25_000) { while (!accept.isEnabled) delay(50) }
+            instrumentation.runOnMainSync { accept.performClick() }
             withTimeout(10_000) { while (service.get(activity) == null || !incoming.getBoolean(activity)) delay(50) }
             assertTrue(preferences.bool("common.isAgreePact")); assertFalse(accepting.isShowing)
             val monitor = instrumentation.addMonitor(MainActivity::class.java.name, null, false)

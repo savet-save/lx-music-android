@@ -1,11 +1,13 @@
 package cn.toside.music.nativeapp.data
 
+import cn.toside.music.nativeapp.online.OnlineArtwork
 import cn.toside.music.nativeapp.utils.readBounded
 
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -19,12 +21,21 @@ import kotlinx.coroutines.sync.withLock
 
 class Artwork(private val context: Context) {
     suspend fun load(song: Song): Bitmap? = withContext(Dispatchers.IO) {
-        if (song.source != "local") return@withContext loadUrl(JSONObject(song.sourceInfo ?: return@withContext null).optString("img"))
-        val bytes = run {
+        if (song.source != "local") {
+            val info = JSONObject(song.sourceInfo ?: return@withContext null)
+            val stored = info.optString("img")
+            val bitmap = try { loadUrl(stored) }
+            catch (e: CancellationException) { throw e }
+            catch (_: Exception) { null }
+            if (bitmap != null) return@withContext bitmap
+            val resolved = OnlineArtwork.url(song, info)
+            return@withContext if (resolved != stored) loadUrl(resolved) else null
+        }
+        val bytes = runCatching {
             val retriever = MediaMetadataRetriever()
             try { retriever.setDataSource(context, song.uri); retriever.embeddedPicture }
             finally { retriever.release() }
-        } ?: runCatching { LocalTags.read(context, song).artwork }.getOrNull() ?: return@withContext null
+        }.getOrNull() ?: runCatching { LocalTags.read(context, song).artwork }.getOrNull() ?: return@withContext null
         decode(bytes)
     }
     private fun decode(bytes: ByteArray): Bitmap? {
@@ -35,7 +46,8 @@ class Artwork(private val context: Context) {
         while (bounds.outWidth / sample > 512 || bounds.outHeight / sample > 512) sample *= 2
         return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample })
     }
-    internal suspend fun loadUrl(url: String): Bitmap? = withContext(Dispatchers.IO) {
+    internal suspend fun loadUrl(value: String): Bitmap? = withContext(Dispatchers.IO) {
+        val url = value.trim().let { if (it.startsWith("//")) "https:$it" else it }
         if (!url.startsWith("https://") && !url.startsWith("http://")) return@withContext null
         locks[(url.hashCode() and Int.MAX_VALUE) % locks.size].withLock {
             val file = AtomicFile(cacheFile(url))

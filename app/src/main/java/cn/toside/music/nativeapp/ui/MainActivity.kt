@@ -148,7 +148,7 @@ class MainActivity : FragmentActivity() {
     private var sourceUpdateJob: Job? = null
     private var sourceUpdateDialog: AlertDialog? = null
     private var pendingSourceExportId: String? = null
-    private var pactDialog: AlertDialog? = null
+    private var pactDialog: Dialog? = null
     private lateinit var preferences: AppPreferences
     private lateinit var palette: UiPalette
     private lateinit var uiLayout: AdaptiveLayout

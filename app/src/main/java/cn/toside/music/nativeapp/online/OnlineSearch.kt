@@ -166,8 +166,9 @@ class OnlineSearch {
                 val info = JSONObject().put("name", title).put("singer", singer).put("source", "mg").put("songmid", id)
                     .put("copyrightId", copyright).put("albumName", item.optString("album")).put("albumId", item.opt("albumId") ?: "")
                     .put("interval", "%02d:%02d".format(duration / 60, duration % 60))
-                    .put("img", item.optString("img3", item.optString("img2", item.optString("img1"))))
-                    .put("lrcUrl", item.optString("lrcUrl")).put("mrcUrl", item.optString("mrcurl")).put("trcUrl", item.optString("trcUrl"))
+                    .put("img", playlistCover(item.optString("img3"), item.optString("img2"), item.optString("img1")))
+                    .put("lrcUrl", item.optString("lrcUrl")).put("mrcUrl", item.optString("mrcUrl").takeUnless { it.isBlank() || it == "null" }
+                        ?: item.optString("mrcurl")).put("trcUrl", item.optString("trcUrl"))
                     .put("types", types).put("_types", typeMap).put("typeUrl", JSONObject())
                 add(Song(id.toLongOrNull() ?: id.hashCode().toLong(), Uri.EMPTY, title, singer, duration * 1000, "mg", info.toString()))
             }

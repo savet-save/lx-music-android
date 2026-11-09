@@ -1,14 +1,22 @@
 package cn.toside.music.nativeapp.online
 
+import cn.toside.music.nativeapp.data.Song
 import cn.toside.music.nativeapp.lyrics.LrcParser
 import cn.toside.music.nativeapp.lyrics.QrcCipher
 
+import android.net.Uri
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import kotlinx.coroutines.runBlocking
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.ByteArrayOutputStream
+import java.io.IOException
+import java.net.InetAddress
+import java.net.ServerSocket
 import java.util.zip.DeflaterOutputStream
+import kotlin.concurrent.thread
 
 @RunWith(AndroidJUnit4::class)
 class OnlineLyricsTest {
@@ -46,5 +54,34 @@ class OnlineLyricsTest {
         val lines = OnlineLyrics().parseQrc(OnlineLyrics().decodeQrc(hex))
         assertEquals(listOf(1200L, 2500L), lines.map { it.timeMs })
         assertEquals(listOf("Hello world", "Next"), lines.map { it.text })
+    }
+    @Test fun miguFallsBackToLineLyricsWhenWordLyricsAreInvalid() = runBlocking {
+        ServerSocket(0, 2, InetAddress.getByName("127.0.0.1")).use { server ->
+            val worker = thread(isDaemon = true) {
+                try {
+                    repeat(2) {
+                        server.accept().use { client ->
+                            client.soTimeout = 5000
+                            val reader = client.getInputStream().bufferedReader()
+                            val request = reader.readLine().orEmpty()
+                            while (!reader.readLine().isNullOrEmpty()) { }
+                            val body = if (request.startsWith("GET /word.mrc ")) "invalid MRC" else "[00:01.25]示例歌词"
+                            val bytes = body.toByteArray(Charsets.UTF_8)
+                            client.getOutputStream().apply {
+                                write("HTTP/1.1 200 OK\r\nContent-Length: ${bytes.size}\r\nConnection: close\r\n\r\n".toByteArray())
+                                write(bytes)
+                            }
+                        }
+                    }
+                } catch (_: IOException) { /* Test teardown closes the listener. */ }
+            }
+            val base = "http://127.0.0.1:${server.localPort}"
+            val info = JSONObject().put("mrcUrl", "$base/word.mrc").put("lrcUrl", "$base/line.lrc")
+            val song = Song(1, Uri.EMPTY, "Song", "Singer", 5000, "mg", info.toString())
+            val line = OnlineLyrics().forSong(song).single()
+            worker.join(1000)
+            assertEquals(1250L, line.timeMs)
+            assertEquals("示例歌词", line.text)
+        }
     }
 }
