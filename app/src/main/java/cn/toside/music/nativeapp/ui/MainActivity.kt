@@ -345,7 +345,7 @@ class MainActivity : FragmentActivity() {
         if (bound) return
         bound = bindService(Intent(this, PlaybackService::class.java), connection, Context.BIND_AUTO_CREATE)
         syncBound = bindService(Intent(this, SyncService::class.java), syncConnection, Context.BIND_AUTO_CREATE)
-        playlistChangesJob = scope.launch { playlists.changes.onStart { emit(Unit) }.collect { refreshSynchronizedPlaylist() } }
+        playlistChangesJob = scope.launch { playlists.changes.onStart { emit(Unit) }.collectLatest { refreshSynchronizedPlaylist() } }
         try { SyncService.resumeIfEnabled(this) }
         catch (e: RuntimeException) { toast(getString(R.string.ui_671ad117f5de, java.lang.String.valueOf(e.localizedMessage))) }
         checkNativeUpdatesOnStartup(this, scope)
@@ -438,7 +438,7 @@ class MainActivity : FragmentActivity() {
             updateListAction()
             pageTitle.text = getString(when { boardMode -> R.string.ui_1ee95aa94712; onlinePlaylistMode -> R.string.ui_473e57b72072; onlineMode -> R.string.ui_44ce7ae909bb; else -> R.string.ui_27c95ec6b766 })
             heading.text = when { boardMode -> "›   ${selectedBoard?.name.orEmpty()}"; onlinePlaylistMode -> "›   ${selectedOnlinePlaylist?.name.orEmpty()}"
-                onlineMode -> getString(R.string.ui_e07216a6d505, sourceLabel()); activePlaylist != null -> "›   ${activePlaylist!!.name}"; else -> getString(R.string.ui_33eeaa47c231) }
+                onlineMode -> getString(R.string.ui_e07216a6d505, sourceLabel()); activePlaylist != null -> "›   ${activePlaylist!!.displayName}"; else -> getString(R.string.ui_33eeaa47c231) }
             if (preferences.saveScroll) pendingScroll = retained.first to retained.top
             filterSongs(); loadMore.visibility = if (retained.more) View.VISIBLE else View.GONE
             val empty = if (isCatalogPage && playlistSearchMode) playlistSearchResults.isEmpty() else allSongs.isEmpty()
@@ -979,6 +979,8 @@ class MainActivity : FragmentActivity() {
         entry(items, 59659, R.string.layout_songlists, 3) { navigateToPage(3) }
         entry(items, 59658, R.string.ui_1ee95aa94712, 2) { navigateToPage(2) }
         entry(items, 59657, R.string.ui_27c95ec6b766, 0) { navigateToPage(0) }
+        entry(items, 59696, R.string.ui_a9531e47b75d) { openLocalPage(true) }
+        entry(items, 59666, R.string.ui_c2dd14825672) { showPlaylists() }
         entry(items, 59655, R.string.settings_title) { showSettings() }
         addView(ScrollView(this@MainActivity).apply { isVerticalScrollBarEnabled = false; addView(items) }, LinearLayout.LayoutParams(-1, 0, 1f))
         entry(this, 59680, R.string.ui_38844b135cf7) { showNavigationActions() }
@@ -1097,9 +1099,20 @@ class MainActivity : FragmentActivity() {
     }
     private fun openLocalPage(requestPermission: Boolean) {
         showMusicPage()
+        loadJob?.cancel()
+        if (onlineMode || activePlaylist != null) {
+            allSongs = emptyList()
+            pendingScroll = null
+        }
         onlineMode = false; boardMode = false; onlinePlaylistMode = false; updateListAction(); pageTitle.text = getString(R.string.ui_27c95ec6b766); loadMore.visibility = View.GONE
         activePlaylist = null; heading.text = getString(R.string.ui_33eeaa47c231); search.text.clear(); setSearchVisible(false)
-        if (hasAudioPermission()) loadSongs() else if (requestPermission) requestAudioAccess(AudioAction.OpenLibrary) else showLocalPermissionPrompt()
+        if (hasAudioPermission()) {
+            filterSongs()
+            loadSongs()
+        } else {
+            showLocalPermissionPrompt()
+            if (requestPermission) requestAudioAccess(AudioAction.OpenLibrary)
+        }
     }
     private fun openSearchPage(showTools: Boolean = true) {
         showMusicPage()
@@ -1228,18 +1241,18 @@ class MainActivity : FragmentActivity() {
             .setItems(labels.toTypedArray()) { _, which -> syncService?.choose(request.id, feature.modes[which]) }
             .setOnCancelListener { syncService?.choose(request.id, "cancel") }.show()
     }
-    private fun refreshSynchronizedPlaylist() {
-        scope.launch {
-            val current = activePlaylist ?: return@launch
-            if (onlineMode) return@launch
-            val updated = playlists.list().firstOrNull { it.id == current.id }
-            if (updated == null) {
-                activePlaylist = null; allSongs = emptyList(); visibleSongs = emptyList(); list.adapter = null
-                heading.text = getString(R.string.ui_3cda5816cb6e); status.text = getString(R.string.ui_e48ff968de78)
-            } else {
-                activePlaylist = updated; heading.text = "›   ${updated.name}"
-                allSongs = playlists.songs(updated.id); filterSongs()
-            }
+    private suspend fun refreshSynchronizedPlaylist() {
+        val current = activePlaylist ?: return
+        if (onlineMode) return
+        val updated = playlists.list().firstOrNull { it.id == current.id }
+        val songs = updated?.let { playlists.songs(it.id) }.orEmpty()
+        if (onlineMode || activePlaylist?.id != current.id) return
+        if (updated == null) {
+            activePlaylist = null; allSongs = emptyList(); visibleSongs = emptyList(); list.adapter = null
+            heading.text = getString(R.string.ui_3cda5816cb6e); status.text = getString(R.string.ui_e48ff968de78)
+        } else {
+            activePlaylist = updated; heading.text = "›   ${updated.displayName}"
+            allSongs = songs; filterSongs()
         }
     }
     private fun showPlaybackQuality() {
@@ -1867,12 +1880,15 @@ class MainActivity : FragmentActivity() {
             catch (e: Exception) { status.text = getString(R.string.ui_7ee7cd3a2806, java.lang.String.valueOf(e.localizedMessage)) }
         }
     }
+    private val Playlist.displayName: String
+        get() = if (syncId == "love") getString(R.string.playlist_favorites) else name
+
     private fun loadPlaylist(playlist: Playlist) {
         showMusicPage()
         onlineMode = false; boardMode = false; onlinePlaylistMode = false; updateListAction(); pageTitle.text = getString(R.string.ui_27c95ec6b766)
         loadMore.visibility = View.GONE
         activePlaylist = playlist
-        heading.text = "›   ${playlist.name}"
+        heading.text = "›   ${playlist.displayName}"
         search.text.clear()
         loadJob?.cancel()
         loadJob = scope.launch {
@@ -1884,11 +1900,11 @@ class MainActivity : FragmentActivity() {
     private fun showPlaylists() {
         scope.launch {
             try {
-                val items = playlists.list()
-                val names = listOf(getString(R.string.ui_9e638dd9d71b)) + items.map { it.name }
+                val items = playlists.list().sortedBy { it.syncId != "love" }
+                val names = listOf(getString(R.string.ui_a9531e47b75d)) + items.map { it.displayName }
                 AlertDialog.Builder(this@MainActivity).setTitle(getString(R.string.ui_c2dd14825672))
                     .setItems(names.toTypedArray()) { _, which ->
-                        if (which == 0) createPlaylist()
+                        if (which == 0) openLocalPage(true)
                         else if (!preferences.clickPlaylistPlay) showPlaylistActions(items[which - 1])
                         else {
                             val selected = items[which - 1]; loadPlaylist(selected)
@@ -1903,8 +1919,10 @@ class MainActivity : FragmentActivity() {
                                 catch (e: Exception) { toast(getString(R.string.ui_ef6e30183259, java.lang.String.valueOf(e.localizedMessage))) }
                             }
                         }
-                    }.setNegativeButton(getString(R.string.ui_2cd0f3be8738), null).show()
-            } catch (e: Exception) { toast(getString(R.string.ui_ef6e30183259, java.lang.String.valueOf(e.localizedMessage))) }
+                    }.setNegativeButton(getString(R.string.ui_2cd0f3be8738), null)
+                    .setPositiveButton(getString(R.string.ui_9e638dd9d71b)) { _, _ -> createPlaylist() }.show()
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) { toast(getString(R.string.ui_ef6e30183259, java.lang.String.valueOf(e.localizedMessage))) }
         }
     }
     private fun createPlaylist() {
@@ -1929,7 +1947,7 @@ class MainActivity : FragmentActivity() {
             catch (e: CancellationException) { throw e }
             catch (e: Exception) { toast(getString(R.string.ui_e31d650c716b, java.lang.String.valueOf(e.localizedMessage))) }
         } }
-        AlertDialog.Builder(this).setTitle(playlist.name).setItems(actions.toTypedArray()) { _, which ->
+        AlertDialog.Builder(this).setTitle(playlist.displayName).setItems(actions.toTypedArray()) { _, which ->
             when (actions[which]) {
                 getString(R.string.ui_31448436755a) -> refreshOnlinePlaylist(playlist)
                 getString(R.string.ui_02a61399982d) -> loadPlaylist(playlist)
@@ -1949,7 +1967,7 @@ class MainActivity : FragmentActivity() {
                 }
                 getString(R.string.ui_4e0ca928260e), getString(R.string.ui_0a1d79c26e3b) -> {
                     val deleting = actions[which] == getString(R.string.ui_0a1d79c26e3b)
-                    AlertDialog.Builder(this).setMessage(getString(R.string.ui_88ff633c9cdd, java.lang.String.valueOf(if (deleting) getString(R.string.ui_2f9daa828907) else getString(R.string.ui_1ef3de06b32e)), java.lang.String.valueOf(playlist.name)))
+                    AlertDialog.Builder(this).setMessage(getString(R.string.ui_88ff633c9cdd, java.lang.String.valueOf(if (deleting) getString(R.string.ui_2f9daa828907) else getString(R.string.ui_1ef3de06b32e)), java.lang.String.valueOf(playlist.displayName)))
                         .setNegativeButton(getString(R.string.ui_2cd0f3be8738), null).setPositiveButton(getString(R.string.ui_fac2a67ad878)) { _, _ -> runEdit {
                             if (deleting) {
                                 playlists.delete(playlist.id)
@@ -1987,7 +2005,7 @@ class MainActivity : FragmentActivity() {
                         else -> scope.launch {
                             try {
                                 val targets = playlists.list().filterNot { it.id == sourceList?.id }
-                                AlertDialog.Builder(this@MainActivity).setTitle(actions[action]).setItems(targets.map { it.name }.toTypedArray()) { _, index -> scope.launch {
+                                AlertDialog.Builder(this@MainActivity).setTitle(actions[action]).setItems(targets.map { it.displayName }.toTypedArray()) { _, index -> scope.launch {
                                     try {
                                         playlists.batchSongs(songs, sourceList?.id, targets[index].id, actions[action] == getString(R.string.ui_2b96f6a6a976))
                                         toast(getString(R.string.ui_158871d8b201))
@@ -2074,7 +2092,7 @@ class MainActivity : FragmentActivity() {
             getString(R.string.ui_2b96f6a6a976) -> if (selected != null) scope.launch {
                 try {
                 val targets = playlists.list().filterNot { it.id == selected.id }
-                AlertDialog.Builder(this@MainActivity).setTitle(getString(R.string.ui_2b96f6a6a976)).setItems(targets.map { it.name }.toTypedArray()) { _, target -> scope.launch {
+                AlertDialog.Builder(this@MainActivity).setTitle(getString(R.string.ui_2b96f6a6a976)).setItems(targets.map { it.displayName }.toTypedArray()) { _, target -> scope.launch {
                     try { playlists.moveSong(selected.id, targets[target].id, song) }
                     catch (e: CancellationException) { throw e }
                     catch (e: Exception) { toast(getString(R.string.ui_9706d4890951, java.lang.String.valueOf(e.localizedMessage))) }
@@ -2296,7 +2314,7 @@ class MainActivity : FragmentActivity() {
                 val items = playlists.list()
                 if (items.isEmpty()) { toast(getString(R.string.ui_bf12c5906f59)); return@launch }
                 AlertDialog.Builder(this@MainActivity).setTitle(getString(R.string.ui_cc143006b20d))
-                    .setItems(items.map { it.name }.toTypedArray()) { _, which ->
+                    .setItems(items.map { it.displayName }.toTypedArray()) { _, which ->
                         scope.launch {
                             try { toast(if (playlists.add(items[which].id, song)) getString(R.string.ui_889839915c3f) else getString(R.string.ui_54a28a424697)) }
                             catch (e: Exception) { toast(getString(R.string.ui_3350538a51ed, java.lang.String.valueOf(e.localizedMessage))) }

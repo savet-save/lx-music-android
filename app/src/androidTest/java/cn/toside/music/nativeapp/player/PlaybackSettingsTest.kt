@@ -390,6 +390,34 @@ class PlaybackSettingsTest {
                 waitFor { fixture.player.state.value.playing }
                 assertNull(fixture.player.state.value.error)
                 waitFor { fixture.player.artworkState.value.bitmap != null }
+
+                val activity = fixture.activity
+                val heading = field(activity, "heading") as TextView
+                fun selectPage(tag: String) = main { activity.window.decorView.findViewWithTag<View>(tag).performClick() }
+                fun dialogLabel(label: String) = instrumentation.uiAutomation.rootInActiveWindow
+                    ?.findAccessibilityNodeInfosByText(label)?.firstOrNull { it.text?.toString() == label }
+                fun clickDialogLabel(label: String) {
+                    var row = dialogLabel(label)
+                    while (row != null && !row.isClickable) row = row.parent
+                    assertTrue(row?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true)
+                }
+                selectPage("navigation-1")
+                assertEquals(true, field(activity, "onlineMode"))
+                selectPage("navigation-0")
+                assertEquals(activity.getString(R.string.ui_33eeaa47c231), heading.text.toString())
+                assertTrue((field(activity, "visibleSongs") as List<*>).all { (it as Song).source == "local" })
+                main { heading.performClick() }
+                val favorites = activity.getString(R.string.playlist_favorites)
+                waitFor { dialogLabel(favorites) != null }
+                assertNotNull(dialogLabel(activity.getString(R.string.ui_a9531e47b75d)))
+                clickDialogLabel(favorites)
+                val open = activity.getString(R.string.ui_02a61399982d)
+                waitFor { dialogLabel(open) != null }
+                assertNull(dialogLabel(activity.getString(R.string.ui_0a1d79c26e3b)))
+                clickDialogLabel(open)
+                waitFor { (field(activity, "activePlaylist") as? Playlist)?.syncId == "love" }
+                assertEquals(song, fixture.player.state.value.song)
+                assertTrue(fixture.player.state.value.playing)
             }
         } finally {
             allowCover.countDown(); server.close(); worker.join(1000)

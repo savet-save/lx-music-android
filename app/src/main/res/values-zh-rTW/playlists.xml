@@ -3,6 +3,7 @@
     <string name="playlist_hot">最熱</string>
     <string name="playlist_recommended">推薦</string>
     <string name="playlist_default">預設</string>
+    <string name="playlist_favorites">我的收藏</string>
     <string name="playlist_open">開啟</string>
     <string name="playlist_category">歌單分類</string>
     <string name="playlist_retry">重試</string>
