@@ -100,20 +100,26 @@ class SongInteractionsTest {
             waitFor("activity focus and playback service") { activity.hasWindowFocus() && activity.settingsPlayer() != null }
             val player = requireNotNull(activity.settingsPlayer())
             val density = activity.resources.displayMetrics.density
+            val resizeForPhoneLayout = activity.resources.configuration.screenWidthDp >= 600
             main {
-                field("uiLayout").set(activity, AdaptiveLayout(390, 740))
-                activity.window.setLayout((390 * density).toInt(), (740 * density).toInt())
-                invoke(activity, "applyThemeInPlace")
+                if (resizeForPhoneLayout) {
+                    field("uiLayout").set(activity, AdaptiveLayout(390, 740))
+                    activity.window.setLayout((390 * density).toInt(), (740 * density).toInt())
+                    invoke(activity, "applyThemeInPlace")
+                }
                 MainActivity::class.java.getDeclaredMethod("loadPlaylist", Playlist::class.java).apply { isAccessible = true }
                     .invoke(activity, playlist)
                 player.play(listOf(songs[0].copy(id = baseId - 1)), 0)
             }
             val list = field("list").get(activity) as ListView
-            waitFor("playlist rows") { list.childCount == songs.size }
+            waitFor("playlist rows and previous playback") { list.childCount == songs.size && player.state.value.playing }
             main { (field("search").get(activity) as EditText).setText("Beta") }
             waitFor("filtered song") { list.count == 1 && (list.getChildAt(0)?.width ?: 0) > 0 }
-            val row = list.getChildAt(0) as ViewGroup
-            tap(row.getChildAt(row.childCount - 1))
+            main {
+                val row = list.getChildAt(0) as ViewGroup
+                val anchor = row.getChildAt(row.childCount - 1)
+                assertTrue(anchor.isShown && anchor.performClick())
+            }
             fun popup() = WindowInspector.getGlobalWindowViews().firstNotNullOfOrNull {
                 it.findViewWithTag<ListView>("song-actions-menu")?.takeIf(View::isShown)
             }
@@ -124,7 +130,7 @@ class SongInteractionsTest {
                 assertEquals(baseId - 1, player.state.value.song?.id)
             }
             instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
-            waitFor("menu to close") { popup() == null }
+            waitFor("menu to close and list to regain focus") { popup() == null && activity.hasWindowFocus() }
             tap(list.getChildAt(0), .3f)
             waitFor("filtered row to play with the full list") {
                 player.state.value.song?.id == songs[1].id && player.state.value.playing &&
@@ -134,11 +140,13 @@ class SongInteractionsTest {
                 player.pause()
                 player.seekTo(12000)
                 invoke(activity, "showPlayerDetails")
-                (field("playerDialog").get(activity) as Dialog).window?.setLayout((390 * density).toInt(), (740 * density).toInt())
+                if (resizeForPhoneLayout) {
+                    (field("playerDialog").get(activity) as Dialog).window?.setLayout((390 * density).toInt(), (740 * density).toInt())
+                }
             }
             val cover = field("detailCover").get(activity) as View
             val lyrics = field("detailScroll").get(activity) as PlayerLyricScroll
-            waitFor("cover and synced lyrics") { cover.isShown && cover.width > 0 && lyrics.lines.childCount == 11 }
+            waitFor("cover and synced lyrics") { cover.hasWindowFocus() && cover.isShown && cover.width > 0 && lyrics.lines.childCount == 11 }
             tap(cover)
             waitFor("lyrics centered at the playback position") { lyrics.isShown && lyrics.scrollY > 100 * density }
 

@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import java.io.Closeable
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.Locale
@@ -28,7 +29,7 @@ private data class LocalSongRow(val song: Song, val raw: String?)
 private data class SyncList(val id: String, val name: String, val metadata: JSONObject?, val songs: List<SyncSong>)
 
 /** Persistent playlists are separate from the platform media library. */
-class Playlists(context: Context, name: String = "playlists.db") : SQLiteOpenHelper(context, name, null, 6) {
+class Playlists(context: Context, name: String = "playlists.db") : SQLiteOpenHelper(context, name, null, 6), Closeable {
     private val preferences = AppPreferences(context)
     private class Signals {
         val outgoing = MutableSharedFlow<Unit>(extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
