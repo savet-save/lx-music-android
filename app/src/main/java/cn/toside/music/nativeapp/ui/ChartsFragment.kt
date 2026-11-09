@@ -231,7 +231,13 @@ class ChartsFragment : Fragment() {
             subtitle.addView(quality, LayoutParams(-2, -2).apply { marginEnd = dp(5) }); subtitle.addView(artist, LayoutParams(0, -2, 1f))
             info.addView(subtitle); addView(info, LayoutParams(0, -2, 1f))
             addView(duration, LayoutParams(dp(44), -2))
-            addView(styles.icon(59667, getString(R.string.ui_507e04d42f14), 16f) { current?.let { (requireActivity() as MainActivity).openChartSongActions(it) } }.apply { isFocusable = false }, LayoutParams(dp(40), dp(44)))
+            addView(styles.icon(59667, getString(R.string.ui_507e04d42f14), 16f) {}.apply {
+                isFocusable = false
+                setOnClickListener { anchor ->
+                    val songs = model.state.value.songs
+                    (requireActivity() as MainActivity).openChartSongActions(anchor, songs, songs.indexOf(current))
+                }
+            }, LayoutParams(dp(40), dp(44)))
             palette.textStyle(this)
         }
         fun bind(song: Song, position: Int) {

@@ -100,13 +100,16 @@ class DownloadsPageTest {
             waitFor("playback service and Activity focus") { activity.settingsPlayer() != null && activity.hasWindowFocus() }
             val player = requireNotNull(activity.settingsPlayer())
             player.importSource(source("Download failure fixture", "return Promise.reject(new Error('temporary failure'))"))
-            main { activity.openChartSongActions(song) }
+            main {
+                val bar = MainActivity::class.java.getDeclaredField("miniBar").apply { isAccessible = true }.get(activity) as ViewGroup
+                activity.openChartSongActions(bar.getChildAt(0), listOf(song), 0)
+            }
             val downloadLabel = activity.getString(R.string.ui_9be60bb7ddeb)
             waitFor("song menu download action") {
                 var clicked = false
                 main {
                     val menu = WindowInspector.getGlobalWindowViews().asSequence().flatMap(::descendants).filterIsInstance<ListView>()
-                        .firstOrNull { list -> list.isShown && (0 until list.count).any { list.adapter.getItem(it).toString() == downloadLabel } }
+                        .firstOrNull { list -> list.tag == "song-actions-menu" && list.isShown }
                         ?: return@main
                     val position = (0 until menu.count).first { menu.adapter.getItem(it).toString() == downloadLabel }
                     val row = menu.getChildAt(position - menu.firstVisiblePosition)

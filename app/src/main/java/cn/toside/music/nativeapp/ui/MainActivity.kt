@@ -161,6 +161,7 @@ class MainActivity : FragmentActivity() {
     private var playlistPicker: PlaylistPicker? = null
     private var playlistPickerJob: Job? = null
     private val playlistActionsPopup = PlatformPopup("playlist-actions", outlined = true)
+    private val songActionsPopup = PlatformPopup("song-actions", outlined = true)
     private val playlistDrawerBack = object : OnBackPressedCallback(false) {
         override fun handleOnBackPressed() { playlistDrawer?.close() }
     }
@@ -244,8 +245,7 @@ class MainActivity : FragmentActivity() {
     private var detailSeek: SeekBar? = null
     private var detailToggle: TextView? = null
     private var detailMode: TextView? = null
-    private var detailLyrics: LinearLayout? = null
-    private var detailScroll: ScrollView? = null
+    private var detailScroll: PlayerLyricScroll? = null
     private var detailCover: FrameLayout? = null
     private var detailCoverImage: ImageView? = null
     private var detailPageToggle: TextView? = null
@@ -365,7 +365,7 @@ class MainActivity : FragmentActivity() {
         checkNativeUpdatesOnStartup(this, scope)
     }
     override fun onStop() {
-        platformPopup.dismiss(); playlistActionsPopup.dismiss()
+        platformPopup.dismiss(); playlistActionsPopup.dismiss(); songActionsPopup.dismiss()
         playbackSettingsDialog?.dismiss()
         stateJob?.cancel()
         lyricJob?.cancel()
@@ -855,13 +855,12 @@ class MainActivity : FragmentActivity() {
                 return@setOnItemClickListener
             }
             val song = visibleSongs.getOrNull(position) ?: return@setOnItemClickListener
-            if (PermissionPolicy.requiresLibraryAccess(this, song) && !hasAudioPermission()) requestAudioAccess(AudioAction.Play(visibleSongs.toList(), position))
-            else performAudioAction(AudioAction.Play(visibleSongs.toList(), position))
+            playListedSong(song)
         }
-        list.setOnItemLongClickListener { _, _, position, _ ->
+        list.setOnItemLongClickListener { _, row, position, _ ->
             if (isCatalogPage && playlistSearchMode) return@setOnItemLongClickListener false
             val song = visibleSongs.getOrNull(position) ?: return@setOnItemLongClickListener false
-            showSongActions(song)
+            showSongActions(row, song)
             true
         }
         seek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
@@ -1344,7 +1343,13 @@ class MainActivity : FragmentActivity() {
         val action = AudioAction.Play(songs.toList(), position)
         if (PermissionPolicy.requiresLibraryAccess(this, song) && !hasAudioPermission()) requestAudioAccess(action) else performAudioAction(action)
     }
-    internal fun openChartSongActions(song: Song) = showSongActionsFor(song, null)
+    internal fun openChartSongActions(anchor: View, songs: List<Song>, position: Int) {
+        val song = songs.getOrNull(position) ?: return
+        showSongActionsFor(anchor, song, null) { playPageSongs(songs, position) }
+    }
+    private fun playListedSong(song: Song) {
+        playPageSongs(allSongs, allSongs.indexOf(song))
+    }
     internal fun downloadTableLayout() = uiLayout.contentWidth >= 620
     internal fun searchDownloadedSong(song: Song) {
         openSearchPage(false)
@@ -1664,13 +1669,23 @@ class MainActivity : FragmentActivity() {
             content.addView(splitBody, LinearLayout.LayoutParams(-1, 0, 1f))
             splitBody.addView(playerArea, LinearLayout.LayoutParams(0, -1, .45f))
         }
-        val scroll = ScrollView(this).apply { isVerticalScrollBarEnabled = false; isFillViewport = true }
-        val lyricContainer = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL
-            setPadding(dp(24), dp(80), dp(24), dp(80))
+        val scroll = PlayerLyricScroll(this, lx.selected, {
+            service?.state?.value?.let(::renderDetailTime)
+        }, { index ->
+            val player = service
+            val line = lyricLines.getOrNull(index)
+            if (player != null && line != null && !player.state.value.preparing) {
+                player.seekTo(LyricTiming.seekPosition(line.timeMs, lyricDelayMs, player.state.value.duration))
+                detailScroll?.follow(index)
+            } else detailScroll?.follow(detailActiveLine.coerceAtLeast(0))
+        }).apply {
+            lines.setPadding(dp(24), 0, dp(24), 0)
+            if (splitBody == null) {
+                contentDescription = getString(R.string.ui_ccbb5ee62b1a)
+                setOnClickListener { toggleDetailPage() }
+            }
         }
-        detailLyrics = lyricContainer; detailScroll = scroll
-        scroll.addView(lyricContainer, FrameLayout.LayoutParams(-1, -2))
+        detailScroll = scroll
         val page = FrameLayout(this)
         detailCover = AlbumCoverLayout(this).apply { setOnClickListener { if (!uiLayout.splitPlayer) toggleDetailPage() } }
         val coverSize = dp(240)
@@ -1732,7 +1747,7 @@ class MainActivity : FragmentActivity() {
         dialog.window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(palette.surface))
         dialog.setOnDismissListener {
             playerDialog = null; detailTitle = null; detailTime = null; detailSeek = null; detailToggle = null; detailMode = null
-            detailLyrics = null; detailScroll = null; detailCover = null; detailCoverImage = null; detailPageToggle = null
+            detailScroll = null; detailCover = null; detailCoverImage = null; detailPageToggle = null
             detailRenderedLines = null; detailActiveLine = -1; detailSeeking = false
         }
         dialog.show()
@@ -1744,6 +1759,7 @@ class MainActivity : FragmentActivity() {
     private fun toggleDetailPage() {
         if (uiLayout.splitPlayer) return
         detailShowingLyrics = !detailShowingLyrics
+        detailScroll?.cancelPreview()
         detailCover?.visibility = if (detailShowingLyrics) View.GONE else View.VISIBLE
         detailScroll?.visibility = if (detailShowingLyrics) View.VISIBLE else View.GONE
         detailPageToggle?.text = if (detailShowingLyrics) getString(R.string.ui_ccbb5ee62b1a) else getString(R.string.ui_9dbfa9b42bb3)
@@ -1769,10 +1785,16 @@ class MainActivity : FragmentActivity() {
                 }
             }.show()
     }
+    private fun renderDetailTime(state: PlayerState) {
+        val preview = detailScroll?.previewIndex?.let(lyricLines::getOrNull)
+        val position = preview?.let { LyricTiming.seekPosition(it.timeMs, lyricDelayMs, state.duration) } ?: state.position
+        detailTime?.text = "${formatTime(position)} / ${formatTime(state.duration)}"
+    }
+
     private fun renderDetails(state: PlayerState) {
         if (playerDialog?.isShowing != true) return
         detailTitle?.text = state.song?.let { "${it.title}  ·  ${it.artist}" } ?: getString(R.string.ui_f518674b61f6)
-        detailTime?.text = "${formatTime(state.position)} / ${formatTime(state.duration)}"
+        renderDetailTime(state)
         detailSeek?.apply { max = state.duration.coerceAtLeast(0); if (!detailSeeking) progress = state.position }
         detailToggle?.apply {
             text = (if (state.playing) 59661 else 59653).toChar().toString()
@@ -1780,8 +1802,12 @@ class MainActivity : FragmentActivity() {
             isEnabled = state.song != null && !state.preparing
         }
         detailMode?.text = state.mode.localized(this)
-        val container = detailLyrics ?: return
-        if (detailRenderedLines !== lyricLines) {
+        val scroll = detailScroll ?: return
+        val container = scroll.lines
+        val newLyrics = detailRenderedLines !== lyricLines
+        if (newLyrics) {
+            scroll.cancelPreview()
+            scroll.scrollTo(0, 0)
             detailRenderedLines = lyricLines; detailActiveLine = -1; container.removeAllViews()
             if (lyricLines.isEmpty()) {
                 container.addView(TextView(this).apply { text = getString(R.string.ui_0245e1b77ac5); textSize = 16f; gravity = Gravity.CENTER; setTextColor(palette.faint) })
@@ -1790,22 +1816,18 @@ class MainActivity : FragmentActivity() {
                     text = LyricRendering.text(line, playerSettings).ifBlank { "♪" }; textSize = lyricAppearance.fontSizeSp.toFloat()
                     gravity = when (lyricAppearance.alignment) { LyricAlignment.LEFT -> Gravity.LEFT; LyricAlignment.CENTER -> Gravity.CENTER_HORIZONTAL; LyricAlignment.RIGHT -> Gravity.RIGHT }
                     setTextColor(palette.muted)
-                    setPadding(0, dp(13), 0, dp(13)); setOnClickListener {
-                        service?.let { it.seekTo(LyricTiming.seekPosition(line.timeMs, lyricDelayMs, it.state.value.duration)) }
-                    }
+                    setPadding(0, dp(13), 0, dp(13))
                 }, LinearLayout.LayoutParams(-1, -2))
             }
         }
         val active = LrcParser.indexAt(lyricLines, LyricTiming.lyricPosition(state.position.toLong(), lyricDelayMs))
-        if (active != detailActiveLine) {
+        if (active != detailActiveLine || newLyrics) {
             (container.getChildAt(detailActiveLine) as? TextView)?.let { view ->
                 view.setTextColor(palette.muted)
                 lyricLines.getOrNull(detailActiveLine)?.let { view.text = LyricRendering.text(it, playerSettings) }
             }
-            (container.getChildAt(active) as? TextView)?.apply {
-                setTextColor(palette.primary)
-                detailScroll?.post { detailScroll?.smoothScrollTo(0, (top - (detailScroll?.height ?: 0) / 2).coerceAtLeast(0)) }
-            }
+            (container.getChildAt(active) as? TextView)?.setTextColor(palette.primary)
+            scroll.follow(active.coerceAtLeast(0))
             detailActiveLine = active
         }
         lyricLines.getOrNull(active)?.let { line ->
@@ -2128,29 +2150,58 @@ class MainActivity : FragmentActivity() {
             }.show()
         }
     }
-    private fun showSongActions(song: Song) = showSongActionsFor(song, activePlaylist)
-    private fun showSongActionsFor(song: Song, selected: Playlist?) {
-        val actions = mutableListOf(getString(R.string.ui_cc143006b20d), getString(R.string.ui_792336bc0bbf), getString(R.string.ui_9b3d69ae09ce), getString(R.string.ui_9c2f512b6594), getString(R.string.ui_94ca0a7bf933), getString(R.string.ui_f655b3c8a2b6), getString(R.string.ui_804151aa3e97), getString(R.string.ui_732807e9a807))
-        actions.addAll(listOf(getString(R.string.song_copy_name), getString(R.string.song_source_details)))
-        if (song.source == "local") actions.add(getString(R.string.metadata_edit)) else actions.add(getString(R.string.song_clear_cache))
-        if (selected != null) actions.add(getString(R.string.song_position))
-        if (song.source != "local") actions.addAll(listOf(getString(R.string.ui_9be60bb7ddeb), getString(R.string.ui_07f73642e525)))
-        if (selected != null) actions.addAll(listOf(getString(R.string.ui_44c2c89152c7), getString(R.string.ui_2b96f6a6a976), getString(R.string.ui_de23dedafe75), getString(R.string.ui_d092b4040c1f)))
-        AlertDialog.Builder(this).setTitle(song.title).setItems(actions.toTypedArray()) { _, which ->
-            when (actions[which]) {
-            getString(R.string.metadata_edit) -> startActivityForResult(MetadataActivity.intentFor(this, song), REQUEST_METADATA)
-            getString(R.string.song_copy_name) -> { (getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager).setPrimaryClip(android.content.ClipData.newPlainText(song.title, "${song.title} - ${song.artist}")) }
-            getString(R.string.song_source_details) -> {
+    private fun showSongActions(anchor: View, song: Song) =
+        showSongActionsFor(anchor, song, activePlaylist) { playListedSong(song) }
+
+    private fun showSongActionsFor(anchor: View, song: Song, selected: Playlist?, play: () -> Unit) {
+        val actions = buildList {
+            add(R.string.ui_c3396195e91c)
+            add(R.string.ui_94ca0a7bf933)
+            add(R.string.ui_cc143006b20d)
+            if (selected != null) {
+                add(R.string.ui_2b96f6a6a976)
+                add(R.string.song_position)
+            }
+            add(R.string.ui_732807e9a807)
+            add(R.string.ui_804151aa3e97)
+            add(R.string.song_source_details)
+            if (song.source == "local") add(R.string.metadata_edit) else {
+                add(R.string.song_clear_cache)
+                add(R.string.ui_9be60bb7ddeb)
+                add(R.string.ui_07f73642e525)
+            }
+            add(R.string.ui_9b3d69ae09ce)
+            add(R.string.ui_f655b3c8a2b6)
+            add(R.string.song_copy_name)
+            add(R.string.ui_792336bc0bbf)
+            add(R.string.ui_9c2f512b6594)
+            if (selected != null) {
+                add(R.string.ui_de23dedafe75)
+                add(R.string.ui_d092b4040c1f)
+                add(R.string.ui_44c2c89152c7)
+            }
+        }
+        songActionsPopup.show(anchor, actions.map(Int::toString), actions.map(::getString), "", palette, alignEnd = true) { choice ->
+            runSongAction(choice.toInt(), song, selected, play)
+        }
+    }
+
+    private fun runSongAction(action: Int, song: Song, selected: Playlist?, play: () -> Unit) {
+        when (action) {
+            R.string.ui_c3396195e91c -> play()
+            R.string.metadata_edit -> startActivityForResult(MetadataActivity.intentFor(this, song), REQUEST_METADATA)
+            R.string.song_copy_name -> { (getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager).setPrimaryClip(android.content.ClipData.newPlainText(song.title, "${song.title} - ${song.artist}")) }
+            R.string.song_source_details -> {
                 val text = TextView(this).apply { text = "${song.title}\n${song.artist}\n${song.source}\n${song.uri}\n" + (song.sourceInfo?.let { runCatching { org.json.JSONObject(it).toString(2) }.getOrDefault(it) } ?: ""); setTextIsSelectable(true); setPadding(24, 12, 24, 12) }
                 AlertDialog.Builder(this).setTitle(getString(R.string.song_source_details)).setView(ScrollView(this).apply { addView(text) }).setPositiveButton(android.R.string.ok, null)
                     .apply { SongShare.providerPage(song)?.let { uri -> setNeutralButton(getString(R.string.song_open_provider)) { _, _ -> runCatching { startActivity(Intent(Intent.ACTION_VIEW, uri)) } } } }.show()
             }
-            getString(R.string.song_clear_cache) -> scope.launch {
+            R.string.song_clear_cache -> scope.launch {
                 try { (service ?: error(getString(R.string.ui_7ca47a28e695))).clearSongCache(song); toast(getString(R.string.song_cache_cleared)) }
                 catch (e: CancellationException) { throw e }
                 catch (e: Exception) { toast(e.localizedMessage.orEmpty()) }
             }
-            getString(R.string.song_position) -> if (selected != null) {
+            R.string.song_position -> if (selected != null) {
                 val input = EditText(this).apply { inputType = InputType.TYPE_CLASS_NUMBER; hint = getString(R.string.song_position_hint) }
                 val position = AlertDialog.Builder(this).setTitle(getString(R.string.song_position)).setView(input).setNegativeButton(android.R.string.cancel, null).setPositiveButton(android.R.string.ok, null).create()
                 position.setOnShowListener { position.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
@@ -2163,8 +2214,8 @@ class MainActivity : FragmentActivity() {
                     }
                 } }; position.show()
             }
-            getString(R.string.ui_804151aa3e97) -> runCatching { SongShare.share(this, song) }.onFailure { toast(getString(R.string.ui_72b5f22035d2, java.lang.String.valueOf(it.localizedMessage))) }
-            getString(R.string.ui_732807e9a807) -> scope.launch {
+            R.string.ui_804151aa3e97 -> runCatching { SongShare.share(this, song) }.onFailure { toast(getString(R.string.ui_72b5f22035d2, java.lang.String.valueOf(it.localizedMessage))) }
+            R.string.ui_732807e9a807 -> scope.launch {
                 try {
                     toast(getString(R.string.ui_d2678cc07f14))
                     val songs = service?.otherSources(song).orEmpty()
@@ -2177,12 +2228,12 @@ class MainActivity : FragmentActivity() {
                 } catch (e: CancellationException) { throw e }
                 catch (e: Exception) { toast(getString(R.string.ui_f6baa7a2ba08, java.lang.String.valueOf(e.localizedMessage))) }
             }
-            getString(R.string.ui_07f73642e525) -> showComments(this, scope, song)
-            getString(R.string.ui_9b3d69ae09ce) -> showDislikeChoices(song)
-            getString(R.string.ui_94ca0a7bf933), getString(R.string.ui_f655b3c8a2b6) -> {
-                service?.enqueue(listOf(song), actions[which] == getString(R.string.ui_94ca0a7bf933)); toast(getString(R.string.ui_51a4e2f9dea0))
+            R.string.ui_07f73642e525 -> showComments(this, scope, song)
+            R.string.ui_9b3d69ae09ce -> showDislikeChoices(song)
+            R.string.ui_94ca0a7bf933, R.string.ui_f655b3c8a2b6 -> {
+                service?.enqueue(listOf(song), action == R.string.ui_94ca0a7bf933); toast(getString(R.string.ui_51a4e2f9dea0))
             }
-            getString(R.string.ui_2b96f6a6a976) -> if (selected != null) scope.launch {
+            R.string.ui_2b96f6a6a976 -> if (selected != null) scope.launch {
                 try {
                 val targets = playlists.list().filterNot { it.id == selected.id }
                 AlertDialog.Builder(this@MainActivity).setTitle(getString(R.string.ui_2b96f6a6a976)).setItems(targets.map { it.displayName }.toTypedArray()) { _, target -> scope.launch {
@@ -2193,20 +2244,20 @@ class MainActivity : FragmentActivity() {
                 } catch (e: CancellationException) { throw e }
                 catch (e: Exception) { toast(getString(R.string.ui_ef6e30183259, java.lang.String.valueOf(e.localizedMessage))) }
             }
-            getString(R.string.ui_de23dedafe75), getString(R.string.ui_d092b4040c1f) -> if (selected != null) scope.launch {
+            R.string.ui_de23dedafe75, R.string.ui_d092b4040c1f -> if (selected != null) scope.launch {
                 try {
                     val songs = playlists.songs(selected.id)
-                    val position = songs.indexOfFirst { it.id == song.id && it.source == song.source } + if (actions[which] == getString(R.string.ui_de23dedafe75)) -1 else 1
+                    val position = songs.indexOfFirst { it.id == song.id && it.source == song.source } + if (action == R.string.ui_de23dedafe75) -1 else 1
                     playlists.moveSongPosition(selected.id, song, position)
                 } catch (e: CancellationException) { throw e }
                 catch (e: Exception) { toast(getString(R.string.ui_3d085075c12b, java.lang.String.valueOf(e.localizedMessage))) }
             }
-            getString(R.string.ui_9c2f512b6594) -> {
+            R.string.ui_9c2f512b6594 -> {
                 if (service?.state?.value?.song?.let { it.id == song.id && it.source == song.source } == true) service?.reloadLyrics(true)
                 else scope.launch { lyrics.clearOnlineCache(song) }
                 toast(getString(R.string.ui_698d047aee02))
             }
-            getString(R.string.ui_792336bc0bbf) -> {
+            R.string.ui_792336bc0bbf -> {
                 pendingLyricSongId = song.id
                 pendingLyricSource = song.source
                 @Suppress("DEPRECATION")
@@ -2214,16 +2265,15 @@ class MainActivity : FragmentActivity() {
                     addCategory(Intent.CATEGORY_OPENABLE); type = "*/*"
                 }, REQUEST_LYRIC)
             }
-            getString(R.string.ui_9be60bb7ddeb) -> chooseDownloadQuality(song)
-            getString(R.string.ui_44c2c89152c7) -> if (selected != null) {
+            R.string.ui_9be60bb7ddeb -> chooseDownloadQuality(song)
+            R.string.ui_44c2c89152c7 -> if (selected != null) {
                 scope.launch {
                     try { playlists.remove(selected.id, song); if (activePlaylist?.id == selected.id) loadPlaylist(selected) }
                     catch (e: Exception) { toast(getString(R.string.ui_1dd0b9466445, java.lang.String.valueOf(e.localizedMessage))) }
                 }
             }
-            else -> choosePlaylistForSong(song)
-            }
-        }.show()
+            R.string.ui_cc143006b20d -> choosePlaylistForSong(song)
+        }
     }
     private fun chooseDownloadQuality(song: Song) {
         if (downloadQualityDialog?.isShowing == true) return
@@ -2589,7 +2639,10 @@ class MainActivity : FragmentActivity() {
                     gravity = Gravity.CENTER
                     visibility = if (preferences.showDuration) View.VISIBLE else View.GONE
                 }, LinearLayout.LayoutParams(dp(if (uiLayout.expanded) 60 else 46), -2))
-                row.addView(lx.icon(59667, getString(R.string.ui_507e04d42f14), 16f) { showSongActions(song) }, LinearLayout.LayoutParams(dp(48), dp(48)))
+                row.addView(lx.icon(59667, getString(R.string.ui_507e04d42f14), 16f) {}.apply {
+                    isFocusable = false
+                    setOnClickListener { showSongActions(it, song) }
+                }, LinearLayout.LayoutParams(dp(48), dp(48)))
                 palette.textStyle(row)
                 return row
             }
