@@ -5,7 +5,6 @@ import android.content.Intent
 import android.net.Uri
 import android.os.SystemClock
 import android.view.InputDevice
-import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
@@ -48,28 +47,18 @@ class SongInteractionsTest {
         fail("Timed out waiting for $label")
     }
 
-    private fun point(view: View, x: Float, y: Float): Pair<Float, Float> {
-        var result = 0f to 0f
-        main {
-            val origin = IntArray(2).also(view::getLocationOnScreen)
-            result = origin[0] + view.width * x to origin[1] + view.height * y
-        }
-        return result
-    }
-
-    private fun touch(down: Long, action: Int, point: Pair<Float, Float>) {
-        val event = MotionEvent.obtain(down, SystemClock.uptimeMillis(), action, point.first, point.second, 0)
+    private fun touch(view: View, down: Long, action: Int, x: Float, y: Float) {
+        val event = MotionEvent.obtain(down, SystemClock.uptimeMillis(), action, x, y, 0)
         try {
             event.source = InputDevice.SOURCE_TOUCHSCREEN
-            assertTrue(instrumentation.uiAutomation.injectInputEvent(event, true))
+            assertTrue(view.dispatchTouchEvent(event))
         } finally { event.recycle() }
     }
 
-    private fun tap(view: View, x: Float = .5f, y: Float = .5f) {
-        val point = point(view, x, y)
+    private fun tap(view: View, x: Float = view.width / 2f, y: Float = view.height / 2f) {
         val down = SystemClock.uptimeMillis()
-        touch(down, MotionEvent.ACTION_DOWN, point)
-        touch(down, MotionEvent.ACTION_UP, point)
+        touch(view, down, MotionEvent.ACTION_DOWN, x, y)
+        touch(view, down, MotionEvent.ACTION_UP, x, y)
     }
 
     @Test fun songTapReplacesQueueAndLyricsDistinguishTappingFromScrubbing() {
@@ -96,11 +85,14 @@ class SongInteractionsTest {
         val orderedIds = runBlocking { playlists.songs(playlist.id).map { it.id } }
         val activity = instrumentation.startActivitySync(Intent(context, MainActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
+        val initialTouchMode = activity.window.decorView.isInTouchMode
         try {
             waitFor("activity focus and playback service") { activity.hasWindowFocus() && activity.settingsPlayer() != null }
             val player = requireNotNull(activity.settingsPlayer())
             val density = activity.resources.displayMetrics.density
             val resizeForPhoneLayout = activity.resources.configuration.screenWidthDp >= 600
+            val previousSong = songs[0].copy(id = baseId - 1)
+            instrumentation.setInTouchMode(true)
             main {
                 if (resizeForPhoneLayout) {
                     field("uiLayout").set(activity, AdaptiveLayout(390, 740))
@@ -109,7 +101,7 @@ class SongInteractionsTest {
                 }
                 MainActivity::class.java.getDeclaredMethod("loadPlaylist", Playlist::class.java).apply { isAccessible = true }
                     .invoke(activity, playlist)
-                player.play(listOf(songs[0].copy(id = baseId - 1)), 0)
+                player.play(listOf(previousSong), 0)
             }
             val list = field("list").get(activity) as ListView
             waitFor("playlist rows and previous playback") { list.childCount == songs.size && player.state.value.playing }
@@ -123,19 +115,23 @@ class SongInteractionsTest {
             fun popup() = WindowInspector.getGlobalWindowViews().firstNotNullOfOrNull {
                 it.findViewWithTag<ListView>("song-actions-menu")?.takeIf(View::isShown)
             }
-            waitFor("anchored song actions") { popup() != null }
+            waitFor("anchored song actions") { (popup()?.childCount ?: 0) > 0 }
+            fun fullQueueIsPlaying() = player.state.value.song?.id == songs[1].id && player.state.value.playing &&
+                player.queueState.value?.songs?.map { it.id } == orderedIds
             main {
                 val menu = requireNotNull(popup())
                 assertEquals(activity.getString(R.string.ui_c3396195e91c), menu.adapter.getItem(0))
-                assertEquals(baseId - 1, player.state.value.song?.id)
+                assertEquals(previousSong.id, player.state.value.song?.id)
+                assertTrue(menu.performItemClick(menu.getChildAt(0), 0, menu.adapter.getItemId(0)))
             }
-            instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
-            waitFor("menu to close and list to regain focus") { popup() == null && activity.hasWindowFocus() }
-            tap(list.getChildAt(0), .3f)
-            waitFor("filtered row to play with the full list") {
-                player.state.value.song?.id == songs[1].id && player.state.value.playing &&
-                    player.queueState.value?.songs?.map { it.id } == orderedIds
+            waitFor("menu playback and return to the list") { popup() == null && activity.hasWindowFocus() && fullQueueIsPlaying() }
+            main { player.play(listOf(previousSong), 0) }
+            waitFor("previous playback to resume") { player.state.value.song?.id == previousSong.id && player.state.value.playing }
+            main {
+                val row = list.getChildAt(0)
+                tap(list, row.left + row.width * .3f, row.top + row.height * .5f)
             }
+            waitFor("filtered row to play with the full list", ::fullQueueIsPlaying)
             main {
                 player.pause()
                 player.seekTo(12000)
@@ -147,26 +143,28 @@ class SongInteractionsTest {
             val cover = field("detailCover").get(activity) as View
             val lyrics = field("detailScroll").get(activity) as PlayerLyricScroll
             waitFor("cover and synced lyrics") { cover.hasWindowFocus() && cover.isShown && cover.width > 0 && lyrics.lines.childCount == 11 }
-            tap(cover)
+            main { tap(cover) }
             waitFor("lyrics centered at the playback position") { lyrics.isShown && lyrics.scrollY > 100 * density }
 
-            val start = point(lyrics, .5f, .3f)
-            val finish = point(lyrics, .5f, .72f)
             val down = SystemClock.uptimeMillis()
-            touch(down, MotionEvent.ACTION_DOWN, start)
-            for (step in 1..8) touch(down, MotionEvent.ACTION_MOVE, start.first to start.second + (finish.second - start.second) * step / 8)
             var target = -1
             main {
+                val x = lyrics.width / 2f
+                val start = lyrics.height * .3f
+                val distance = lyrics.height * .42f
+                touch(lyrics, down, MotionEvent.ACTION_DOWN, x, start)
+                for (step in 1..8) touch(lyrics, down, MotionEvent.ACTION_MOVE, x, start + distance * step / 8)
                 target = requireNotNull(lyrics.previewIndex)
                 assertTrue(target in 0..5)
                 assertEquals(12000, player.state.value.position)
+                touch(lyrics, down, MotionEvent.ACTION_UP, x, start + distance)
             }
-            touch(down, MotionEvent.ACTION_UP, finish)
             waitFor("seek on release without leaving lyrics") { lyrics.isShown && player.state.value.position == target * 2000 }
-            tap(lyrics)
+            main { tap(lyrics) }
             waitFor("tap on lyrics to return to artwork") { cover.isShown && !lyrics.isShown }
             assertEquals(target * 2000, player.state.value.position)
         } finally {
+            instrumentation.setInTouchMode(initialTouchMode)
             main { activity.settingsPlayer()?.clearQueue(); activity.finish() }
             context.stopService(Intent(context, PlaybackService::class.java))
             runBlocking { playlists.delete(playlist.id) }
