@@ -1,0 +1,5 @@
+<resources>
+    <string name="sync_history_remove_action">移除授权</string>
+    <string name="sync_pending_choice">同步需要选择处理方式，请进入设置 → 数据同步</string>
+    <string name="update_available_hint">发现新版本 %1$s，请在设置 → 关于中查看</string>
+</resources>

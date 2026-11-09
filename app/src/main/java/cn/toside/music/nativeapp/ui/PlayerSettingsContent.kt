@@ -7,21 +7,19 @@ import cn.toside.music.nativeapp.player.LyricOffsets
 import cn.toside.music.nativeapp.player.PlayerSettings
 
 import android.app.Activity
-import android.app.AlertDialog
 import android.view.View
 import android.widget.Button
 import android.widget.CheckBox
 import android.widget.LinearLayout
 import android.widget.RadioButton
 import android.widget.RadioGroup
-import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
 import java.util.Locale
 import kotlin.math.roundToInt
 
-internal class PlayerSettingsDialog(
+internal class PlayerSettingsContent(
     private val activity: Activity,
     private val settings: PlayerSettings,
     private val offsets: LyricOffsets,
@@ -32,8 +30,8 @@ internal class PlayerSettingsDialog(
     private val appearanceChanged: () -> Unit,
     private val offsetChanged: (Song) -> Unit,
 ) {
-    fun show(): AlertDialog {
-        val content = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(8), dp(20), dp(8)) }
+    fun createContent(): View {
+        val content = LinearLayout(activity).apply { tag = "playback-settings"; orientation = LinearLayout.VERTICAL; setPadding(0, dp(8), 0, dp(8)) }
         fun label(text: String) = TextView(activity).apply { this.text = text; textSize = 15f; setPadding(0, dp(12), 0, dp(4)); content.addView(this) }
         fun slider(description: String, min: Int, max: Int, value: Int, title: TextView,
             format: (Int) -> String, change: (Int) -> Unit): SeekBar = SeekBar(activity).apply {
@@ -114,11 +112,9 @@ internal class PlayerSettingsDialog(
             }, LinearLayout.LayoutParams(0, -2, 1f))
         }
         content.addView(offsetButtons)
-        val scroll = ScrollView(activity).apply { addView(content) }
-        val dialog = AlertDialog.Builder(activity).setTitle(activity.getString(R.string.ui_8c38525734c0)).setView(scroll)
-            .setPositiveButton(activity.getString(R.string.ui_c0b3fbff51cc), null).setNeutralButton(activity.getString(R.string.ui_ba2e93e73037), null).create()
-        dialog.setOnShowListener {
-            dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
+        content.addView(Button(activity).apply {
+            text = activity.getString(R.string.ui_ba2e93e73037); tag = "playback-reset"
+            setOnClickListener {
                 try {
                     setRate(1f); setVolume(1f)
                     settings.setFontSize(if (landscape) 22 else 21, landscape)
@@ -128,9 +124,8 @@ internal class PlayerSettingsDialog(
                     changeOffset(0); appearanceChanged()
                 } catch (e: RuntimeException) { Toast.makeText(activity, e.localizedMessage ?: activity.getString(R.string.ui_3a89dbc96a55), Toast.LENGTH_SHORT).show() }
             }
-        }
-        dialog.show()
-        return dialog
+        })
+        return content
     }
     private fun formatOffset(delayMs: Int): String = activity.getString(R.string.ui_87f152e81f80) + when {
         delayMs == 0 -> activity.getString(R.string.ui_e3f1123bb38b)

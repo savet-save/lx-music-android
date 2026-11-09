@@ -1,7 +1,6 @@
 package cn.toside.music.nativeapp.ui
 
 import android.app.Activity
-import android.app.AlertDialog
 import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.Typeface
@@ -26,6 +25,9 @@ import cn.toside.music.nativeapp.data.PlaylistCredentials
 import cn.toside.music.nativeapp.player.PlaybackService
 import cn.toside.music.nativeapp.source.OnlineSourceImport
 import cn.toside.music.nativeapp.source.UserSourceEntry
+import cn.toside.music.nativeapp.source.UserSourceUpdate
+import cn.toside.music.nativeapp.sync.BackgroundSyncState
+import cn.toside.music.nativeapp.update.NativeReleases
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -37,12 +39,16 @@ import kotlinx.coroutines.withContext
 
 internal class SettingsActions(
     val importLocal: () -> Unit,
-    val sourceActions: (UserSourceEntry, () -> Unit) -> Unit,
-    val playback: () -> Unit,
-    val quality: () -> Unit,
+    val sourceActions: (View, UserSourceEntry, () -> Unit) -> Unit,
     val desktopLyrics: () -> Unit,
-    val sync: () -> Unit,
-    val about: () -> Unit,
+    val syncState: () -> BackgroundSyncState = { BackgroundSyncState() },
+    val connectSync: (String, String) -> Unit = { _, _ -> },
+    val disconnectSync: () -> Unit = {},
+    val chooseSync: (Long, String) -> Boolean = { _, _ -> false },
+    val exportLogs: () -> Unit = {},
+    val sourceUpdate: () -> UserSourceUpdate? = { null },
+    val dismissSourceUpdate: () -> Unit = {},
+    val playbackContent: () -> View? = { null },
 )
 
 /** Desktop category sidebar on wide windows, mobile category tabs on narrow windows. */
@@ -72,17 +78,46 @@ internal class SettingsPage(
     private lateinit var scroll: ScrollView
     private var sourceStatus: TextView? = null
     private var sourceList: LinearLayout? = null
+    private var sourceNotice: LinearLayout? = null
     private var sourceInput: EditText? = null
     private var importButton: TextView? = null
     private var localImport: View? = null
     private var progress: ProgressBar? = null
     private var sourceMessage: String? = null
+    private val choicePopup = PlatformPopup("settings-choice")
+    private var section: AutoCloseable? = null
+    private var syncSection: SyncSettingsSection? = null
+    private var syncAddress = state?.getString("sync-address")
+
+    init {
+        NativeUpdateNotice.restore(activity)
+        scope.launch { NativeUpdateNotice.release.collect { updateVersionNotice() } }
+    }
+
+    private fun updateVersionNotice() {
+        @Suppress("DEPRECATION") val version = activity.packageManager.getPackageInfo(activity.packageName, 0).versionName.orEmpty()
+        val release = NativeUpdateNotice.release.value
+        val available = release != null && NativeReleases.compare(release.version, version) > 0 && preferences.string("version.ignored", "") != release.version
+        tabs["about"]?.text = text(R.string.settings_about) + if (available) " •" else ""
+    }
 
     internal val backgroundColor get() = palette.surface
-    internal fun close() { scope.cancel() }
+    internal fun close() { choicePopup.dismiss(); section?.close(); scope.cancel() }
+    internal fun dismissPopups() { choicePopup.dismiss() }
+    internal fun renderSyncState(value: BackgroundSyncState) {
+        syncSection?.render(value)
+        tabs["sync"]?.text = text(R.string.ui_727036c7fc2a) + if (value.conflict != null) " •" else ""
+    }
+    internal fun selectCategory(id: String) { if (categories.any { it.first == id }) select(id) }
+    internal fun refreshPlayback() {
+        if (current != "playback") return
+        if (!scroll.isLayoutRequested) positions[current] = scroll.scrollY
+        render()
+    }
     internal fun applyTheme(): View {
         if (::scroll.isInitialized) positions[current] = scroll.scrollY
         sourceInput?.let { sourceUrl = it.text.toString() }
+        syncSection?.let { syncAddress = it.addressDraft() }
         palette = UiPalette(activity, NativeThemes(activity).active())
         styles = LxStyles(activity, palette, icons)
         return createContent()
@@ -90,6 +125,7 @@ internal class SettingsPage(
 
     internal fun saveState() = Bundle().apply {
         putString("category", current); putString("source-url", sourceInput?.text?.toString() ?: sourceUrl)
+        putString("sync-address", syncSection?.addressDraft() ?: syncAddress)
         categories.forEach { putInt("scroll-${it.first}", if (it.first == current && ::scroll.isInitialized) scroll.scrollY else positions[it.first] ?: 0) }
     }
 
@@ -138,8 +174,11 @@ internal class SettingsPage(
         current = id; render()
     }
     private fun render() {
+        choicePopup.dismiss()
+        syncSection?.let { syncAddress = it.addressDraft() }
+        section?.close(); section = null; syncSection = null
         pageJob?.cancel(); content.removeAllViews()
-        sourceInput = null; sourceStatus = null; sourceList = null; progress = null; importButton = null; localImport = null
+        sourceInput = null; sourceStatus = null; sourceList = null; sourceNotice = null; progress = null; importButton = null; localImport = null
         tabs.forEach { (id, tab) ->
             tab.isSelected = id == current; tab.setTextColor(if (tab.isSelected) palette.primary else palette.foreground)
             tab.background = styles.touch(if (tab.isSelected) styles.selected else Color.TRANSPARENT)
@@ -149,13 +188,20 @@ internal class SettingsPage(
         when (current) {
             "basic" -> basic()
             "playback" -> playback()
+            "desktop-lyrics" -> content.addView(desktopLyricSettingsContent(activity, choicePopup) { player()?.refreshLyricPreferences() })
             "list" -> lists()
             "sources" -> sources()
             "theme" -> themes()
             "cache" -> cache()
-            "sync" -> { note(text(R.string.ui_f40e986f62c5)); action(text(R.string.ui_727036c7fc2a), click = actions.sync) }
-            "about" -> { note("LX Music"); action(text(R.string.ui_4fd38bc4f6d4), click = actions.about) }
+            "sync" -> { syncSection = SyncSettingsSection(activity, scope, content, styles, palette, actions, syncAddress); section = syncSection }
+            "about" -> { section = AboutPage(activity, scope, content, styles, palette, ::updateVersionNotice) }
+            "diagnostics" -> {
+                val work = CoroutineScope(scope.coroutineContext + SupervisorJob(scope.coroutineContext[Job]))
+                section = AutoCloseable { work.cancel() }
+                diagnosticsContent(activity, work, content, actions.exportLogs)
+            }
         }
+        renderSyncState(actions.syncState()); updateVersionNotice()
         val selected = current
         val target = scroll
         target.addOnLayoutChangeListener(object : View.OnLayoutChangeListener {
@@ -192,8 +238,17 @@ internal class SettingsPage(
         choice(R.string.ui_b23ed4004e18, "common.sourceNameType", arrayOf(text(R.string.ui_7bc846cd34a3), text(R.string.ui_23fbf53da512)), arrayOf("alias", "real"), "alias")
     }
     private fun playback() {
-        action(text(R.string.ui_599818eb56df), click = actions.quality)
-        action(text(R.string.ui_8c38525734c0), click = actions.playback)
+        val qualities = listOf("128k", "320k", "flac", "flac24bit")
+        val playerPreferences = activity.getSharedPreferences("player", Activity.MODE_PRIVATE)
+        lateinit var row: LinearLayout
+        row = action(text(R.string.ui_599818eb56df), downloadQualityLabel(playerPreferences.getString("quality", "128k") ?: "128k")) {
+            choicePopup.show(row, qualities, qualities.map(::downloadQualityLabel), playerPreferences.getString("quality", "128k") ?: "128k", palette) { value ->
+                playerPreferences.edit().putString("quality", value).apply()
+                ((row.getChildAt(0) as LinearLayout).getChildAt(1) as TextView).text = downloadQualityLabel(value)
+            }
+        }
+        row.tag = "settings-playback-quality"
+        actions.playbackContent()?.let { content.addView(it) }
         action(text(R.string.ui_486b54a7b0af), click = actions.desktopLyrics)
         toggle(R.string.ui_8a47499c40e0, "player.startupAutoPlay")
         toggle(R.string.ui_d6320dc2f6f6, "player.startupPushPlayDetailScreen")
@@ -220,6 +275,7 @@ internal class SettingsPage(
     }
 
     private fun sources() {
+        sourceNotice = column().apply { tag = "settings-source-update"; content.addView(this) }
         note(text(R.string.settings_source_hint)); section(text(R.string.settings_source_online))
         val fieldLabel = label(text(R.string.settings_source_url), 13f, palette.muted).also { content.addView(it) }
         sourceInput = EditText(activity).apply {
@@ -275,6 +331,17 @@ internal class SettingsPage(
     }
     internal fun refreshSources() {
         if (current != "sources") return
+        sourceNotice?.let { notice ->
+            notice.removeAllViews()
+            actions.sourceUpdate()?.let { update ->
+                notice.addView(label(activity.getString(R.string.ui_7894327145b0, update.name), color = palette.primary))
+                notice.addView(noteView(update.log))
+                update.url?.let { url -> action(text(R.string.ui_d74a71e7af34), parent = notice) {
+                    runCatching { activity.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url))) }
+                } }
+                action(text(R.string.ui_3fd47edce45b), parent = notice) { actions.dismissSourceUpdate(); refreshSources() }
+            }
+        }
         val list = sourceList ?: return
         pageJob?.cancel()
         pageJob = scope.launch {
@@ -288,7 +355,12 @@ internal class SettingsPage(
                 if (catalog.entries.isEmpty()) list.addView(noteView(text(R.string.settings_source_no_sources)))
                 catalog.entries.forEach { entry ->
                     val details = listOf(if (entry.id == catalog.selected) text(R.string.settings_selected) else "", entry.version, entry.author).filter { it.isNotBlank() }.joinToString(" · ")
-                    action(entry.name, details, list) { if (importJob?.isActive != true) actions.sourceActions(entry, ::refreshSources) }
+                    lateinit var row: LinearLayout
+                    row = action(entry.name, details, list) { if (importJob?.isActive != true) actions.sourceActions(row, entry, ::refreshSources) }
+                    if (entry.description.isNotBlank()) list.addView(noteView(entry.description))
+                    if (entry.homepage.startsWith("https://") || entry.homepage.startsWith("http://")) action(text(R.string.ui_3e0d676d2d85), parent = list) {
+                        runCatching { activity.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(entry.homepage))) }
+                    }
                 }
                 updateImportState()
             } catch (e: CancellationException) { throw e }
@@ -377,11 +449,11 @@ internal class SettingsPage(
     private fun choice(title: Int, key: String, labels: Array<String>, values: Array<String>, fallback: String) {
         lateinit var row: LinearLayout
         row = action(text(title), labels[values.indexOf(preferences.string(key, fallback)).coerceAtLeast(0)]) {
-            AlertDialog.Builder(activity).setTitle(text(title)).setSingleChoiceItems(labels, values.indexOf(preferences.string(key, fallback)).coerceAtLeast(0)) { dialog, index ->
-                preferences.set(key, values[index]); refresh()
+            choicePopup.show(row, values.toList(), labels.toList(), preferences.string(key, fallback), palette) { value ->
+                val index = values.indexOf(value)
+                preferences.set(key, value); refresh()
                 ((row.getChildAt(0) as LinearLayout).getChildAt(1) as TextView).text = labels[index]
-                dialog.dismiss()
-            }.setNegativeButton(text(R.string.ui_2cd0f3be8738), null).show()
+            }
         }
         row.tag = "settings-$key"
     }
@@ -390,7 +462,8 @@ internal class SettingsPage(
     companion object {
         private val categories = listOf("basic" to R.string.settings_basic, "playback" to R.string.settings_playback,
             "sources" to R.string.settings_sources, "list" to R.string.ui_6e34875b6fe3, "theme" to R.string.ui_788db1cfec2a,
-            "cache" to R.string.ui_e3ca04a9cb13, "sync" to R.string.ui_727036c7fc2a, "about" to R.string.settings_about)
+            "cache" to R.string.ui_e3ca04a9cb13, "sync" to R.string.ui_727036c7fc2a, "about" to R.string.settings_about,
+            "desktop-lyrics" to R.string.ui_486b54a7b0af, "diagnostics" to R.string.ui_bb1d19b85634)
         internal val recreationKeys = setOf("common.drawerLayoutPosition", "common.fontScale", "common.langId", "common.alwaysKeepStatusbarHeight")
         internal val themeKeys = setOf("theme.id", "theme.darkId", "theme.lightId", "common.isAutoTheme", "theme.hideBgDark", "theme.dynamicBg", "theme.fontShadow")
     }

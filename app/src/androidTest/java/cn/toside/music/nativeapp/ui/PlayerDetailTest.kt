@@ -1,7 +1,7 @@
 package cn.toside.music.nativeapp.ui
 
 import android.app.Dialog
-import android.app.AlertDialog
+import android.widget.TextView
 import android.content.Intent
 import android.os.SystemClock
 import android.view.View
@@ -42,11 +42,11 @@ class PlayerDetailTest {
             instrumentation.runOnMainSync { dialog?.dismiss() }
             val openSync = MainActivity::class.java.getDeclaredMethod("showSyncSettings").apply { isAccessible = true }
             instrumentation.runOnMainSync { openSync.invoke(activity) }
-            val syncField = MainActivity::class.java.getDeclaredField("syncSettingsDialog").apply { isAccessible = true }
-            val syncDialog = syncField.get(activity) as AlertDialog
-            assertTrue(syncDialog.isShowing)
-            assertEquals("连接", syncDialog.getButton(AlertDialog.BUTTON_POSITIVE).text.toString())
-            instrumentation.runOnMainSync { syncDialog.getButton(AlertDialog.BUTTON_NEGATIVE).performClick() }
+            instrumentation.waitForIdleSync()
+            val syncPage = activity.settingsFragment()!!.requireView()
+            assertTrue(syncPage.isShown)
+            assertEquals("连接", syncPage.findViewWithTag<TextView>("sync-connect").text.toString())
+            instrumentation.runOnMainSync { activity.closeSettings() }
         } finally { instrumentation.runOnMainSync { activity.finish() } }
     }
     private fun find(view: View, description: String): View? {

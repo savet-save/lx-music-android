@@ -6,7 +6,6 @@ import cn.toside.music.nativeapp.source.UserSource
 import cn.toside.music.nativeapp.update.NativeReleases
 import cn.toside.music.nativeapp.utils.DiagnosticLog
 
-import android.app.AlertDialog
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.Intent
@@ -112,21 +111,19 @@ class AboutDiagnosticsTest {
             val base = target.resources.configuration.fontScale
             assertEquals(base * 1.3f, UiPreferences.context(target).resources.configuration.fontScale, 0.01f)
             activity = instrumentation.startActivitySync(Intent(target, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
-            instrumentation.runOnMainSync { showAbout(activity!!, scope) }
+            instrumentation.runOnMainSync { activity!!.openSettings("about") }
             instrumentation.waitForIdleSync()
-            var root: android.view.accessibility.AccessibilityNodeInfo? = null
             repeat(50) {
-                if (root?.findAccessibilityNodeInfosByText("关于与版本").isNullOrEmpty()) {
+                if (activity!!.settingsFragment()?.view == null) {
                     android.os.SystemClock.sleep(100)
-                    root = instrumentation.uiAutomation.rootInActiveWindow
                 }
             }
-            assertTrue(root?.findAccessibilityNodeInfosByText("关于与版本")?.isNotEmpty() == true)
+            val page = activity!!.settingsFragment()!!.requireView()
+            assertSame(activity!!.window.decorView.windowToken, page.windowToken)
             @Suppress("DEPRECATION")
             val installed = target.packageManager.getPackageInfo(target.packageName, 0)
-            val expectedVersion = activity!!.getString(R.string.ui_88f46c701fba, installed.versionName)
             assertTrue("About should show installed version ${installed.versionName}",
-                root?.findAccessibilityNodeInfosByText(expectedVersion)?.isNotEmpty() == true)
+                page.findViewWithTag<TextView>("about-version").text.contains(installed.versionName.orEmpty()))
             assertTrue(target.assets.open("licenses/Apache-2.0.txt").use { it.readBytes().toString(Charsets.UTF_8) }.contains("Apache License"))
             instrumentation.uiAutomation.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK)
         } finally {

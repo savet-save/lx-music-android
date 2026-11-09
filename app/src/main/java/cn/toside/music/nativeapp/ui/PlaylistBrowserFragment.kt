@@ -1,6 +1,5 @@
 package cn.toside.music.nativeapp.ui
 
-import android.app.AlertDialog
 import android.content.Context
 import android.graphics.Typeface
 import android.graphics.Bitmap
@@ -156,6 +155,7 @@ class PlaylistBrowserFragment : Fragment() {
         row.addView(control(UiPreferences.sourceName(requireContext(), query.source)) { chooseSource() }.apply { tag = "playlist-source" })
     }
     private val platformPopup = PlatformPopup()
+    private val categoryPopup = PlatformPopup("playlist-category")
     private fun chooseSource() {
         val sources = PlatformPopup.sources
         val anchor = filters?.findViewWithTag<View>("playlist-source") ?: return
@@ -170,16 +170,18 @@ class PlaylistBrowserFragment : Fragment() {
             try {
                 val groups = (requireActivity() as MainActivity).playlistBrowserRepository.categories(query.source)
                 if (model.state.value.query.source != query.source) return@launch
-                AlertDialog.Builder(requireContext()).setTitle(R.string.playlist_category)
-                    .setItems((listOf(getString(R.string.playlist_default)) + groups.map { it.name }).toTypedArray()) { _, group ->
-                        if (group == 0) model.select(query.copy(category = "全部", categoryName = ""))
+                val anchor = filters?.findViewWithTag<View>("playlist-category") ?: return@launch
+                val labels = listOf(getString(R.string.playlist_default)) + groups.map { it.name }
+                categoryPopup.show(anchor, labels.indices.map(Int::toString), labels, "", palette) { groupId ->
+                        val group = groupId.toInt()
+                        if (group == 0) { rememberPosition(); model.select(query.copy(category = "全部", categoryName = "")) }
                         else {
                             val selected = groups[group - 1]
-                            AlertDialog.Builder(requireContext()).setTitle(selected.name).setItems(selected.tags.map { it.name }.toTypedArray()) { _, index ->
-                                val tag = selected.tags[index]; rememberPosition(); model.select(query.copy(category = tag.id, categoryName = tag.name))
-                            }.setNegativeButton(R.string.ui_2cd0f3be8738, null).show()
+                            categoryPopup.show(anchor, selected.tags.map { it.id }, selected.tags.map { it.name }, query.category, palette) { id ->
+                                val tag = selected.tags.first { it.id == id }; rememberPosition(); model.select(query.copy(category = tag.id, categoryName = tag.name))
+                            }
                         }
-                    }.setNegativeButton(R.string.ui_2cd0f3be8738, null).show()
+                    }
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) { Toast.makeText(requireContext(), getString(R.string.playlist_error, e.localizedMessage.orEmpty()), Toast.LENGTH_LONG).show() }
         }
@@ -191,9 +193,9 @@ class PlaylistBrowserFragment : Fragment() {
         background = styles.touch(); isFocusable = true; setOnClickListener { click() }
     }
     private fun dp(value: Int) = styles.dp(value)
-    override fun onStop() { platformPopup.dismiss(); super.onStop() }
+    override fun onStop() { platformPopup.dismiss(); categoryPopup.dismiss(); categoriesJob?.cancel(); super.onStop() }
     override fun onDestroyView() {
-        platformPopup.dismiss()
+        platformPopup.dismiss(); categoryPopup.dismiss()
         rememberPosition(); categoriesJob = null; adapter = null; grid = null; filters = null; status = null; retry = null; more = null; progress = null
         super.onDestroyView()
     }

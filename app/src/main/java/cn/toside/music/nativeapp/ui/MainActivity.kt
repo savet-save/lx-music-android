@@ -43,8 +43,6 @@ import cn.toside.music.nativeapp.source.UserSourceEntry
 import cn.toside.music.nativeapp.source.UserSourceLibrary
 import cn.toside.music.nativeapp.sync.BackgroundSyncSettings
 import cn.toside.music.nativeapp.sync.BackgroundSyncState
-import cn.toside.music.nativeapp.sync.SyncCredentialStore
-import cn.toside.music.nativeapp.sync.SyncFeature
 import cn.toside.music.nativeapp.sync.SyncService
 import cn.toside.music.nativeapp.utils.DiagnosticLog
 import cn.toside.music.nativeapp.utils.ExternalLinks
@@ -125,9 +123,6 @@ class MainActivity : FragmentActivity() {
     private var syncBound = false
     private var syncObserverJob: Job? = null
     private var playlistChangesJob: Job? = null
-    private var syncSettingsDialog: AlertDialog? = null
-    private var showingSyncStatus = false
-    private var syncConflictDialog: AlertDialog? = null
     private var syncConflictId: Long? = null
     private var allSongs = emptyList<Song>()
     private var visibleSongs = emptyList<Song>()
@@ -137,7 +132,6 @@ class MainActivity : FragmentActivity() {
     private lateinit var lyricOffsets: LyricOffsets
     private var lyricDelayMs = 0
     private var lyricAppearance = LyricAppearance(21, LyricAlignment.LEFT)
-    private var playbackSettingsDialog: AlertDialog? = null
     private var pendingSettingsState: Bundle? = null
     private var navigation: NavController? = null
     internal var playlistBrowserRepository: PlaylistBrowserRepository = NativePlaylistBrowserRepository()
@@ -148,7 +142,7 @@ class MainActivity : FragmentActivity() {
     private var settingsAppearancePosted = false
     private var settingsRecreateRequested = false
     private var sourceUpdateJob: Job? = null
-    private var sourceUpdateDialog: AlertDialog? = null
+    private var sourceUpdateNoticeKey: String? = null
     private var pendingSourceExportId: String? = null
     private var pactDialog: Dialog? = null
     private lateinit var preferences: AppPreferences
@@ -162,12 +156,14 @@ class MainActivity : FragmentActivity() {
     private var playlistPickerJob: Job? = null
     private val playlistActionsPopup = PlatformPopup("playlist-actions", outlined = true)
     private val songActionsPopup = PlatformPopup("song-actions", outlined = true)
+    private val choicesPopup = PlatformPopup("app-choice")
     private val playlistDrawerBack = object : OnBackPressedCallback(false) {
         override fun handleOnBackPressed() { playlistDrawer?.close() }
     }
     private var restoreNavigation = false
     private var tableHeader: FrameLayout? = null
     private var playerRestorePending = false
+    private var returnToPlayerFromSettings = false
     private var restoreDetailLyrics = false
     private var highlightedSong: String? = null
     private lateinit var miniBar: LinearLayout
@@ -284,22 +280,19 @@ class MainActivity : FragmentActivity() {
                 if (value.key == song?.let { "${it.source}:${it.id}" }) { artworkBitmap = value.bitmap; updateArtwork() }
             } }
             sourceUpdateJob = scope.launch { service?.sourceUpdates?.collectLatest { update ->
-                sourceUpdateDialog?.dismiss(); sourceUpdateDialog = null
-                if (update != null) {
-                    val builder = AlertDialog.Builder(this@MainActivity).setTitle(getString(R.string.ui_7894327145b0, java.lang.String.valueOf(update.name))).setMessage(update.log)
-                        .setNegativeButton(getString(R.string.ui_3fd47edce45b)) { _, _ -> service?.dismissSourceUpdate() }
-                        .setOnCancelListener { service?.dismissSourceUpdate() }
-                    update.url?.let { url -> builder.setPositiveButton(getString(R.string.ui_d74a71e7af34)) { _, _ ->
-                        service?.dismissSourceUpdate(); runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
-                    } }
-                    sourceUpdateDialog = builder.show()
+                settingsFragment()?.refreshSources()
+                val key = update?.let { "${it.id}:${it.log}" }
+                if (update != null && key != sourceUpdateNoticeKey && settingsFragment()?.savePageState()?.getString("category") != "sources") {
+                    toast(getString(R.string.ui_7894327145b0, update.name))
                 }
+                sourceUpdateNoticeKey = key
             } }
             waitingForServicePlayback?.let { action -> waitingForServicePlayback = null; performAudioAction(action) }
             waitingForServiceDownload?.let { song -> waitingForServiceDownload = null; downloadSong(song) }
             if (intent.getBooleanExtra("open-player", false)) { intent.removeExtra("open-player"); showPlayerDetails() }
             handleIncomingIntent()
             settingsFragment()?.refreshSources()
+            settingsFragment()?.refreshPlayback()
         }
         override fun onServiceDisconnected(name: ComponentName?) { service = null; stateJob?.cancel(); lyricJob?.cancel(); artworkJob?.cancel(); sourceUpdateJob?.cancel() }
     }
@@ -329,6 +322,7 @@ class MainActivity : FragmentActivity() {
         iconFont = Typeface.createFromAsset(assets, "fonts/icomoon.ttf")
         lx = LxStyles(this, palette, iconFont)
         playerRestorePending = savedInstanceState?.getBoolean("player-open") == true
+        returnToPlayerFromSettings = savedInstanceState?.getBoolean("settings-return-player") == true
         restoreDetailLyrics = savedInstanceState?.getBoolean("player-lyrics") == true
         pendingLyricSongId = savedInstanceState?.let { if (it.containsKey("lyricSongId")) it.getLong("lyricSongId") else null }
         pendingLyricSource = savedInstanceState?.getString("lyricSource") ?: "local"
@@ -362,19 +356,17 @@ class MainActivity : FragmentActivity() {
         playlistChangesJob = scope.launch { playlists.changes.onStart { emit(Unit) }.collectLatest { refreshSynchronizedPlaylist() } }
         try { SyncService.resumeIfEnabled(this) }
         catch (e: RuntimeException) { toast(getString(R.string.ui_671ad117f5de, java.lang.String.valueOf(e.localizedMessage))) }
-        checkNativeUpdatesOnStartup(this, scope)
+        checkNativeUpdatesOnStartup(this, scope) { release -> toast(getString(R.string.update_available_hint, release.version)) }
     }
     override fun onStop() {
-        platformPopup.dismiss(); playlistActionsPopup.dismiss(); songActionsPopup.dismiss()
-        playbackSettingsDialog?.dismiss()
+        platformPopup.dismiss(); playlistActionsPopup.dismiss(); songActionsPopup.dismiss(); choicesPopup.dismiss()
         stateJob?.cancel()
         lyricJob?.cancel()
         artworkJob?.cancel()
-        sourceUpdateJob?.cancel(); sourceUpdateDialog?.dismiss(); sourceUpdateDialog = null
+        sourceUpdateJob?.cancel()
         suggestionJob?.cancel()
         if (bound) { unbindService(connection); bound = false; service = null }
         syncObserverJob?.cancel(); playlistChangesJob?.cancel()
-        syncConflictDialog?.dismiss(); syncConflictDialog = null; syncConflictId = null
         if (syncBound) { unbindService(syncConnection); syncBound = false; syncService = null }
         super.onStop()
     }
@@ -399,7 +391,7 @@ class MainActivity : FragmentActivity() {
         super.onPostResume()
         pendingSettingsState?.let { saved -> pendingSettingsState = null; openSettings(state = saved) }
     }
-    override fun onDestroy() { pactDialog?.dismiss(); playerDialog?.dismiss(); downloadQualityDialog?.dismiss(); playbackSettingsDialog?.dismiss(); syncSettingsDialog?.dismiss(); syncConflictDialog?.dismiss(); scope.cancel(); super.onDestroy() }
+    override fun onDestroy() { pactDialog?.dismiss(); playerDialog?.dismiss(); downloadQualityDialog?.dismiss(); scope.cancel(); super.onDestroy() }
     override fun onSaveInstanceState(outState: Bundle) {
         val page = pageSnapshot()
         retainedPageState.page = page
@@ -409,6 +401,7 @@ class MainActivity : FragmentActivity() {
         outState.putBundle("music-before-playlist", retainedPageState.beforePlaylist?.let { Bundle().apply { saveMusicPage(it, this) } } ?: beforePlaylistSaved)
         outState.putBoolean("incoming-handled", incomingHandled)
         outState.putBoolean("player-open", playerDialog?.isShowing == true || playerRestorePending)
+        outState.putBoolean("settings-return-player", returnToPlayerFromSettings)
         outState.putBoolean("player-lyrics", detailShowingLyrics)
         pendingLyricSongId?.let { outState.putLong("lyricSongId", it) }
         outState.putString("lyricSource", pendingLyricSource)
@@ -1085,12 +1078,14 @@ class MainActivity : FragmentActivity() {
         labels.add(getString(R.string.download_page))
         if (preferences.showBack) labels.add(getString(R.string.ui_f75a93326a3c))
         if (preferences.showExit) labels.add(getString(R.string.ui_b0d269c8707c))
-        val navigation = AlertDialog.Builder(this).setTitle("LX Music").setItems(labels.toTypedArray()) { _, which ->
-            if (labels[which] == getString(R.string.download_page)) { showDownloads(); return@setItems }
-            if (labels[which] == getString(R.string.ui_f75a93326a3c)) { moveTaskToBack(true); return@setItems }
+        val anchor = navigationMenuAnchor() ?: return
+        choicesPopup.show(anchor, labels.indices.map(Int::toString), labels, "", palette, alignEnd = preferences.menuOnRight) { id ->
+            val which = id.toInt()
+            if (labels[which] == getString(R.string.download_page)) { showDownloads(); return@show }
+            if (labels[which] == getString(R.string.ui_f75a93326a3c)) { moveTaskToBack(true); return@show }
             if (labels[which] == getString(R.string.ui_b0d269c8707c)) {
                 confirmExit()
-                return@setItems
+                return@show
             }
             if (which == 0) openLocalPage(true)
             else if (which == 1) showPlaylists()
@@ -1110,23 +1105,23 @@ class MainActivity : FragmentActivity() {
                 }, REQUEST_EXPORT)
             } else if (which == 8) showPlaybackQuality() else if (which == 9) showSyncSettings()
             else if (which == 10) showDislikeRules() else if (which == 11) showPlaybackSettings()
-            else if (which == 12) showDesktopLyricSettings(this) { service?.refreshLyricPreferences() }
+            else if (which == 12) openSettings("desktop-lyrics")
             else if (which == 13) showSources() else if (which == 14) showPlaybackQueue()
             else if (which == 15) showSearchTools() else if (which == 16) showHistory() else if (which == 17) showPlaylistLink()
             else if (which == 18) showSettings()
             else if (which == 19) openSettings("theme")
-            else if (which == 20) showAbout(this, scope)
-            else if (which == 21) showDiagnostics(this, scope) {
-                @Suppress("DEPRECATION")
-                startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
-                    addCategory(Intent.CATEGORY_OPENABLE); type = "text/plain"; putExtra(Intent.EXTRA_TITLE, "lx-native-diagnostics.txt")
-                }, REQUEST_LOG_EXPORT)
-            }
-        }.show()
-        navigation.window?.apply {
-            setGravity((if (preferences.menuOnRight) Gravity.END else Gravity.START) or Gravity.CENTER_VERTICAL)
-            setLayout((resources.displayMetrics.widthPixels * 0.86f).toInt().coerceAtMost(dp(480)), -2)
+            else if (which == 20) openSettings("about")
+            else if (which == 21) openSettings("diagnostics")
         }
+    }
+    private fun navigationMenuAnchor(): View? {
+        fun find(view: View): View? {
+            if (!view.isShown) return null
+            if (view.contentDescription == getString(R.string.ui_e35a36e26d52)) return view
+            if (view is ViewGroup) for (i in 0 until view.childCount) find(view.getChildAt(i))?.let { return it }
+            return null
+        }
+        return find(window.decorView)
     }
     private fun openLocalPage(requestPermission: Boolean) {
         playlistDrawer?.close()
@@ -1180,73 +1175,7 @@ class MainActivity : FragmentActivity() {
                 updateDislikeRules { DislikeStore(applicationContext).add(name, artist) }
             }.setNegativeButton(getString(R.string.ui_2cd0f3be8738), null).show()
     }
-    private fun showSyncSettings() {
-        syncSettingsDialog?.dismiss()
-        val current = syncService?.state?.value
-        val syncBackground = BackgroundSyncSettings(applicationContext)
-        if (current?.active == true || syncBackground.enabled) {
-            showingSyncStatus = true
-            syncSettingsDialog = AlertDialog.Builder(this).setTitle(getString(R.string.ui_727036c7fc2a))
-                .setMessage(current?.message?.takeIf { it.isNotBlank() }?.let(::syncMessage) ?: getString(R.string.ui_9daac0f16f9a))
-                .setNegativeButton(getString(R.string.ui_572cf45ba436), null).setPositiveButton(getString(R.string.ui_a33f3804768e)) { _, _ ->
-                    SyncService.disconnect(this); toast(getString(R.string.ui_49d0208f4a94))
-                }.show().also { it.setOnDismissListener { showingSyncStatus = false }; styleSyncDialog(it) }
-            return
-        }
-        val store = SyncCredentialStore(applicationContext)
-        fun input(label: String, type: Int) = EditText(this).apply {
-            hint = label; contentDescription = label; setSingleLine(true); inputType = type; textSize = 14f
-            setTextColor(palette.foreground); setHintTextColor(palette.muted); setPadding(dp(12), dp(12), dp(12), dp(12))
-            backgroundTintList = null; background = lx.shape(lx.panel, border = palette.divider)
-        }
-        val address = input(getString(R.string.ui_9f9e4c872ae8), InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI).apply { setText(store.lastAddress()) }
-        val code = input(getString(R.string.ui_0464d293b4f4), InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD)
-        val layout = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(24), dp(8), dp(24), dp(8)) }
-        fun field(label: Int, view: View) {
-            layout.addView(lx.label(getString(label), 12f, palette.muted), LinearLayout.LayoutParams(-1, -2).apply { setMargins(0, dp(16), 0, dp(8)) })
-            layout.addView(view, LinearLayout.LayoutParams(-1, -2).apply { (view as? TextView)?.minHeight = dp(48) })
-        }
-        field(R.string.layout_sync_address, address); field(R.string.layout_sync_code, code)
-        layout.addView(android.widget.Button(this).apply {
-            text = getString(R.string.sync_history)
-            isAllCaps = false; setTextColor(palette.primary); background = lx.touch(lx.selected)
-            setOnClickListener {
-                val hosts = store.history()
-                if (hosts.isEmpty()) { toast(getString(R.string.sync_history_empty)); return@setOnClickListener }
-                val chooser = AlertDialog.Builder(this@MainActivity).setTitle(getString(R.string.sync_history))
-                    .setItems(hosts.map { "${it.name}\n${it.address}".trim() }.toTypedArray()) { _, index -> address.setText(hosts[index].address) }
-                    .setNegativeButton(getString(R.string.ui_2cd0f3be8738), null).show()
-                chooser.listView.setOnItemLongClickListener { _, _, index, _ ->
-                    AlertDialog.Builder(this@MainActivity).setTitle(getString(R.string.sync_history_remove)).setMessage(hosts[index].address)
-                        .setNegativeButton(getString(R.string.ui_2cd0f3be8738), null).setPositiveButton(getString(android.R.string.ok)) { _, _ ->
-                            scope.launch {
-                                try { withContext(Dispatchers.IO) { store.remove(hosts[index].address) }; chooser.dismiss() }
-                                catch (e: CancellationException) { throw e }
-                                catch (e: Exception) { toast(e.localizedMessage.orEmpty()) }
-                            }
-                        }.show()
-                    true
-                }
-            }
-        }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(20) })
-        syncSettingsDialog = AlertDialog.Builder(this).setTitle(getString(R.string.ui_727036c7fc2a)).setView(ScrollView(this).apply { addView(layout) })
-            .setMessage(listOf(syncMessage(syncBackground.message), getString(R.string.ui_f40e986f62c5))
-                .filter { it.isNotBlank() }.joinToString("\n\n"))
-            .setNegativeButton(getString(R.string.ui_2cd0f3be8738), null).setPositiveButton(getString(R.string.ui_a5574109f020)) { _, _ ->
-                val host = address.text.toString().trim().trimEnd('/')
-                val authCode = code.text.toString()
-                if (host.isBlank()) toast(getString(R.string.ui_686944dc637e)) else connectSync(host, authCode)
-            }.show().also(::styleSyncDialog)
-    }
-    private fun styleSyncDialog(dialog: AlertDialog) {
-        dialog.window?.apply {
-            setBackgroundDrawable(lx.shape(palette.surface, 10))
-            setLayout(minOf(dp(560), dp(uiLayout.widthDp) - dp(32)), ViewGroup.LayoutParams.WRAP_CONTENT)
-            setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
-        }
-        dialog.getButton(AlertDialog.BUTTON_POSITIVE)?.setTextColor(palette.primary)
-        dialog.getButton(AlertDialog.BUTTON_NEGATIVE)?.setTextColor(palette.muted)
-    }
+    private fun showSyncSettings() = openSettings("sync")
     private fun connectSync(address: String, authCode: String) {
         try {
             SyncService.connect(this, address, authCode)
@@ -1259,20 +1188,18 @@ class MainActivity : FragmentActivity() {
         } catch (e: RuntimeException) { toast(getString(R.string.ui_79110e8d2e06, java.lang.String.valueOf(e.localizedMessage))) }
     }
     private fun renderSyncState(value: BackgroundSyncState) {
-        if (showingSyncStatus) syncSettingsDialog?.setMessage(syncMessage(value.message))
+        settingsFragment()?.renderSyncState(value)
+        if (::headerSyncButton.isInitialized) {
+            headerSyncButton.isActivated = value.active
+            headerSyncButton.contentDescription = getString(R.string.ui_727036c7fc2a) + " · " + syncMessage(value.message)
+            (headerSyncButton as? TextView)?.setTextColor(if (value.conflict != null || value.active) palette.primary else palette.muted)
+        }
         val request = value.conflict
-        if (request == null) { syncConflictDialog?.dismiss(); syncConflictDialog = null; syncConflictId = null; return }
-        if (syncConflictId == request.id) return
-        syncConflictDialog?.dismiss()
-        syncConflictId = request.id
-        val feature = request.feature
-        val featureLabel = feature.localized(this)
-        val labels = listOf(getString(R.string.ui_9bc599d27f67, java.lang.String.valueOf(featureLabel), java.lang.String.valueOf(featureLabel)), getString(R.string.ui_d46592bdaed4, java.lang.String.valueOf(featureLabel), java.lang.String.valueOf(featureLabel)),
-            getString(R.string.ui_039142dac5c0, java.lang.String.valueOf(featureLabel), java.lang.String.valueOf(featureLabel)), getString(R.string.ui_3e4d21031b6b, java.lang.String.valueOf(featureLabel), java.lang.String.valueOf(featureLabel))) +
-            (if (feature == SyncFeature.LIST) listOf(getString(R.string.ui_318ed0b4705c), getString(R.string.ui_155471e97da7)) else emptyList()) + getString(R.string.ui_5034ddc8102c)
-        syncConflictDialog = AlertDialog.Builder(this).setTitle(getString(R.string.ui_5265436b89fb, java.lang.String.valueOf(featureLabel), java.lang.String.valueOf(if (request.serverName.isBlank()) "" else " · ${request.serverName}")))
-            .setItems(labels.toTypedArray()) { _, which -> syncService?.choose(request.id, feature.modes[which]) }
-            .setOnCancelListener { syncService?.choose(request.id, "cancel") }.show()
+        if (request != null && syncConflictId != request.id) {
+            syncConflictId = request.id
+            if (settingsFragment()?.savePageState()?.getString("category") != "sync") toast(getString(R.string.sync_pending_choice))
+        }
+        if (request == null) syncConflictId = null
     }
     private suspend fun refreshSynchronizedPlaylist() {
         val current = activePlaylist.takeUnless { onlineMode }
@@ -1291,21 +1218,17 @@ class MainActivity : FragmentActivity() {
             allSongs = songs; filterSongs()
         }
     }
-    private fun showPlaybackQuality() {
-        val values = arrayOf("128k", "320k", "flac", "flac24bit")
-        val preferences = getSharedPreferences("player", MODE_PRIVATE)
-        val selected = values.indexOf(preferences.getString("quality", "128k")).coerceAtLeast(0)
-        AlertDialog.Builder(this).setTitle(getString(R.string.ui_599818eb56df))
-            .setSingleChoiceItems(values, selected) { dialog, which ->
-                preferences.edit().putString("quality", values[which]).apply()
-                dialog.dismiss()
-            }.setNegativeButton(getString(R.string.ui_2cd0f3be8738), null).show()
-    }
+    private fun showPlaybackQuality() = openSettings("playback")
     private fun showPlaybackSettings() {
-        if (playbackSettingsDialog?.isShowing == true) return
-        val player = service ?: run { toast(getString(R.string.ui_c9bccc27768b)); return }
+        if (playerDialog?.isShowing == true) {
+            returnToPlayerFromSettings = true; restoreDetailLyrics = detailShowingLyrics; playerDialog?.dismiss()
+        }
+        openSettings("playback")
+    }
+    private fun playbackSettingsContent(): View? {
+        val player = service ?: return null
         val landscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
-        playbackSettingsDialog = PlayerSettingsDialog(this, playerSettings, lyricOffsets, landscape, player.state.value.song,
+        return PlayerSettingsContent(this, playerSettings, lyricOffsets, landscape, player.state.value.song,
             player::setPlaybackRate, player::setVolume, {
                 lyricAppearance = playerSettings.appearance(landscape)
                 detailRenderedLines = null
@@ -1317,12 +1240,12 @@ class MainActivity : FragmentActivity() {
                     lyricDelayMs = lyricOffsets.get(song); player.refreshLyricPreferences()
                     updateLyric(player.state.value.position); renderDetails(player.state.value)
                 }
-            }).show().also { dialog -> dialog.setOnDismissListener { playbackSettingsDialog = null } }
+            }).createContent()
     }
     private fun showSettings() = openSettings()
     private fun showSources() = openSettings("sources")
-    private fun openSettings(category: String? = null, state: Bundle? = null) {
-        if (settingsFragment() != null) return
+    internal fun openSettings(category: String? = null, state: Bundle? = null) {
+        settingsFragment()?.let { existing -> category?.let(existing::selectCategory); return }
         val saved = state ?: Bundle().apply { category?.let { putString("category", it) } }
         if (supportFragmentManager.isStateSaved || navigation == null) { pendingSettingsState = saved; return }
         hidePageKeyboard()
@@ -1371,6 +1294,15 @@ class MainActivity : FragmentActivity() {
         }
         navigation = host.navController
         navigation?.addOnDestinationChangedListener { _, destination, _ ->
+            choicesPopup.dismiss()
+            if (destination.id != R.id.settings_page && returnToPlayerFromSettings) {
+                returnToPlayerFromSettings = false
+                val lyrics = restoreDetailLyrics
+                window.decorView.post {
+                    showPlayerDetails()
+                    if (lyrics && !uiLayout.splitPlayer) toggleDetailPage()
+                }
+            }
             if (destination.id != R.id.music_page) playlistDrawer?.close(false)
             if (destination.id == R.id.music_page && (retainedPageState.beforePlaylist != null || beforePlaylistSaved != null)) {
                 loadJob?.cancel()
@@ -1402,11 +1334,23 @@ class MainActivity : FragmentActivity() {
                 @Suppress("DEPRECATION")
                 startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply { addCategory(Intent.CATEGORY_OPENABLE); type = "*/*" }, REQUEST_SOURCE)
             },
-            sourceActions = { entry, changed -> showSourceActions(entry, changed) },
-            playback = ::showPlaybackSettings, quality = ::showPlaybackQuality,
-            desktopLyrics = { showDesktopLyricSettings(this) { service?.refreshLyricPreferences() } },
-            sync = ::showSyncSettings, about = { showAbout(this, scope) }
+            sourceActions = { anchor, entry, changed -> showSourceActions(anchor, entry, changed) },
+            desktopLyrics = { openSettings("desktop-lyrics") },
+            syncState = { syncService?.state?.value ?: BackgroundSyncSettings(this).let { BackgroundSyncState(active = it.enabled, message = it.message) } },
+            connectSync = ::connectSync,
+            disconnectSync = { SyncService.disconnect(this) },
+            chooseSync = { id, mode -> syncService?.choose(id, mode) ?: false },
+            exportLogs = ::exportDiagnostics,
+            sourceUpdate = { service?.sourceUpdates?.value },
+            dismissSourceUpdate = { service?.dismissSourceUpdate() },
+            playbackContent = ::playbackSettingsContent
         )
+    private fun exportDiagnostics() {
+        @Suppress("DEPRECATION")
+        startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE); type = "text/plain"; putExtra(Intent.EXTRA_TITLE, "lx-native-diagnostics.txt")
+        }, REQUEST_LOG_EXPORT)
+    }
     internal fun refreshSettingsPreferences() {
         service?.refreshPreferences(); filterSongs(); service?.state?.value?.let(::renderPlayer)
     }
@@ -1499,9 +1443,10 @@ class MainActivity : FragmentActivity() {
         }
         dialog.show(); list.setSelection(snapshot.index)
     }
-    private fun showSourceActions(entry: UserSourceEntry, changed: () -> Unit = {}) {
-        val actions = arrayOf(getString(R.string.ui_f4f0ead1116b), getString(R.string.ui_0e6252224f58), getString(R.string.ui_0fd5cd79a1b5), getString(R.string.ui_ba9a8defba4e, java.lang.String.valueOf(if (entry.allowUpdateAlert) getString(R.string.ui_3fd47edce45b) else getString(R.string.ui_8da97ddda990))), getString(R.string.ui_2f9daa828907))
-        AlertDialog.Builder(this).setTitle(entry.name).setItems(actions) { _, index ->
+    private fun showSourceActions(anchor: View, entry: UserSourceEntry, changed: () -> Unit = {}) {
+        val actions = arrayOf(getString(R.string.ui_f4f0ead1116b), getString(R.string.ui_0fd5cd79a1b5), getString(R.string.ui_ba9a8defba4e, java.lang.String.valueOf(if (entry.allowUpdateAlert) getString(R.string.ui_3fd47edce45b) else getString(R.string.ui_8da97ddda990))), getString(R.string.ui_2f9daa828907))
+        choicesPopup.show(anchor, actions.indices.map(Int::toString), actions.toList(), "", palette) { id ->
+            val index = id.toInt()
             when (index) {
                 0 -> scope.launch {
                     try { service?.selectSource(entry.id); changed(); toast(getString(R.string.ui_032d025aff70)) }
@@ -1509,15 +1454,6 @@ class MainActivity : FragmentActivity() {
                     catch (e: Exception) { toast(getString(R.string.ui_ced3fddd61e0, java.lang.String.valueOf(e.localizedMessage))) }
                 }
                 1 -> {
-                    val builder = AlertDialog.Builder(this).setTitle(entry.name)
-                        .setMessage(listOf(entry.description, getString(R.string.ui_88f46c701fba, java.lang.String.valueOf(entry.version)), getString(R.string.ui_962844a38d3e, java.lang.String.valueOf(entry.author))).joinToString("\n"))
-                        .setNegativeButton(getString(R.string.ui_3fd47edce45b), null)
-                    if (entry.homepage.startsWith("https://") || entry.homepage.startsWith("http://")) builder.setPositiveButton(getString(R.string.ui_3e0d676d2d85)) { _, _ ->
-                        runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(entry.homepage))) }
-                    }
-                    builder.show()
-                }
-                2 -> {
                     pendingSourceExportId = entry.id
                     @Suppress("DEPRECATION")
                     startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
@@ -1525,19 +1461,19 @@ class MainActivity : FragmentActivity() {
                         putExtra(Intent.EXTRA_TITLE, entry.name.replace(Regex("[\\\\/:*?\"<>|]"), "_").take(80) + ".js")
                     }, REQUEST_SOURCE_EXPORT)
                 }
-                3 -> scope.launch {
+                2 -> scope.launch {
                     try { service?.allowSourceUpdates(entry.id, !entry.allowUpdateAlert); changed(); toast(getString(R.string.ui_5c73d0fff5e2)) }
                     catch (e: CancellationException) { throw e }
                     catch (e: Exception) { toast(getString(R.string.ui_749d84b5fa76, java.lang.String.valueOf(e.localizedMessage))) }
                 }
-                4 -> AlertDialog.Builder(this).setMessage(getString(R.string.ui_852174674832, java.lang.String.valueOf(entry.name))).setNegativeButton(getString(R.string.ui_2cd0f3be8738), null)
+                3 -> AlertDialog.Builder(this).setMessage(getString(R.string.ui_852174674832, java.lang.String.valueOf(entry.name))).setNegativeButton(getString(R.string.ui_2cd0f3be8738), null)
                     .setPositiveButton(getString(R.string.ui_2f9daa828907)) { _, _ -> scope.launch {
                         try { service?.removeSource(entry.id); changed(); toast(getString(R.string.ui_a1bfd178ab34)) }
                         catch (e: CancellationException) { throw e }
                         catch (e: Exception) { toast(getString(R.string.ui_57deb333c04b, java.lang.String.valueOf(e.localizedMessage))) }
                     } }.show()
             }
-        }.show()
+        }
     }
     private fun updateListAction() {
         updateNavigationSelection()
