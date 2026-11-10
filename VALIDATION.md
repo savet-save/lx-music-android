@@ -1,5 +1,21 @@
 # 原生迁移验证记录
 
+## 2026-11-10：取消歌单返回手势后白屏
+
+歌单搜索页与歌单详情页使用同一份 Activity 内容视图。预测性返回创建上一页的预览视图时，原实现会立即从详情页移走内容；取消手势销毁预览后，内容失去父视图，当前页只剩白屏，全局播放器仍在。新增设备用例在修改前复现了 `content.parent == null`。
+
+`MusicPageFragment` 改为在 `onResume` 接管共享内容，刷新时也检查当前页是否已恢复；预览页创建时仅创建容器。内容已经属于当前容器时直接保留，避免取消返回后的重复移除和添加。
+
+独立 `.backcancelcheck` 包在 YYA-H618 / Android 12 完成 10 项相关设备回归，包括连续三次取消返回、确认返回后恢复搜索词/歌单结果/分页游标、搜索与换肤、歌单浏览返回与重建、本地导航及播放期间的页面切换。新用例通过 [OnBackPressedDispatcher 的测试入口](https://developer.android.com/reference/androidx/activity/OnBackPressedDispatcher) 派发开始、进度和取消/确认事件，并确认真实 Fragment 预览已创建；取消过程中歌单请求次数保持一次。此验证覆盖 Fragment 返回流程，尚未在 Android 14 及以上通过物理侧滑验证系统动画。
+
+Debug/测试 APK 构建、27 项 JVM 单元测试及 Debug Lint 通过（0 错误）。修改前失败记录与修复后结果保存在忽略的 `build/back-cancel-before-fix/`、`build/back-cancel-related-passed.xml` 和 `build/back-cancel-final-passed.xml`。测试仅运行在指定测试设备，完成后独立测试包已清理，正式应用的安装路径未变。
+
+## 2026-11-10：本地音乐导航状态
+
+本地音乐注册为独立的可选中导航项，初始页面、进入本地音乐及重建恢复后的标题均显示「本地音乐」；选择实际歌单后才高亮「我的列表」。本地音乐和歌单切换先更新数据来源，再刷新导航状态；点击「我的列表」打开歌单选择器。
+
+独立 `.localselectioncheck` 包在 YYA-H618 / Android 12 完成 5 项相关设备回归：新增手机/平板切换与重建用例、横向导航手势、歌单菜单、播放期间切换页面、英文/繁体重建。首轮出现新用例布局等待超时及菜单输入注入失败；补齐布局就绪等待后，新用例和既有菜单用例分别复测通过，记录保存在忽略的 `build/local-selection-first-run/` 与 `build/local-selection-passed.xml`。Debug/测试包构建通过，Debug Lint 无错误。
+
 ## 2026-11-10：0.9.9 发布验证
 
 版本更新为 `0.9.9 / 9009`，包含本地音乐入口去重、更新说明精简和左侧导航文字颜色统一。为本次版本提供 `doc/release-notes/native-v0.9.9.md`，发布脚本优先采用其中的三条简短改动，便于旧版应用直接显示；校验值继续通过 `SHA256SUMS.txt` 附件提供。
