@@ -9,6 +9,35 @@ class UpdateNotesTest {
         assertEquals("• 减少设置弹窗", UpdateNotes.summary(body))
     }
 
+    @Test fun completeReleaseKeepsOnlyTheCuratedSummaryInTheClient() {
+        val body = requireNotNull(javaClass.classLoader?.getResource("update/release-v0.9.12-full.md")).readText()
+        assertEquals("• 歌单搜索改为封面和名称网格，手机三列，平板随宽度增加列数；分页及返回时保留位置。\n" +
+            "• 移除重复的“我的歌单”入口；“我的列表”默认打开上次选择，没有历史时打开“我的收藏”。", UpdateNotes.summary(body))
+    }
+
+    @Test fun summaryIncludesNestedSectionsAndStopsBeforeTheCommitHistory() {
+        val body = """
+            # Release
+            ## Release summary
+            ### Playback
+            - 支持逐字歌词。
+            ## 更新记录
+            - 重构内部播放实现 ([abcdef0](https://example.org/commit/abcdef0))
+        """.trimIndent()
+        assertEquals("• 支持逐字歌词。", UpdateNotes.summary(body))
+    }
+
+    @Test fun emptySummaryFallsBackToChangesAndSkipsNativeVersionCommits() {
+        val body = """
+            ## 更新摘要
+            <!-- No curated changes -->
+            ## 更新记录
+            - 更新原生版本到0.9.12 ([abcdef0](https://example.org/commit/abcdef0))
+            - 修复列表滚动 ([1234567](https://example.org/commit/1234567))
+        """.trimIndent()
+        assertEquals("• 修复列表滚动", UpdateNotes.summary(body))
+    }
+
     @Test fun readableMarkdownKeepsDescriptionsWithoutRawLinksOrFormatting() {
         val body = """
             ## 更新记录

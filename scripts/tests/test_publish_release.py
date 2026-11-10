@@ -316,15 +316,20 @@ class PublishReleaseTest(unittest.TestCase):
             self.assertIn(digest, body)
             self.assertIn(f"{digest}  {name}\n", (output / "SHA256SUMS.txt").read_text())
 
-    def test_version_specific_notes_stay_concise_and_keep_checksum_assets(self):
+    def test_version_specific_notes_keep_the_project_intro_and_full_checksum_information(self):
         notes_path = self.root / "doc/release-notes/native-v0.9.3.md"
         notes_path.parent.mkdir(parents=True)
         notes = "- 修复播放中断。\n- 优化更新说明。\n"
         notes_path.write_text(notes, encoding="utf-8-sig")
         output, checksums = self.prepared()
-        self.assertEqual(notes, (output / "RELEASE_NOTES.md").read_text(encoding="utf-8"))
+        body = (output / "RELEASE_NOTES.md").read_text(encoding="utf-8")
+        self.assertTrue(body.startswith("## 更新摘要\n\n" + notes))
+        self.assertIn("原生音乐播放器", body)
+        self.assertIn("## APK SHA-256", body)
         for name, digest in checksums.items():
             self.assertEqual(release.sha256(output / name), digest)
+            self.assertIn(f"/releases/download/native-v0.9.3/{name}", body)
+            self.assertIn(digest, body)
             self.assertIn(f"{digest}  {name}\n", (output / "SHA256SUMS.txt").read_text())
 
     def test_empty_version_specific_notes_are_rejected(self):
@@ -346,12 +351,23 @@ class PublishReleaseTest(unittest.TestCase):
         git("commit", "--allow-empty", "-qm", "Fix playback")
         git("commit", "--allow-empty", "-qm", "Add bundled source")
         git("tag", "native-v0.9.3")
-        body = release.release_notes("owner/repo", "native-v0.9.3", "native-v0.9.2", {"all.apk": "a" * 64})
-        self.assertIn("Fix playback", body)
-        self.assertIn("Add bundled source", body)
-        self.assertIn("/compare/native-v0.9.2...native-v0.9.3", body)
-        self.assertNotIn("Initial project", body)
-        self.assertNotIn("原生音乐播放器", body)
+        notes_path = self.root / "doc/release-notes/native-v0.9.3.md"
+        notes_path.parent.mkdir(parents=True)
+        for notes in (None, "- 修复播放中断。\n"):
+            with self.subTest(summary=notes is not None):
+                if notes is not None:
+                    notes_path.write_text(notes, encoding="utf-8")
+                body = release.release_notes("owner/repo", "native-v0.9.3", "native-v0.9.2", {"all.apk": "a" * 64})
+                self.assertIn("Fix playback", body)
+                self.assertIn("Add bundled source", body)
+                for commit in git("log", "--format=%H", "native-v0.9.2..native-v0.9.3").splitlines():
+                    self.assertIn(f"[{commit[:7]}](https://github.com/owner/repo/commit/{commit})", body)
+                self.assertIn("/compare/native-v0.9.2...native-v0.9.3", body)
+                self.assertIn("a" * 64, body)
+                self.assertNotIn("Initial project", body)
+                self.assertNotIn("原生音乐播放器", body)
+                if notes is not None:
+                    self.assertTrue(body.startswith("## 更新摘要\n\n" + notes))
 
     def test_verification_checks_versions_abis_and_common_signer(self):
         self.artifacts()

@@ -6,6 +6,7 @@ import java.util.Locale
 internal object UpdateNotes {
     private val heading = Regex("^(#{1,6})\\s+(.+)$")
     private val listItem = Regex("^\\s*(?:[-*+]\\s+|\\d+[.)]\\s+)")
+    private val summaryHeadings = setOf("更新摘要", "更新重点", "更新重點", "releasesummary", "highlights")
     private val technicalHeadings = setOf("sha256", "apksha256", "安装包sha256", "安裝包sha256", "sha256checksums",
         "apksha256checksums", "sha256校验", "sha256校驗", "校验和", "校驗和", "校验值", "校驗值", "checksum", "checksums",
         "apk", "asset", "assets", "artifact", "artifacts", "安装包", "安裝包", "安装包下载", "安裝包下載",
@@ -14,14 +15,21 @@ internal object UpdateNotes {
     private val reference = Regex("(?:完整改动|完整改動|完整更新说明|完整更新說明|full changelog|compare(?: changes)?|[a-f0-9]{7,64}|.*\\.apk)", RegexOption.IGNORE_CASE)
     private val maintenance = Regex("^(?:test|tests|docs|ci|build|chore|style)(?:\\([^)]*\\))?!?:", RegexOption.IGNORE_CASE)
     private val changePrefix = Regex("^(?:feat|fix|perf|refactor|revert)(?:\\([^)]*\\))?!?:\\s*", RegexOption.IGNORE_CASE)
-    private val versionChange = Regex("(?:^|并|並|[,，；;]\\s*)(?:更新|升级|升級|调整|調整)版本(?:号|號)?(?:到|至|为|為)?\\s*v?\\d+(?:\\.\\d+){1,3}\\s*[.。]?\\s*$", RegexOption.IGNORE_CASE)
+    private val versionChange = Regex("(?:^|并|並|[,，；;]\\s*)(?:更新|升级|升級|调整|調整)(?:原生)?版本(?:号|號)?(?:到|至|为|為)?\\s*v?\\d+(?:\\.\\d+){1,3}\\s*[.。]?\\s*$", RegexOption.IGNORE_CASE)
     private val versionOnly = Regex("^(?:(?:bump|release|version)(?:\\s+version|\\s+to)?\\s+)?v?\\d+(?:\\.\\d+){1,3}[.。]?$", RegexOption.IGNORE_CASE)
 
     fun summary(markdown: String): String {
         val blocks = mutableListOf<String>()
+        val preferredBlocks = mutableListOf<String>()
+        var summaryLevel: Int? = null
         val current = StringBuilder()
         fun flush() {
-            if (current.isNotEmpty()) { blocks += current.toString(); current.clear() }
+            if (current.isNotEmpty()) {
+                val block = current.toString()
+                blocks += block
+                if (summaryLevel != null) preferredBlocks += block
+                current.clear()
+            }
         }
         var skippedLevel: Int? = null
         var fence: String? = null
@@ -43,6 +51,8 @@ internal object UpdateNotes {
                 val level = title.groupValues[1].length
                 if (skippedLevel != null && level <= skippedLevel) skippedLevel = null
                 val name = title.groupValues[2].lowercase(Locale.ROOT).filterNot { it.isWhitespace() || it in "*_:-：" }
+                if (summaryLevel != null && level <= summaryLevel!!) summaryLevel = null
+                if (name in summaryHeadings) summaryLevel = level
                 if (skippedLevel == null && name in technicalHeadings) skippedLevel = level
                 continue
             }
@@ -53,7 +63,8 @@ internal object UpdateNotes {
             current.append(line.replaceFirst(listItem, ""))
         }
         flush()
-        return blocks.map(::plainText).filter { it.isNotBlank() }.distinct().take(5)
+        val preferred = preferredBlocks.map(::plainText).filter { it.isNotBlank() }
+        return preferred.ifEmpty { blocks.map(::plainText).filter { it.isNotBlank() } }.distinct().take(5)
             .joinToString("\n") { "• ${shorten(it)}" }
     }
 

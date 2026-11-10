@@ -179,9 +179,13 @@ class SettingsFragmentTest {
             instrumentation.runOnMainSync {
                 preferences.edit().remove("version.ignored").commit()
                 NativeUpdateNotice.release.value = NativeRelease("999.0.0", "https://example.org/release", """
+                    ## 更新摘要
+                    - 减少设置弹窗。
+                    - 修复同步状态显示。
                     ## 更新记录
                     - 减少设置弹窗并更新版本到999.0.0 ([abcdef0](https://example.org/commit/abcdef0))
                     - 修复同步状态显示。
+                    - 重构内部构建检查 ([1234567](https://example.org/commit/1234567))
                     [完整改动](https://example.org/compare)
                     ## APK SHA-256
                     | app.apk | ${"a".repeat(64)} |
@@ -191,7 +195,7 @@ class SettingsFragmentTest {
             val page = settings(activity).requireView()
             await {
                 val notes = page.findViewWithTag<TextView>("update-notes")
-                notes.text.toString() == "• 减少设置弹窗\n• 修复同步状态显示。" && notes.lineCount >= 2 && page.findViewWithTag<View>("update-download").isEnabled
+                notes.text.toString() == "• 减少设置弹窗。\n• 修复同步状态显示。" && notes.lineCount >= 2 && page.findViewWithTag<View>("update-download").isEnabled
             }
             instrumentation.runOnMainSync {
                 measure(page, 600, 360)
@@ -202,6 +206,8 @@ class SettingsFragmentTest {
                 assertSame(activity.window.decorView.windowToken, page.windowToken)
                 assertTrue(page.findViewWithTag<View>("update-download").isEnabled)
                 assertEquals(activity.getString(R.string.update_view_full_notes), page.findViewWithTag<TextView>("update-release-page").text.toString())
+                assertTrue(NativeUpdateNotice.release.value!!.notes.contains("[abcdef0](https://example.org/commit/abcdef0)"))
+                assertTrue(NativeUpdateNotice.release.value!!.notes.contains("## APK SHA-256"))
                 assertTrue(page.findViewWithTag<TextView>("about-version").lineCount >= 3)
                 capture("update-summary", page)
                 page.findViewWithTag<View>("update-ignore").performClick()
