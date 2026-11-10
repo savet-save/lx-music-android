@@ -405,7 +405,7 @@ class PlaybackSettingsTest {
                 main { heading.performClick() }
                 val favoriteTag = "playlist-choice-$favorites"
                 waitFor { activity.window.decorView.findViewWithTag<View>(favoriteTag)?.isShown == true }
-                assertTrue(activity.window.decorView.findViewWithTag<View>("playlist-choice-local").isShown)
+                assertNull(activity.window.decorView.findViewWithTag<View>("playlist-choice-local"))
                 selectPage(favoriteTag)
                 waitFor { (field(activity, "activePlaylist") as? Playlist)?.syncId == "love" }
                 assertEquals(song, fixture.player.state.value.song)

@@ -145,6 +145,11 @@ class PlatformPopupTest {
                     option("playlist-drawer-panel")?.translationX == 0f && option("playlist-more-$favorites")?.isShown == true &&
                         option("playlist-choice-$custom")?.isShown == true
                 }
+                main {
+                    assertNull(option("playlist-choice-local"))
+                    assertNull(option("playlist-more-local"))
+                    assertFalse(requireNotNull(option("playlist-choice-$favorites")).isSelected)
+                }
                 tap("playlist-more-$favorites")
                 await("favorites popup input focus") { actions()?.rootView?.hasWindowFocus() == true }
                 main {

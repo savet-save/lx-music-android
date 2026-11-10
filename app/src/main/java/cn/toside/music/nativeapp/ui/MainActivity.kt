@@ -989,6 +989,7 @@ class MainActivity : FragmentActivity() {
             val text = lx.label(getString(label), 16f).apply { maxLines = 2; setPadding(dp(8), 0, 0, 0) }
             row.addView(text, LinearLayout.LayoutParams(0, -2, 1f))
             if (page != null) { navigationItems[page] = text; row.tag = "navigation-$page" }
+            else if (label == R.string.ui_a9531e47b75d) row.tag = "navigation-local"
             parent.addView(row, LinearLayout.LayoutParams(-1, -2))
         }
         val items = LinearLayout(this@MainActivity).apply {
@@ -1020,6 +1021,7 @@ class MainActivity : FragmentActivity() {
             val text = lx.label(getString(label), 14f)
             row.addView(text, LinearLayout.LayoutParams(0, -2, 1f))
             if (page != null) { navigationItems[page] = text; row.tag = "navigation-$page" }
+            else if (label == R.string.ui_a9531e47b75d) row.tag = "navigation-local"
             items.addView(row, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(4) })
         }
         entry(59660, R.string.ui_87a2113eb66f, 1) { navigateToPage(1) }
@@ -1935,8 +1937,7 @@ class MainActivity : FragmentActivity() {
             playlistActionsPopup.dismiss()
         }
     }
-    private fun selectPlaylist(playlist: Playlist?) {
-        if (playlist == null) { openLocalPage(true); return }
+    private fun selectPlaylist(playlist: Playlist) {
         if (onlineMode || activePlaylist?.id != playlist.id) {
             setSearchVisible(false)
             loadPlaylist(playlist)
@@ -1970,26 +1971,23 @@ class MainActivity : FragmentActivity() {
         ENQUEUE(R.string.ui_b6cd52c6fe92), REFRESH(R.string.ui_31448436755a), UP(R.string.ui_46a150506a48),
         DOWN(R.string.ui_77037dd314bf), CLEAR(R.string.ui_4e0ca928260e), DELETE(R.string.ui_0a1d79c26e3b)
     }
-    private fun showPlaylistActions(anchor: View, playlist: Playlist?) {
-        val builtin = playlist == null || playlist.syncId in setOf("default", "love")
+    private fun showPlaylistActions(anchor: View, playlist: Playlist) {
+        val builtin = playlist.syncId in setOf("default", "love")
         val actions = buildList {
             add(PlaylistAction.CREATE); add(PlaylistAction.RENAME)
-            if (playlist != null) {
-                add(PlaylistAction.SORT); add(PlaylistAction.ENQUEUE); add(PlaylistAction.REFRESH)
-                if (!builtin) { add(PlaylistAction.UP); add(PlaylistAction.DOWN) }
-                add(PlaylistAction.CLEAR)
-            }
+            add(PlaylistAction.SORT); add(PlaylistAction.ENQUEUE); add(PlaylistAction.REFRESH)
+            if (!builtin) { add(PlaylistAction.UP); add(PlaylistAction.DOWN) }
+            add(PlaylistAction.CLEAR)
             add(PlaylistAction.DELETE)
         }
         val disabled = buildSet {
             if (builtin) { add(PlaylistAction.RENAME.name); add(PlaylistAction.DELETE.name) }
-            if (playlist?.source !in ExternalLinks.sources || playlist?.sourceListId.isNullOrBlank()) add(PlaylistAction.REFRESH.name)
+            if (playlist.source !in ExternalLinks.sources || playlist.sourceListId.isNullOrBlank()) add(PlaylistAction.REFRESH.name)
         }
         playlistActionsPopup.show(anchor, actions.map { it.name }, actions.map { getString(it.label) }, "", palette,
             alignEnd = true, disabled = disabled) { selected ->
             val action = PlaylistAction.valueOf(selected)
-            if (playlist != null) runPlaylistAction(action, playlist)
-            else if (action == PlaylistAction.CREATE) createPlaylist()
+            runPlaylistAction(action, playlist)
         }
     }
     private fun runPlaylistAction(action: PlaylistAction, playlist: Playlist) {
