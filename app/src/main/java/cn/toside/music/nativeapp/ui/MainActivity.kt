@@ -444,7 +444,7 @@ class MainActivity : FragmentActivity() {
             try { search.setText(retained.query) } finally { restoringSearchText = false }
             suggestionJob?.cancel(); setSearchVisible(retained.searchVisible)
             updateListAction()
-            pageTitle.text = getString(when { boardMode -> R.string.ui_1ee95aa94712; onlinePlaylistMode -> R.string.ui_473e57b72072; onlineMode -> R.string.ui_44ce7ae909bb; else -> R.string.ui_27c95ec6b766 })
+            pageTitle.text = getString(when { boardMode -> R.string.ui_1ee95aa94712; onlinePlaylistMode -> R.string.ui_473e57b72072; onlineMode -> R.string.ui_44ce7ae909bb; activePlaylist != null -> R.string.ui_27c95ec6b766; else -> R.string.ui_a9531e47b75d })
             heading.text = when { boardMode -> "›   ${selectedBoard?.name.orEmpty()}"; onlinePlaylistMode -> "›   ${selectedOnlinePlaylist?.name.orEmpty()}"
                 onlineMode -> getString(R.string.ui_e07216a6d505, sourceLabel()); activePlaylist != null -> "›   ${activePlaylist!!.displayName}"; else -> getString(R.string.ui_33eeaa47c231) }
             if (preferences.saveScroll) pendingScroll = retained.first to retained.top
@@ -672,7 +672,7 @@ class MainActivity : FragmentActivity() {
             setPadding(dp(if (uiLayout.expanded) 20 else 4), dp(4), dp(8), dp(4))
         }
         val menu = lx.icon(59680, getString(R.string.ui_e35a36e26d52), 19f) { showNavigation() }
-        pageTitle = lx.label(getString(R.string.ui_27c95ec6b766), 19f).apply {
+        pageTitle = lx.label(getString(R.string.ui_a9531e47b75d), 19f).apply {
             setPadding(dp(8), 0, dp(8), 0); setTypeface(null, Typeface.BOLD)
         }
         if (!uiLayout.expanded && !preferences.menuOnRight) header.addView(menu, LinearLayout.LayoutParams(dp(48), dp(48)))
@@ -962,7 +962,7 @@ class MainActivity : FragmentActivity() {
     }
     private fun navigateToPage(page: Int) {
         when (page) {
-            0 -> if (activePlaylist != null) showPlaylists() else openLocalPage(false)
+            0 -> showPlaylists()
             1 -> openSearchPage(false)
             2 -> showBoards()
             3 -> showOnlinePlaylists()
@@ -986,10 +986,9 @@ class MainActivity : FragmentActivity() {
             } else lx.label(code.toChar().toString(), 21f, palette.muted).apply { typeface = iconFont; gravity = Gravity.CENTER }
             icon.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
             row.addView(icon, LinearLayout.LayoutParams(dp(44), dp(48)))
-            val text = lx.label(getString(label), 16f).apply { maxLines = 2; setPadding(dp(8), 0, 0, 0) }
+            val text = lx.label(getString(label), 16f, palette.muted).apply { maxLines = 2; setPadding(dp(8), 0, 0, 0) }
             row.addView(text, LinearLayout.LayoutParams(0, -2, 1f))
-            if (page != null) { navigationItems[page] = text; row.tag = "navigation-$page" }
-            else if (label == R.string.ui_a9531e47b75d) row.tag = "navigation-local"
+            if (page != null) { navigationItems[page] = text; row.tag = if (page == PAGE_LOCAL) "navigation-local" else "navigation-$page" }
             parent.addView(row, LinearLayout.LayoutParams(-1, -2))
         }
         val items = LinearLayout(this@MainActivity).apply {
@@ -1000,7 +999,7 @@ class MainActivity : FragmentActivity() {
         entry(items, 59658, R.string.ui_1ee95aa94712, 2) { navigateToPage(2) }
         entry(items, 59657, R.string.ui_27c95ec6b766, 0) { navigateToPage(0) }
         entry(items, 59656, R.string.download_page, 4) { navigateToPage(4) }
-        entry(items, 59696, R.string.ui_a9531e47b75d) { openLocalPage(true) }
+        entry(items, 59696, R.string.ui_a9531e47b75d, PAGE_LOCAL) { openLocalPage(true) }
         entry(items, 59666, R.string.ui_c2dd14825672) { showPlaylists() }
         entry(items, 59655, R.string.settings_title) { showSettings() }
         addView(ScrollView(this@MainActivity).apply { isVerticalScrollBarEnabled = false; addView(items) }, LinearLayout.LayoutParams(-1, 0, 1f))
@@ -1017,11 +1016,10 @@ class MainActivity : FragmentActivity() {
         val items = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.VERTICAL }
         fun entry(code: Int, label: Int, page: Int? = null, click: () -> Unit) {
             val row = LinearLayout(this@MainActivity).apply { gravity = Gravity.CENTER_VERTICAL; background = lx.touch(); isFocusable = true; setOnClickListener { click() } }
-            row.addView(lx.label(code.toChar().toString(), 19f).apply { typeface = iconFont; gravity = Gravity.CENTER }, LinearLayout.LayoutParams(dp(40), dp(48)))
-            val text = lx.label(getString(label), 14f)
+            row.addView(lx.label(code.toChar().toString(), 19f, palette.muted).apply { typeface = iconFont; gravity = Gravity.CENTER }, LinearLayout.LayoutParams(dp(40), dp(48)))
+            val text = lx.label(getString(label), 14f, palette.muted)
             row.addView(text, LinearLayout.LayoutParams(0, -2, 1f))
-            if (page != null) { navigationItems[page] = text; row.tag = "navigation-$page" }
-            else if (label == R.string.ui_a9531e47b75d) row.tag = "navigation-local"
+            if (page != null) { navigationItems[page] = text; row.tag = if (page == PAGE_LOCAL) "navigation-local" else "navigation-$page" }
             items.addView(row, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(4) })
         }
         entry(59660, R.string.ui_87a2113eb66f, 1) { navigateToPage(1) }
@@ -1030,7 +1028,7 @@ class MainActivity : FragmentActivity() {
         entry(59659, R.string.ui_259597bf6ca7, 3) { navigateToPage(3) }
         entry(59656, R.string.download_page, 4) { navigateToPage(4) }
         items.addView(View(this@MainActivity).apply { setBackgroundColor(palette.divider) }, LinearLayout.LayoutParams(-1, dp(1)).apply { setMargins(dp(10), dp(16), dp(10), dp(16)) })
-        entry(59696, R.string.ui_a9531e47b75d) { openLocalPage(true) }
+        entry(59696, R.string.ui_a9531e47b75d, PAGE_LOCAL) { openLocalPage(true) }
         entry(59666, R.string.ui_c2dd14825672) { showPlaylists() }
         entry(59687, R.string.ui_727036c7fc2a) { showSyncSettings() }
         entry(59655, R.string.settings_title) { showSettings() }
@@ -1039,7 +1037,7 @@ class MainActivity : FragmentActivity() {
         addView(lx.icon(59680, getString(R.string.ui_e35a36e26d52), 19f) { showNavigation() }, LinearLayout.LayoutParams(-1, dp(48)))
     }
     private fun updateNavigationSelection() {
-        val current = when { navigation?.currentDestination?.id == R.id.downloads_page -> 4; navigation?.currentDestination?.id == R.id.playlist_browser -> 3; navigation?.currentDestination?.id == R.id.charts_page -> 2; boardMode -> 2; onlinePlaylistMode -> 3; onlineMode -> 1; else -> 0 }
+        val current = when { navigation?.currentDestination?.id == R.id.downloads_page -> 4; navigation?.currentDestination?.id == R.id.playlist_browser -> 3; navigation?.currentDestination?.id == R.id.charts_page -> 2; boardMode -> 2; onlinePlaylistMode -> 3; onlineMode -> 1; activePlaylist != null -> 0; else -> PAGE_LOCAL }
         navigationItems.forEach { (page, item) ->
             val selected = current == page
             item.isSelected = selected; item.setTextColor(if (selected) palette.primary else palette.muted)
@@ -1133,8 +1131,9 @@ class MainActivity : FragmentActivity() {
             allSongs = emptyList()
             pendingScroll = null
         }
-        onlineMode = false; boardMode = false; onlinePlaylistMode = false; updateListAction(); pageTitle.text = getString(R.string.ui_27c95ec6b766); loadMore.visibility = View.GONE
-        activePlaylist = null; heading.text = getString(R.string.ui_33eeaa47c231); search.text.clear(); setSearchVisible(false)
+        onlineMode = false; boardMode = false; onlinePlaylistMode = false; activePlaylist = null
+        updateListAction(); pageTitle.text = getString(R.string.ui_a9531e47b75d); loadMore.visibility = View.GONE
+        heading.text = getString(R.string.ui_33eeaa47c231); search.text.clear(); setSearchVisible(false)
         if (hasAudioPermission()) {
             filterSongs()
             loadSongs()
@@ -1904,9 +1903,9 @@ class MainActivity : FragmentActivity() {
             allSongs = emptyList()
             if (!suppressPageNavigation) pendingScroll = null
         }
-        onlineMode = false; boardMode = false; onlinePlaylistMode = false; updateListAction(); pageTitle.text = getString(R.string.ui_27c95ec6b766)
+        onlineMode = false; boardMode = false; onlinePlaylistMode = false; activePlaylist = playlist
+        updateListAction(); pageTitle.text = getString(R.string.ui_27c95ec6b766)
         loadMore.visibility = View.GONE
-        activePlaylist = playlist
         heading.text = "›   ${playlist.displayName}"
         search.text.clear()
         if (switching) filterSongs()
@@ -2633,6 +2632,6 @@ class MainActivity : FragmentActivity() {
         return "%02d:%02d".format(seconds / 60, seconds % 60)
     }
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
-    companion object { private const val REQUEST_AUDIO = 1; private const val REQUEST_LYRIC = 3; private const val REQUEST_SOURCE = 4; private const val REQUEST_BACKUP = 5; private const val REQUEST_DOWNLOAD = 6; private const val REQUEST_EXPORT = 7; private const val REQUEST_SYNC_NOTIFICATION = 8; private const val REQUEST_SOURCE_EXPORT = 9; private const val REQUEST_LOG_EXPORT = 10; private const val REQUEST_METADATA = 11 }
+    companion object { private const val PAGE_LOCAL = 5; private const val REQUEST_AUDIO = 1; private const val REQUEST_LYRIC = 3; private const val REQUEST_SOURCE = 4; private const val REQUEST_BACKUP = 5; private const val REQUEST_DOWNLOAD = 6; private const val REQUEST_EXPORT = 7; private const val REQUEST_SYNC_NOTIFICATION = 8; private const val REQUEST_SOURCE_EXPORT = 9; private const val REQUEST_LOG_EXPORT = 10; private const val REQUEST_METADATA = 11 }
 }
 

@@ -316,6 +316,24 @@ class PublishReleaseTest(unittest.TestCase):
             self.assertIn(digest, body)
             self.assertIn(f"{digest}  {name}\n", (output / "SHA256SUMS.txt").read_text())
 
+    def test_version_specific_notes_stay_concise_and_keep_checksum_assets(self):
+        notes_path = self.root / "doc/release-notes/native-v0.9.3.md"
+        notes_path.parent.mkdir(parents=True)
+        notes = "- 修复播放中断。\n- 优化更新说明。\n"
+        notes_path.write_text(notes, encoding="utf-8-sig")
+        output, checksums = self.prepared()
+        self.assertEqual(notes, (output / "RELEASE_NOTES.md").read_text(encoding="utf-8"))
+        for name, digest in checksums.items():
+            self.assertEqual(release.sha256(output / name), digest)
+            self.assertIn(f"{digest}  {name}\n", (output / "SHA256SUMS.txt").read_text())
+
+    def test_empty_version_specific_notes_are_rejected(self):
+        notes_path = self.root / "doc/release-notes/native-v0.9.3.md"
+        notes_path.parent.mkdir(parents=True)
+        notes_path.write_text(" \n", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "Release notes must not be empty"):
+            release.release_notes("owner/repo", "native-v0.9.3", "native-v0.9.2", {})
+
     def test_subsequent_release_uses_real_git_range_and_no_project_intro(self):
         def git(*arguments):
             return subprocess.run(["git", *arguments], cwd=self.root, check=True, capture_output=True, text=True).stdout.strip()

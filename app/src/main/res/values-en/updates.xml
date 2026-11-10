@@ -1,4 +1,5 @@
 <resources>
+    <string name="update_view_full_notes">View full release notes</string>
     <string name="update_download">Download native update</string>
     <string name="update_install">Verify and install update</string>
     <string name="update_cancel">Cancel and clear update download</string>

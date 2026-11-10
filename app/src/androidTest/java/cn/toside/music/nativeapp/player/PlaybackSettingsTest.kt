@@ -398,7 +398,7 @@ class PlaybackSettingsTest {
                 fun selectPage(tag: String) = main { activity.window.decorView.findViewWithTag<View>(tag).performClick() }
                 selectPage("navigation-1")
                 assertEquals(true, field(activity, "onlineMode"))
-                selectPage("navigation-0")
+                selectPage("navigation-local")
                 assertEquals(activity.getString(R.string.ui_33eeaa47c231), heading.text.toString())
                 assertTrue((field(activity, "visibleSongs") as List<*>).all { (it as Song).source == "local" })
                 val favorites = Playlists(context).use { it.loveList() }
@@ -613,7 +613,7 @@ class PlaybackSettingsTest {
         }
         withPlayback { fixture ->
             fixture.play(); val original = fixture.player
-            for ((language, label) in listOf("en" to "Your Library", "zh-TW" to "我的清單")) {
+            for ((language, label) in listOf("en" to "Local music", "zh-TW" to "本地音樂")) {
                 // waitForMonitorWithTimeout removes the monitor after it receives one Activity.
                 val monitor = instrumentation.addMonitor(MainActivity::class.java.name, null, false)
                 try {

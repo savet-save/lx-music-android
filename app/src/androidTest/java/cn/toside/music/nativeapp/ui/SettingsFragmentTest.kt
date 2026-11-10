@@ -178,14 +178,27 @@ class SettingsFragmentTest {
         try {
             instrumentation.runOnMainSync {
                 preferences.edit().remove("version.ignored").commit()
-                NativeUpdateNotice.release.value = NativeRelease("999.0.0", "https://example.org/release", "Inline release notes", "https://example.org/update.apk")
+                NativeUpdateNotice.release.value = NativeRelease("999.0.0", "https://example.org/release", """
+                    ## 更新记录
+                    - 减少设置弹窗并更新版本到999.0.0 ([abcdef0](https://example.org/commit/abcdef0))
+                    - 修复同步状态显示。
+                    [完整改动](https://example.org/compare)
+                    ## APK SHA-256
+                    | app.apk | ${"a".repeat(64)} |
+                """.trimIndent(), "https://example.org/update.apk")
                 activity.openSettings("about")
             }
             val page = settings(activity).requireView()
-            await { page.findViewWithTag<TextView>("update-notes").text.toString() == "Inline release notes" && page.findViewWithTag<View>("update-download").isEnabled }
+            await {
+                val notes = page.findViewWithTag<TextView>("update-notes")
+                notes.text.toString() == "• 减少设置弹窗\n• 修复同步状态显示。" && notes.lineCount >= 2 && page.findViewWithTag<View>("update-download").isEnabled
+            }
             instrumentation.runOnMainSync {
                 assertSame(activity.window.decorView.windowToken, page.windowToken)
                 assertTrue(page.findViewWithTag<View>("update-download").isEnabled)
+                assertEquals(activity.getString(R.string.update_view_full_notes), page.findViewWithTag<TextView>("update-release-page").text.toString())
+                assertTrue(page.findViewWithTag<TextView>("about-version").lineCount >= 3)
+                capture("update-summary", page)
                 page.findViewWithTag<View>("update-ignore").performClick()
                 assertEquals("999.0.0", preferences.getString("version.ignored", null))
                 assertFalse(page.findViewWithTag<View>("update-ignore").isEnabled)
@@ -194,6 +207,19 @@ class SettingsFragmentTest {
                 assertEquals(View.VISIBLE, page.findViewWithTag<View>("about-license").visibility)
                 assertTrue(page.findViewWithTag<TextView>("about-license").text.contains("Apache License"))
             }
+            var openedRelease: Intent? = null
+            val linkMonitor = object : android.app.Instrumentation.ActivityMonitor() {
+                override fun onStartActivity(intent: Intent): android.app.Instrumentation.ActivityResult? {
+                    if (intent.action != Intent.ACTION_VIEW) return null
+                    openedRelease = intent
+                    return android.app.Instrumentation.ActivityResult(android.app.Activity.RESULT_CANCELED, null)
+                }
+            }
+            instrumentation.addMonitor(linkMonitor)
+            try {
+                instrumentation.runOnMainSync { page.findViewWithTag<View>("update-release-page").performClick() }
+                assertEquals("https://example.org/release", openedRelease?.dataString)
+            } finally { instrumentation.removeMonitor(linkMonitor) }
             instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
             await { activity.settingsFragment() == null }
         } finally {

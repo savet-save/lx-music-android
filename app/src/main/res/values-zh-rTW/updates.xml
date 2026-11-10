@@ -1,4 +1,5 @@
 <resources>
+    <string name="update_view_full_notes">查看完整更新說明</string>
     <string name="update_download">下載原生版更新</string>
     <string name="update_install">驗證並安裝更新</string>
     <string name="update_cancel">取消並清除更新下載</string>

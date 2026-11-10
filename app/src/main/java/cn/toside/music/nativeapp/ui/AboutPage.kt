@@ -15,6 +15,7 @@ import cn.toside.music.nativeapp.data.AppPreferences
 import cn.toside.music.nativeapp.update.NativeRelease
 import cn.toside.music.nativeapp.update.NativeReleases
 import cn.toside.music.nativeapp.update.NativeUpdates
+import cn.toside.music.nativeapp.update.UpdateNotes
 import cn.toside.music.nativeapp.utils.DiagnosticLog
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -86,6 +87,7 @@ internal class AboutPage(
     private var transferNotice: String? = null
     private val status = label("").apply { tag = "update-status"; accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE }
     private val notes = label("").apply { tag = "update-notes"; setTextIsSelectable(true) }
+    private val releasePage = button(R.string.ui_bac19e2d086b) { open(available?.url ?: NativeReleases.PAGE) }.apply { tag = "update-release-page" }
     private val check = button(R.string.ui_4db966cc21a9) { check() }.apply { tag = "update-check" }
     private val download = button(R.string.update_download) { available?.let(::begin) }.apply { tag = "update-download"; isEnabled = false; visibility = View.GONE }
     private val ignore = button(R.string.update_ignore) {
@@ -102,11 +104,10 @@ internal class AboutPage(
             text = activity.getString(R.string.update_auto_check); isChecked = preferences.bool("version.autoCheck", true)
             setOnCheckedChangeListener { _, value -> preferences.set("version.autoCheck", value) }
         })
-        content.addView(check); content.addView(status); content.addView(notes)
+        content.addView(check); content.addView(status); content.addView(notes); content.addView(releasePage)
         content.addView(download); content.addView(ignore); content.addView(transferStatus)
         content.addView(install); content.addView(cancel)
         link(R.string.ui_88e03b310fe2, "https://github.com/${NativeReleases.REPOSITORY}")
-        link(R.string.ui_bac19e2d086b, NativeReleases.PAGE)
         link(R.string.ui_397b5581b4a9, "https://github.com/lyswhut/lx-music-mobile")
         link(R.string.ui_45a6d115fdfb, "https://lyswhut.github.io/lx-music-doc/mobile/faq")
         link(R.string.ui_31882138222f, "https://github.com/${NativeReleases.REPOSITORY}/issues")
@@ -132,8 +133,9 @@ internal class AboutPage(
             available == null -> activity.getString(R.string.ui_cda525a300a1, release.version)
             else -> activity.getString(R.string.ui_936707017ead, release.version)
         }
-        notes.text = available?.notes?.ifBlank { activity.getString(R.string.ui_1c947644f8de) }.orEmpty()
+        notes.text = available?.let { UpdateNotes.summary(it.notes).ifBlank { activity.getString(R.string.ui_1c947644f8de) } }.orEmpty()
         notes.visibility = if (available != null) View.VISIBLE else View.GONE
+        releasePage.setText(if (available != null) R.string.update_view_full_notes else R.string.ui_bac19e2d086b)
         download.visibility = if (available?.apkUrl != null) View.VISIBLE else View.GONE
         ignoreVersion()
     }
@@ -198,8 +200,12 @@ internal class AboutPage(
         } catch (e: CancellationException) { throw e }
         catch (e: Exception) { transferStatus.text = activity.getString(R.string.update_failed, e.localizedMessage.orEmpty()) }
     }
-    private fun link(title: Int, url: String) { content.addView(button(title) { runCatching { activity.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) } }) }
-    private fun label(value: String) = styles.label(value, 14f, palette.foreground).apply { setPadding(0, styles.dp(8), 0, styles.dp(8)) }
+    private fun open(url: String) { runCatching { activity.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) } }
+    private fun link(title: Int, url: String) { content.addView(button(title) { open(url) }) }
+    private fun label(value: String) = styles.label(value, 14f, palette.foreground).apply {
+        maxLines = Int.MAX_VALUE; ellipsize = null
+        setPadding(0, styles.dp(8), 0, styles.dp(8))
+    }
     private fun button(title: Int, action: () -> Unit) = Button(activity).apply {
         text = activity.getString(title); isAllCaps = false; setTextColor(palette.primary); background = styles.touch()
         minHeight = styles.dp(48); setOnClickListener { action() }
