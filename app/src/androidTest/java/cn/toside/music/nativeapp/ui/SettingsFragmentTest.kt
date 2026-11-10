@@ -194,6 +194,11 @@ class SettingsFragmentTest {
                 notes.text.toString() == "• 减少设置弹窗\n• 修复同步状态显示。" && notes.lineCount >= 2 && page.findViewWithTag<View>("update-download").isEnabled
             }
             instrumentation.runOnMainSync {
+                measure(page, 600, 360)
+                val notes = page.findViewWithTag<TextView>("update-notes")
+                assertTrue("Every update line must fit the text view", notes.height - notes.compoundPaddingTop - notes.compoundPaddingBottom >= notes.layout.getLineBottom(notes.lineCount - 1))
+                val scroll = page.findViewWithTag<ScrollView>("settings-content")
+                scroll.scrollTo(0, notes.top)
                 assertSame(activity.window.decorView.windowToken, page.windowToken)
                 assertTrue(page.findViewWithTag<View>("update-download").isEnabled)
                 assertEquals(activity.getString(R.string.update_view_full_notes), page.findViewWithTag<TextView>("update-release-page").text.toString())
@@ -206,6 +211,10 @@ class SettingsFragmentTest {
                 descendants(page).filterIsInstance<TextView>().first { it.text.toString() == activity.getString(cn.toside.music.nativeapp.R.string.ui_038ad816c53f) }.performClick()
                 assertEquals(View.VISIBLE, page.findViewWithTag<View>("about-license").visibility)
                 assertTrue(page.findViewWithTag<TextView>("about-license").text.contains("Apache License"))
+                measure(page, 600, 360)
+                scroll.scrollTo(0, scroll.getChildAt(0).height)
+                assertTrue("The outer page must scroll through expanded text", scroll.scrollY > 0)
+                assertTrue("The end of the content must be reachable", scroll.getChildAt(0).bottom <= scroll.scrollY + scroll.height - scroll.paddingBottom)
             }
             var openedRelease: Intent? = null
             val linkMonitor = object : android.app.Instrumentation.ActivityMonitor() {

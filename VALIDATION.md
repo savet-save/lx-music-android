@@ -1,5 +1,11 @@
 # 原生迁移验证记录
 
+## 2026-11-10：更新说明自适应高度
+
+关于页的说明文字及按钮明确使用 `MATCH_PARENT × WRAP_CONTENT`；说明支持多行换行并顶端对齐。设置页已有的外层 `ScrollView` 保留，内容容器高度明确设为 `WRAP_CONTENT`，由整页统一滚动。
+
+在独立 `.updatewrapcheck` 包中验证两行说明的实际文字高度，600×360 dp 短窗口下展开许可证后可滚动到内容末尾。既有手机、平板及短窗口布局回归通过。首次新增滚动检查使用 `Int.MAX_VALUE` 触发系统滚动坐标计算溢出，改用实际内容高度后复测通过；未因此调整产品滚动逻辑。记录位于忽略的 `build/update-wrap-initial.xml`、`build/update-wrap-passed.xml`，截图为 `app/build/ui-review/update-summary-wrap.png`。Debug/测试包构建及 Debug Lint 通过；独立测试包已清理，正式应用安装路径未变。
+
 ## 2026-11-10：取消歌单返回手势后白屏
 
 歌单搜索页与歌单详情页使用同一份 Activity 内容视图。预测性返回创建上一页的预览视图时，原实现会立即从详情页移走内容；取消手势销毁预览后，内容失去父视图，当前页只剩白屏，全局播放器仍在。新增设备用例在修改前复现了 `content.parent == null`。

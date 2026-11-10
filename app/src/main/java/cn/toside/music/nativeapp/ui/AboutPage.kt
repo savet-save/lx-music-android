@@ -5,7 +5,10 @@ import android.app.DownloadManager
 import android.content.Intent
 import android.net.Uri
 import android.text.format.Formatter
+import android.view.Gravity
 import android.view.View
+import android.view.ViewGroup.LayoutParams.MATCH_PARENT
+import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
 import android.widget.Button
 import android.widget.CheckBox
 import android.widget.LinearLayout
@@ -203,10 +206,14 @@ internal class AboutPage(
     private fun open(url: String) { runCatching { activity.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) } }
     private fun link(title: Int, url: String) { content.addView(button(title) { open(url) }) }
     private fun label(value: String) = styles.label(value, 14f, palette.foreground).apply {
+        layoutParams = LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT)
+        setSingleLine(false); setHorizontallyScrolling(false)
         maxLines = Int.MAX_VALUE; ellipsize = null
+        gravity = Gravity.TOP or Gravity.START
         setPadding(0, styles.dp(8), 0, styles.dp(8))
     }
     private fun button(title: Int, action: () -> Unit) = Button(activity).apply {
+        layoutParams = LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT)
         text = activity.getString(title); isAllCaps = false; setTextColor(palette.primary); background = styles.touch()
         minHeight = styles.dp(48); setOnClickListener { action() }
     }

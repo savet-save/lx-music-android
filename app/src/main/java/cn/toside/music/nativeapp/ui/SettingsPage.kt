@@ -12,6 +12,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
 import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
@@ -160,7 +161,10 @@ internal class SettingsPage(
             addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> centerSelectedCategory(animate = false) }
         }, LinearLayout.LayoutParams(-1, -2))
         content = column().apply { setPadding(dp(if (layout.expanded) 28 else 20), dp(12), dp(if (layout.expanded) 28 else 20), dp(32)) }
-        scroll = ScrollView(activity).apply { tag = "settings-content"; isFillViewport = true; addView(content) }
+        scroll = ScrollView(activity).apply {
+            tag = "settings-content"; isFillViewport = true
+            addView(content, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        }
         body.addView(scroll, if (layout.expanded) LinearLayout.LayoutParams(0, -1, 1f) else LinearLayout.LayoutParams(-1, 0, 1f))
         root.addView(body, LinearLayout.LayoutParams(-1, 0, 1f)); render()
         palette.textStyle(root)
