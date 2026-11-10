@@ -24,12 +24,14 @@ import cn.toside.music.nativeapp.online.OnlineTagGroup
 import cn.toside.music.nativeapp.online.Board
 import cn.toside.music.nativeapp.online.ChartsRepository
 import cn.toside.music.nativeapp.online.NativeChartsRepository
+import cn.toside.music.nativeapp.utils.PermissionPolicy
 
 import android.app.Dialog
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.Intent
 import android.content.SharedPreferences
+import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.Bitmap
@@ -39,6 +41,7 @@ import android.media.MediaPlayer
 import android.media.session.MediaSession
 import android.net.Uri
 import android.os.Bundle
+import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.provider.Settings
 import android.util.AtomicFile
@@ -322,6 +325,13 @@ class PlaybackSettingsTest {
         }
     }
     @Test fun coverLoadsAfterActivityStopsAndBluetoothLyricsUseServiceMetadata() = runBlocking {
+        // This test enters the local library after restarting playback. Prepare its permission so
+        // finishing the Activity cannot leave the system permission request over the next test.
+        val audioPermission = PermissionPolicy.audio(Build.VERSION.SDK_INT)
+        if (context.checkSelfPermission(audioPermission) != PackageManager.PERMISSION_GRANTED) {
+            instrumentation.uiAutomation.grantRuntimePermission(context.packageName, audioPermission)
+        }
+        assertEquals(PackageManager.PERMISSION_GRANTED, context.checkSelfPermission(audioPermission))
         val catalog = AtomicFile(File(context.filesDir, "user-sources.json"))
         val previous = if (catalog.baseFile.isFile) catalog.readFully() else null
         val server = ServerSocket(0, 4, InetAddress.getByName("127.0.0.1"))
