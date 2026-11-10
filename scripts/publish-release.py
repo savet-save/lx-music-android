@@ -286,6 +286,12 @@ def sha256(path):
 
 
 def release_notes(repo, tag, previous, checksums):
+    notes_path = ROOT / "doc" / "release-notes" / f"{tag}.md"
+    if notes_path.is_file():
+        notes = notes_path.read_text(encoding="utf-8-sig").strip()
+        if not notes:
+            raise ValueError(f"Release notes must not be empty: {notes_path}")
+        return notes + "\n"
     page = f"https://github.com/{repo}"
     if previous:
         run(["git", "rev-parse", "--verify", f"{previous}^{{commit}}"])

@@ -986,7 +986,7 @@ class MainActivity : FragmentActivity() {
             } else lx.label(code.toChar().toString(), 21f, palette.muted).apply { typeface = iconFont; gravity = Gravity.CENTER }
             icon.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
             row.addView(icon, LinearLayout.LayoutParams(dp(44), dp(48)))
-            val text = lx.label(getString(label), 16f).apply { maxLines = 2; setPadding(dp(8), 0, 0, 0) }
+            val text = lx.label(getString(label), 16f, palette.muted).apply { maxLines = 2; setPadding(dp(8), 0, 0, 0) }
             row.addView(text, LinearLayout.LayoutParams(0, -2, 1f))
             if (page != null) { navigationItems[page] = text; row.tag = "navigation-$page" }
             else if (label == R.string.ui_a9531e47b75d) row.tag = "navigation-local"
@@ -1017,8 +1017,8 @@ class MainActivity : FragmentActivity() {
         val items = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.VERTICAL }
         fun entry(code: Int, label: Int, page: Int? = null, click: () -> Unit) {
             val row = LinearLayout(this@MainActivity).apply { gravity = Gravity.CENTER_VERTICAL; background = lx.touch(); isFocusable = true; setOnClickListener { click() } }
-            row.addView(lx.label(code.toChar().toString(), 19f).apply { typeface = iconFont; gravity = Gravity.CENTER }, LinearLayout.LayoutParams(dp(40), dp(48)))
-            val text = lx.label(getString(label), 14f)
+            row.addView(lx.label(code.toChar().toString(), 19f, palette.muted).apply { typeface = iconFont; gravity = Gravity.CENTER }, LinearLayout.LayoutParams(dp(40), dp(48)))
+            val text = lx.label(getString(label), 14f, palette.muted)
             row.addView(text, LinearLayout.LayoutParams(0, -2, 1f))
             if (page != null) { navigationItems[page] = text; row.tag = "navigation-$page" }
             else if (label == R.string.ui_a9531e47b75d) row.tag = "navigation-local"
