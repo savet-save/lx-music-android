@@ -963,7 +963,7 @@ class MainActivity : FragmentActivity() {
     }
     private fun navigateToPage(page: Int) {
         when (page) {
-            0 -> showPlaylists()
+            0 -> openMyLists()
             1 -> openSearchPage(false)
             2 -> showBoards()
             3 -> showOnlinePlaylists()
@@ -1001,7 +1001,6 @@ class MainActivity : FragmentActivity() {
         entry(items, 59657, R.string.ui_27c95ec6b766, 0) { navigateToPage(0) }
         entry(items, 59656, R.string.download_page, 4) { navigateToPage(4) }
         entry(items, 59696, R.string.ui_a9531e47b75d, PAGE_LOCAL) { openLocalPage(true) }
-        entry(items, 59666, R.string.ui_c2dd14825672) { showPlaylists() }
         entry(items, 59655, R.string.settings_title) { showSettings() }
         addView(ScrollView(this@MainActivity).apply { isVerticalScrollBarEnabled = false; addView(items) }, LinearLayout.LayoutParams(-1, 0, 1f))
         entry(this, 59680, R.string.ui_38844b135cf7) { showNavigationActions() }
@@ -1030,7 +1029,6 @@ class MainActivity : FragmentActivity() {
         entry(59656, R.string.download_page, 4) { navigateToPage(4) }
         items.addView(View(this@MainActivity).apply { setBackgroundColor(palette.divider) }, LinearLayout.LayoutParams(-1, dp(1)).apply { setMargins(dp(10), dp(16), dp(10), dp(16)) })
         entry(59696, R.string.ui_a9531e47b75d, PAGE_LOCAL) { openLocalPage(true) }
-        entry(59666, R.string.ui_c2dd14825672) { showPlaylists() }
         entry(59687, R.string.ui_727036c7fc2a) { showSyncSettings() }
         entry(59655, R.string.settings_title) { showSettings() }
         entry(59659, R.string.ui_788db1cfec2a) { openSettings("theme") }
@@ -1075,7 +1073,7 @@ class MainActivity : FragmentActivity() {
             }.show()
     }
     private fun showNavigationActions() {
-        val labels = mutableListOf(getString(R.string.ui_a9531e47b75d), getString(R.string.ui_c2dd14825672), getString(R.string.ui_87a2113eb66f), getString(R.string.ui_1ee95aa94712), getString(R.string.ui_259597bf6ca7), getString(R.string.ui_3158c8d56b7b), getString(R.string.ui_a5cd0a9169e8), getString(R.string.ui_3facd3e00be5), getString(R.string.ui_599818eb56df), getString(R.string.ui_727036c7fc2a), getString(R.string.ui_2a3ec620e12c), getString(R.string.ui_8c38525734c0), getString(R.string.ui_486b54a7b0af), getString(R.string.ui_6e763b71e69c), getString(R.string.ui_f01b6815d826), getString(R.string.ui_cad84b75d661), getString(R.string.ui_426744e26e7e), getString(R.string.ui_ac7aa03a458f), getString(R.string.settings_title), getString(R.string.ui_788db1cfec2a), getString(R.string.ui_4fd38bc4f6d4), getString(R.string.ui_bb1d19b85634))
+        val labels = mutableListOf(getString(R.string.ui_a9531e47b75d), getString(R.string.ui_27c95ec6b766), getString(R.string.ui_87a2113eb66f), getString(R.string.ui_1ee95aa94712), getString(R.string.ui_259597bf6ca7), getString(R.string.ui_3158c8d56b7b), getString(R.string.ui_a5cd0a9169e8), getString(R.string.ui_3facd3e00be5), getString(R.string.ui_599818eb56df), getString(R.string.ui_727036c7fc2a), getString(R.string.ui_2a3ec620e12c), getString(R.string.ui_8c38525734c0), getString(R.string.ui_486b54a7b0af), getString(R.string.ui_6e763b71e69c), getString(R.string.ui_f01b6815d826), getString(R.string.ui_cad84b75d661), getString(R.string.ui_426744e26e7e), getString(R.string.ui_ac7aa03a458f), getString(R.string.settings_title), getString(R.string.ui_788db1cfec2a), getString(R.string.ui_4fd38bc4f6d4), getString(R.string.ui_bb1d19b85634))
         labels.add(getString(R.string.download_page))
         if (preferences.showBack) labels.add(getString(R.string.ui_f75a93326a3c))
         if (preferences.showExit) labels.add(getString(R.string.ui_b0d269c8707c))
@@ -1089,7 +1087,7 @@ class MainActivity : FragmentActivity() {
                 return@show
             }
             if (which == 0) openLocalPage(true)
-            else if (which == 1) showPlaylists()
+            else if (which == 1) openMyLists()
             else if (which == 2) openSearchPage()
             else if (which == 3) showBoards()
             else if (which == 4) showOnlinePlaylists()
@@ -1895,7 +1893,26 @@ class MainActivity : FragmentActivity() {
     private val Playlist.displayName: String
         get() = if (syncId == "love") getString(R.string.playlist_favorites) else name
 
+    private fun openMyLists() {
+        playlistDrawer?.close(false)
+        showMusicPage()
+        loadJob?.cancel()
+        val lastId = activePlaylist.takeUnless { onlineMode }?.id
+            ?: preferences.string("list.lastOpenedId", "").toLongOrNull()
+        loadJob = scope.launch {
+            try {
+                val items = playlists.list()
+                if (navigation?.currentDestination?.id != R.id.music_page) return@launch
+                val selected = items.firstOrNull { it.id == lastId } ?: items.first { it.syncId == "love" }
+                // Hand the completed lookup over to the selected playlist's song loader.
+                loadJob = null
+                loadPlaylist(selected)
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) { toast(getString(R.string.ui_ef6e30183259, e.localizedMessage.orEmpty())) }
+        }
+    }
     private fun loadPlaylist(playlist: Playlist) {
+        preferences.set("list.lastOpenedId", playlist.id.toString())
         playlistDrawer?.close()
         showMusicPage()
         loadJob?.cancel()
