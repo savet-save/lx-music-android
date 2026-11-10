@@ -4,7 +4,7 @@
     <string name="pact_accept">接受</string>
     <string name="pact_reject">不接受並退出</string>
     <string name="pact_countdown">接受（%1$d）</string>
-    <string name="sync_history">同步伺服器歷史（長按移除授權）</string>
+    <string name="sync_history">同步伺服器歷史</string>
     <string name="sync_history_empty">暫無同步伺服器歷史</string>
     <string name="sync_history_remove">移除此伺服器和儲存的授權？</string>
     <string name="matching_cache_count">跨平台匹配快取：%1$d 項</string>

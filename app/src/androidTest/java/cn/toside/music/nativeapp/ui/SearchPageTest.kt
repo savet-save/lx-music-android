@@ -13,6 +13,10 @@ import android.view.inspector.WindowInspector
 import android.widget.EditText
 import android.widget.ListView
 import android.widget.TextView
+import androidx.activity.BackEventCompat
+import androidx.fragment.app.Fragment
+import androidx.fragment.app.FragmentManager
+import androidx.navigation.fragment.NavHostFragment
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import cn.toside.music.nativeapp.R
@@ -269,6 +273,90 @@ class SearchPageTest {
                 val tabs = field(activity, "searchTabs") as View
                 assertTrue(tabs.width > 0); assertTrue(tabs.right <= (tabs.parent as View).width)
                 snapshot("search-english-large", root)
+            }
+        }
+    }
+
+    @Test fun cancellingPlaylistBackKeepsContentAndCommittedBackRestoresSearch() {
+        val context = instrumentation.targetContext
+        instrumentation.uiAutomation.grantRuntimePermission(context.packageName,
+            cn.toside.music.nativeapp.utils.PermissionPolicy.audio(Build.VERSION.SDK_INT))
+        val songRequests = AtomicInteger()
+        Fixture().use { fixture ->
+            val activity = fixture.activity
+            instrumentation.runOnMainSync {
+                activity.onlinePlaylistSongs = { _, _ -> songRequests.incrementAndGet(); listOf(song("kw", "Playlist track")) }
+                (field(activity, "search") as EditText).setText("saved playlists")
+                root(activity).findViewWithTag<View>("search-tab-playlists").performClick()
+            }
+            waitForSearch(activity)
+            val results = (field(activity, "list") as ListView).adapter
+            val count = results.count
+            assertTrue(count > 0)
+            val query = (field(activity, "search") as EditText).text.toString()
+            val cursors = (field(activity, "searchNextPages") as Map<*, *>).toMap()
+            instrumentation.runOnMainSync {
+                val list = field(activity, "list") as ListView
+                list.performItemClick(list.getChildAt(0), 0, list.adapter.getItemId(0))
+            }
+            waitForSearch(activity); instrumentation.waitForIdleSync()
+            val host = activity.supportFragmentManager.findFragmentById(R.id.main_nav_host) as NavHostFragment
+            val manager = host.childFragmentManager
+            val details = manager.primaryNavigationFragment as MusicPageFragment
+            val content = activity.musicPageContent()
+            val list = field(activity, "list") as ListView
+            val detailAdapter = list.adapter
+            val miniPlayer = field(activity, "miniBar") as View
+            var previewsCreated = 0
+            val callbacks = object : FragmentManager.FragmentLifecycleCallbacks() {
+                override fun onFragmentViewCreated(fm: FragmentManager, fragment: Fragment, view: View, savedInstanceState: android.os.Bundle?) {
+                    if (fragment is MusicPageFragment && fragment !== details) previewsCreated++
+                }
+            }
+            instrumentation.runOnMainSync { manager.registerFragmentLifecycleCallbacks(callbacks, false) }
+            try {
+                repeat(3) {
+                    instrumentation.runOnMainSync {
+                        activity.onBackPressedDispatcher.dispatchOnBackStarted(BackEventCompat(0f, 400f, 0f, BackEventCompat.EDGE_LEFT))
+                    }
+                    instrumentation.waitForIdleSync()
+                    instrumentation.runOnMainSync {
+                        activity.onBackPressedDispatcher.dispatchOnBackProgressed(BackEventCompat(100f, 400f, .4f, BackEventCompat.EDGE_LEFT))
+                        activity.onBackPressedDispatcher.dispatchOnBackCancelled()
+                    }
+                    instrumentation.waitForIdleSync()
+                    instrumentation.runOnMainSync {
+                        assertEquals(R.id.playlist_songs, activity.navigationController().currentDestination?.id)
+                        assertSame(details, manager.primaryNavigationFragment)
+                        assertSame("Cancelled back must leave the live content in the current page", details.requireView(), content.parent)
+                        assertTrue(content.isShown); assertTrue(list.isShown)
+                        assertSame(detailAdapter, list.adapter); assertEquals(1, list.count)
+                        assertSame(miniPlayer, field(activity, "miniBar"))
+                    }
+                }
+                assertTrue("The real Fragment back preview must have created the previous music page", previewsCreated > 0)
+                assertEquals(1, songRequests.get())
+                instrumentation.runOnMainSync {
+                    activity.onBackPressedDispatcher.dispatchOnBackStarted(BackEventCompat(0f, 400f, 0f, BackEventCompat.EDGE_LEFT))
+                }
+                instrumentation.waitForIdleSync()
+                instrumentation.runOnMainSync {
+                    activity.onBackPressedDispatcher.dispatchOnBackProgressed(BackEventCompat(200f, 400f, .8f, BackEventCompat.EDGE_LEFT))
+                    activity.onBackPressedDispatcher.onBackPressed()
+                }
+                instrumentation.waitForIdleSync()
+                instrumentation.runOnMainSync {
+                    assertEquals(R.id.music_page, activity.navigationController().currentDestination?.id)
+                    assertTrue(activity.musicPageContent().isShown)
+                    assertEquals(query, (field(activity, "search") as EditText).text.toString())
+                    assertEquals(true, field(activity, "playlistSearchMode"))
+                    assertEquals(cursors, field(activity, "searchNextPages"))
+                    val restored = field(activity, "list") as ListView
+                    assertTrue(restored.isShown); assertEquals(count, restored.count)
+                    assertTrue(restored.adapter.getItem(0) is OnlinePlaylist)
+                }
+            } finally {
+                instrumentation.runOnMainSync { manager.unregisterFragmentLifecycleCallbacks(callbacks) }
             }
         }
     }

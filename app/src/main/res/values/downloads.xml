@@ -39,4 +39,7 @@
     <string name="download_quality_hires">高解析无损 %1$s</string>
     <string name="download_quality_size">%1$s · %2$s</string>
     <string name="download_size_mib">%1$.2f MiB</string>
+    <string name="download_probe_checking">正在检测下载可用性</string>
+    <string name="download_probe_available">可以下载</string>
+    <string name="download_probe_unavailable">暂时无法下载</string>
 </resources>

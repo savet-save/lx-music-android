@@ -8,6 +8,7 @@ import android.os.SystemClock
 import android.view.View
 import android.view.ViewGroup
 import android.view.KeyEvent
+import android.view.inspector.WindowInspector
 import android.widget.EditText
 import android.widget.Switch
 import android.widget.TextView
@@ -16,12 +17,14 @@ import android.widget.ScrollView
 import android.net.Uri
 import cn.toside.music.nativeapp.data.Song
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.filters.SdkSuppress
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
 import androidx.test.runner.lifecycle.Stage
 import cn.toside.music.nativeapp.R
 import cn.toside.music.nativeapp.player.PlaybackService
 import cn.toside.music.nativeapp.source.SourceHttpFixture
+import cn.toside.music.nativeapp.update.NativeRelease
 import kotlinx.coroutines.*
 import org.junit.Assert.*
 import org.junit.Test
@@ -31,7 +34,7 @@ import java.io.File
 @RunWith(AndroidJUnit4::class)
 class SettingsFragmentTest {
     private val instrumentation get() = InstrumentationRegistry.getInstrumentation()
-    private val noActions = SettingsActions({}, { _, _ -> }, {}, {}, {}, {}, {})
+    private val noActions = SettingsActions({}, { _, _, _ -> }, {})
     private fun field(activity: MainActivity, name: String): Any? = MainActivity::class.java.getDeclaredField(name).apply { isAccessible = true }.get(activity)
     private fun invoke(activity: MainActivity, method: String) = MainActivity::class.java.getDeclaredMethod(method).apply { isAccessible = true }.invoke(activity)
     private fun settings(activity: MainActivity): SettingsFragment {
@@ -82,7 +85,7 @@ class SettingsFragmentTest {
                     val page = SettingsPage(activity, scope, { field(activity, "service") as? PlaybackService }, noActions, layout) {}
                     root = page.createContent()
                 }
-                listOf("basic", "playback", "sources", "list", "theme", "cache", "sync", "about").forEach { category ->
+                listOf("basic", "playback", "sources", "list", "theme", "cache", "sync", "about", "desktop-lyrics", "diagnostics").forEach { category ->
                     instrumentation.runOnMainSync {
                         descendants(root).first { it.tag == "settings-category-$category" }.performClick()
                     }
@@ -129,6 +132,141 @@ class SettingsFragmentTest {
                 activity.closeSettings()
             }
         } finally { instrumentation.runOnMainSync { activity.finish() } }
+    }
+
+    @Test fun syncAddressSurvivesRecreationAndCodeIsNotSaved() {
+        var activity = start()
+        try {
+            instrumentation.runOnMainSync { activity.openSettings("sync") }
+            val page = settings(activity).requireView()
+            instrumentation.runOnMainSync {
+                page.findViewWithTag<EditText>("sync-address").setText("http://192.0.2.1:9527")
+                page.findViewWithTag<EditText>("sync-code").setText("temporary-code")
+            }
+            val monitor = instrumentation.addMonitor(MainActivity::class.java.name, null, false)
+            instrumentation.runOnMainSync { activity.recreate() }
+            activity = instrumentation.waitForMonitorWithTimeout(monitor, 5000) as MainActivity
+            instrumentation.removeMonitor(monitor)
+            val restored = settings(activity).requireView()
+            instrumentation.runOnMainSync {
+                assertEquals("http://192.0.2.1:9527", restored.findViewWithTag<EditText>("sync-address").text.toString())
+                assertEquals("", restored.findViewWithTag<EditText>("sync-code").text.toString())
+                assertSame(activity.window.decorView.windowToken, restored.windowToken)
+            }
+        } finally { instrumentation.runOnMainSync { activity.finish() } }
+    }
+
+    @Test fun playbackControlsReturnWhenTheServiceRebindsAfterRecreation() {
+        var activity = start()
+        try {
+            instrumentation.runOnMainSync { activity.openSettings("playback") }
+            await { activity.settingsFragment()?.view?.findViewWithTag<View>("playback-settings") != null }
+            val monitor = instrumentation.addMonitor(MainActivity::class.java.name, null, false)
+            instrumentation.runOnMainSync { activity.recreate() }
+            activity = instrumentation.waitForMonitorWithTimeout(monitor, 5000) as MainActivity
+            instrumentation.removeMonitor(monitor)
+            await { activity.settingsFragment()?.view?.findViewWithTag<View>("playback-settings") != null }
+            assertEquals("playback", settings(activity).savePageState()?.getString("category"))
+        } finally { instrumentation.runOnMainSync { activity.finish() } }
+    }
+
+    @Test fun updateNotesAndLicenseExpandInsideTheSettingsPage() {
+        val preferences = instrumentation.targetContext.getSharedPreferences("app-settings", 0)
+        val ignored = preferences.getString("version.ignored", null)
+        val previous = NativeUpdateNotice.release.value
+        val activity = start()
+        try {
+            instrumentation.runOnMainSync {
+                preferences.edit().remove("version.ignored").commit()
+                NativeUpdateNotice.release.value = NativeRelease("999.0.0", "https://example.org/release", """
+                    ## 更新记录
+                    - 减少设置弹窗并更新版本到999.0.0 ([abcdef0](https://example.org/commit/abcdef0))
+                    - 修复同步状态显示。
+                    [完整改动](https://example.org/compare)
+                    ## APK SHA-256
+                    | app.apk | ${"a".repeat(64)} |
+                """.trimIndent(), "https://example.org/update.apk")
+                activity.openSettings("about")
+            }
+            val page = settings(activity).requireView()
+            await {
+                val notes = page.findViewWithTag<TextView>("update-notes")
+                notes.text.toString() == "• 减少设置弹窗\n• 修复同步状态显示。" && notes.lineCount >= 2 && page.findViewWithTag<View>("update-download").isEnabled
+            }
+            instrumentation.runOnMainSync {
+                measure(page, 600, 360)
+                val notes = page.findViewWithTag<TextView>("update-notes")
+                assertTrue("Every update line must fit the text view", notes.height - notes.compoundPaddingTop - notes.compoundPaddingBottom >= notes.layout.getLineBottom(notes.lineCount - 1))
+                val scroll = page.findViewWithTag<ScrollView>("settings-content")
+                scroll.scrollTo(0, notes.top)
+                assertSame(activity.window.decorView.windowToken, page.windowToken)
+                assertTrue(page.findViewWithTag<View>("update-download").isEnabled)
+                assertEquals(activity.getString(R.string.update_view_full_notes), page.findViewWithTag<TextView>("update-release-page").text.toString())
+                assertTrue(page.findViewWithTag<TextView>("about-version").lineCount >= 3)
+                capture("update-summary", page)
+                page.findViewWithTag<View>("update-ignore").performClick()
+                assertEquals("999.0.0", preferences.getString("version.ignored", null))
+                assertFalse(page.findViewWithTag<View>("update-ignore").isEnabled)
+                assertFalse((page.findViewWithTag<TextView>("settings-category-about")).text.contains("•"))
+                descendants(page).filterIsInstance<TextView>().first { it.text.toString() == activity.getString(cn.toside.music.nativeapp.R.string.ui_038ad816c53f) }.performClick()
+                assertEquals(View.VISIBLE, page.findViewWithTag<View>("about-license").visibility)
+                assertTrue(page.findViewWithTag<TextView>("about-license").text.contains("Apache License"))
+                measure(page, 600, 360)
+                scroll.scrollTo(0, scroll.getChildAt(0).height)
+                assertTrue("The outer page must scroll through expanded text", scroll.scrollY > 0)
+                assertTrue("The end of the content must be reachable", scroll.getChildAt(0).bottom <= scroll.scrollY + scroll.height - scroll.paddingBottom)
+            }
+            var openedRelease: Intent? = null
+            val linkMonitor = object : android.app.Instrumentation.ActivityMonitor() {
+                override fun onStartActivity(intent: Intent): android.app.Instrumentation.ActivityResult? {
+                    if (intent.action != Intent.ACTION_VIEW) return null
+                    openedRelease = intent
+                    return android.app.Instrumentation.ActivityResult(android.app.Activity.RESULT_CANCELED, null)
+                }
+            }
+            instrumentation.addMonitor(linkMonitor)
+            try {
+                instrumentation.runOnMainSync { page.findViewWithTag<View>("update-release-page").performClick() }
+                assertEquals("https://example.org/release", openedRelease?.dataString)
+            } finally { instrumentation.removeMonitor(linkMonitor) }
+            instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
+            await { activity.settingsFragment() == null }
+        } finally {
+            instrumentation.runOnMainSync { NativeUpdateNotice.release.value = previous; activity.finish() }
+            preferences.edit().apply { if (ignored == null) remove("version.ignored") else putString("version.ignored", ignored) }.commit()
+        }
+    }
+
+    @SdkSuppress(minSdkVersion = 29)
+    @Test fun qualityPopupSelectsWithoutLeavingSettingsAndBackOnlyClosesThePopup() {
+        val preferences = instrumentation.targetContext.getSharedPreferences("player", 0)
+        val previous = preferences.getString("quality", null)
+        val activity = start()
+        fun menu() = WindowInspector.getGlobalWindowViews().flatMap(::descendants).filterIsInstance<ListView>()
+            .firstOrNull { it.tag == "settings-choice-menu" && it.isShown }
+        try {
+            instrumentation.runOnMainSync { activity.openSettings("playback") }
+            val page = settings(activity).requireView()
+            await { page.findViewWithTag<View>("settings-playback-quality").isLaidOut }
+            instrumentation.runOnMainSync { page.findViewWithTag<View>("settings-playback-quality").performClick() }
+            await { menu()?.childCount?.let { it > 0 } == true }
+            val next = if (previous == "320k") "128k" else "320k"
+            instrumentation.runOnMainSync {
+                val popup = menu()!!
+                val index = listOf("128k", "320k", "flac", "flac24bit").indexOf(next)
+                popup.performItemClick(popup.findViewWithTag("settings-choice-$next"), index, index.toLong())
+                assertEquals(next, preferences.getString("quality", null))
+                assertEquals(R.id.settings_page, activity.navigationController().currentDestination?.id)
+                page.findViewWithTag<View>("settings-playback-quality").performClick()
+            }
+            await { menu()?.rootView?.hasWindowFocus() == true }
+            instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
+            await { menu() == null }
+            assertEquals(R.id.settings_page, activity.navigationController().currentDestination?.id)
+        } finally {
+            instrumentation.runOnMainSync { activity.finish() }
+            preferences.edit().apply { if (previous == null) remove("quality") else putString("quality", previous) }.commit()
+        }
     }
     @Test fun onlineImportReportsFailureAllowsRetryAndRefreshesEnabledSource() = runBlocking {
         val activity = start()

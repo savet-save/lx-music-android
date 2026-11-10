@@ -4,7 +4,7 @@
     <string name="pact_accept">Accept</string>
     <string name="pact_reject">Decline and exit</string>
     <string name="pact_countdown">Accept (%1$d)</string>
-    <string name="sync_history">Sync server history (hold to remove authorization)</string>
+    <string name="sync_history">Sync server history</string>
     <string name="sync_history_empty">No saved sync servers</string>
     <string name="sync_history_remove">Remove this server and its saved authorization?</string>
     <string name="matching_cache_count">Cross-provider match cache: %1$d entries</string>

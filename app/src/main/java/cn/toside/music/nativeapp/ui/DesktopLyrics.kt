@@ -10,7 +10,6 @@ import cn.toside.music.nativeapp.player.PlayerState
 
 import android.annotation.SuppressLint
 import android.app.Activity
-import android.app.AlertDialog
 import android.content.Context
 import android.content.Intent
 import android.graphics.Color
@@ -21,11 +20,11 @@ import android.os.Build
 import android.hardware.input.InputManager
 import android.view.Gravity
 import android.view.MotionEvent
+import android.view.View
 import android.view.WindowManager
 import android.widget.Button
 import android.widget.CheckBox
 import android.widget.LinearLayout
-import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.TextView
 
@@ -126,7 +125,7 @@ internal class DesktopLyrics(private val context: Context) : AutoCloseable {
     }
 }
 
-internal fun showDesktopLyricSettings(activity: Activity, refresh: () -> Unit): AlertDialog {
+internal fun desktopLyricSettingsContent(activity: Activity, popup: PlatformPopup, refresh: () -> Unit): View {
     val settings = DesktopLyricSettings(activity)
     val content = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL; setPadding(24, 12, 24, 12) }
     fun toggle(label: String, key: String, fallback: Boolean = false) {
@@ -164,7 +163,12 @@ internal fun showDesktopLyricSettings(activity: Activity, refresh: () -> Unit): 
     fun choices(title: String, key: String, labels: Array<String>, values: IntArray) {
         content.addView(Button(activity).apply {
             text = title
-            setOnClickListener { AlertDialog.Builder(activity).setTitle(title).setItems(labels) { _, which -> settings.set(key, values[which]); refresh() }.show() }
+            setOnClickListener {
+                val ids = values.map(Int::toString)
+                popup.show(this, ids, labels.toList(), settings.int(key, values.first()).toString(), UiPalette(activity, NativeThemes(activity).active())) { value ->
+                    settings.set(key, value.toInt()); refresh()
+                }
+            }
         })
     }
     choices(activity.getString(R.string.ui_d1b14abbc00a), "align", arrayOf(activity.getString(R.string.ui_e2e0c454e5d5), activity.getString(R.string.ui_a567bdaa1136), activity.getString(R.string.ui_14ab1f2bce0a)), intArrayOf(0, 1, 2))
@@ -172,7 +176,10 @@ internal fun showDesktopLyricSettings(activity: Activity, refresh: () -> Unit): 
     val labels = arrayOf(activity.getString(R.string.ui_f56e7eff58bf), activity.getString(R.string.ui_30c83dc25b12), activity.getString(R.string.ui_67035e6b7f82), activity.getString(R.string.ui_789f61dbfcc7), activity.getString(R.string.ui_ed7d2c54184b), activity.getString(R.string.ui_d451c07d739b))
     val colors = intArrayOf(Color.WHITE, Color.rgb(7, 197, 86), Color.CYAN, Color.RED, Color.BLACK, Color.YELLOW)
     choices(activity.getString(R.string.ui_6f6364983f72), "unplayed", labels, colors); choices(activity.getString(R.string.ui_5b4844acaf2f), "played", labels, colors); choices(activity.getString(R.string.ui_2b40dbdb39f9), "shadow", labels, colors)
-    return AlertDialog.Builder(activity).setTitle(activity.getString(R.string.ui_486b54a7b0af)).setView(ScrollView(activity).apply { addView(content) })
-        .setMessage(activity.getString(R.string.ui_d874760c91f0))
-        .setPositiveButton(activity.getString(R.string.ui_c0b3fbff51cc), null).setNeutralButton(activity.getString(R.string.ui_8143c43db805)) { _, _ -> settings.set("x", 0); settings.set("y", 0); refresh() }.show()
+    content.addView(TextView(activity).apply { text = activity.getString(R.string.ui_d874760c91f0) })
+    content.addView(Button(activity).apply {
+        text = activity.getString(R.string.ui_8143c43db805)
+        setOnClickListener { settings.set("x", 0); settings.set("y", 0); refresh() }
+    })
+    return content
 }

@@ -1,0 +1,5 @@
+<resources>
+    <string name="sync_history_remove_action">Remove authorization</string>
+    <string name="sync_pending_choice">Sync needs your choice. Open Settings → Data sync.</string>
+    <string name="update_available_hint">Version %1$s is available. See Settings → About.</string>
+</resources>

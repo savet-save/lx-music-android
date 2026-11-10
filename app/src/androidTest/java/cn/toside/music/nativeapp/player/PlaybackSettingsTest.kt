@@ -24,13 +24,14 @@ import cn.toside.music.nativeapp.online.OnlineTagGroup
 import cn.toside.music.nativeapp.online.Board
 import cn.toside.music.nativeapp.online.ChartsRepository
 import cn.toside.music.nativeapp.online.NativeChartsRepository
+import cn.toside.music.nativeapp.utils.PermissionPolicy
 
-import android.app.AlertDialog
 import android.app.Dialog
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.Intent
 import android.content.SharedPreferences
+import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.Bitmap
@@ -40,6 +41,7 @@ import android.media.MediaPlayer
 import android.media.session.MediaSession
 import android.net.Uri
 import android.os.Bundle
+import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.provider.Settings
 import android.util.AtomicFile
@@ -89,8 +91,8 @@ class PlaybackSettingsTest {
         if (view is ViewGroup) for (index in 0 until view.childCount) find(view.getChildAt(index), description)?.let { return it }
         return null
     }
-    private fun progress(dialog: Dialog, description: String, value: Int) = main {
-        val view = find(dialog.window!!.decorView, description) as SeekBar
+    private fun progress(root: View, description: String, value: Int) = main {
+        val view = find(root, description) as SeekBar
         assertTrue(view.performAccessibilityAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SET_PROGRESS.id,
             Bundle().apply { putFloat(AccessibilityNodeInfo.ACTION_ARGUMENT_PROGRESS_VALUE, value.toFloat()) }))
     }
@@ -323,6 +325,13 @@ class PlaybackSettingsTest {
         }
     }
     @Test fun coverLoadsAfterActivityStopsAndBluetoothLyricsUseServiceMetadata() = runBlocking {
+        // This test enters the local library after restarting playback. Prepare its permission so
+        // finishing the Activity cannot leave the system permission request over the next test.
+        val audioPermission = PermissionPolicy.audio(Build.VERSION.SDK_INT)
+        if (context.checkSelfPermission(audioPermission) != PackageManager.PERMISSION_GRANTED) {
+            instrumentation.uiAutomation.grantRuntimePermission(context.packageName, audioPermission)
+        }
+        assertEquals(PackageManager.PERMISSION_GRANTED, context.checkSelfPermission(audioPermission))
         val catalog = AtomicFile(File(context.filesDir, "user-sources.json"))
         val previous = if (catalog.baseFile.isFile) catalog.readFully() else null
         val server = ServerSocket(0, 4, InetAddress.getByName("127.0.0.1"))
@@ -399,14 +408,14 @@ class PlaybackSettingsTest {
                 fun selectPage(tag: String) = main { activity.window.decorView.findViewWithTag<View>(tag).performClick() }
                 selectPage("navigation-1")
                 assertEquals(true, field(activity, "onlineMode"))
-                selectPage("navigation-0")
+                selectPage("navigation-local")
                 assertEquals(activity.getString(R.string.ui_33eeaa47c231), heading.text.toString())
                 assertTrue((field(activity, "visibleSongs") as List<*>).all { (it as Song).source == "local" })
                 val favorites = Playlists(context).use { it.loveList() }
                 main { heading.performClick() }
                 val favoriteTag = "playlist-choice-$favorites"
                 waitFor { activity.window.decorView.findViewWithTag<View>(favoriteTag)?.isShown == true }
-                assertTrue(activity.window.decorView.findViewWithTag<View>("playlist-choice-local").isShown)
+                assertNull(activity.window.decorView.findViewWithTag<View>("playlist-choice-local"))
                 selectPage(favoriteTag)
                 waitFor { (field(activity, "activePlaylist") as? Playlist)?.syncId == "love" }
                 assertEquals(song, fixture.player.state.value.song)
@@ -478,7 +487,7 @@ class PlaybackSettingsTest {
         }
     }
 
-    @Test fun dialogPersistsAppearanceAndCalibratesHighlightAndLyricSeeking() = runBlocking {
+    @Test fun settingsPagePersistsAppearanceAndCalibratesHighlightAndLyricSeeking() = runBlocking {
         withPlayback { fixture ->
             val lrc = File(context.cacheDir, "settings-${fixture.id}.lrc")
             try {
@@ -489,14 +498,16 @@ class PlaybackSettingsTest {
                 waitFor { (field(fixture.activity, "lyricLines") as List<*>).size == 3 }
                 invoke(fixture.activity, "showPlayerDetails"); invoke(fixture.activity, "toggleDetailPage")
                 invoke(fixture.activity, "showPlaybackSettings")
-                val dialog = field(fixture.activity, "playbackSettingsDialog") as AlertDialog
-                progress(dialog, "播放倍速", 125); progress(dialog, "应用内音量", 40)
-                progress(dialog, "歌词字号", 25); progress(dialog, "歌词时间微调", 605)
-                main { (find(dialog.window!!.decorView, "右对齐") as RadioButton).performClick() }
+                waitFor { fixture.activity.settingsFragment()?.view != null }
+                val root = fixture.activity.settingsFragment()!!.requireView()
+                progress(root, "播放倍速", 125); progress(root, "应用内音量", 40)
+                progress(root, "歌词字号", 25); progress(root, "歌词时间微调", 605)
+                main { (find(root, "右对齐") as RadioButton).performClick() }
                 assertEquals(1.25f, fixture.player.state.value.playbackRate, 0.01f)
                 assertFalse(fixture.media().isPlaying)
                 assertEquals(500, LyricOffsets(context).get(fixture.song))
-                main { dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick(); fixture.player.seekTo(1200) }
+                main { fixture.activity.closeSettings(); fixture.player.seekTo(1200) }
+                waitFor { field(fixture.activity, "detailScroll") != null }
                 val scroll = field(fixture.activity, "detailScroll") as PlayerLyricScroll
                 val container = scroll.lines
                 waitFor { container.childCount == 3 && scroll.height > 0 }
@@ -529,9 +540,10 @@ class PlaybackSettingsTest {
                 assertEquals(LyricAppearance(25, LyricAlignment.RIGHT), settings.appearance(landscape))
                 assertEquals(500, LyricOffsets(context).get(fixture.song))
                 invoke(fixture.activity, "showPlaybackSettings")
-                val restored = field(fixture.activity, "playbackSettingsDialog") as AlertDialog
-                assertEquals(125, (find(restored.window!!.decorView, "播放倍速") as SeekBar).progress)
-                main { restored.getButton(AlertDialog.BUTTON_NEUTRAL).performClick() }
+                waitFor { fixture.activity.settingsFragment()?.view != null }
+                val restored = fixture.activity.settingsFragment()!!.requireView()
+                assertEquals(125, (find(restored, "播放倍速") as SeekBar).progress)
+                main { restored.findViewWithTag<View>("playback-reset").performClick() }
                 assertEquals(1f, fixture.player.state.value.playbackRate, 0.01f)
                 assertEquals(1f, fixture.player.state.value.volume, 0.01f)
                 assertEquals(LyricAlignment.LEFT, settings.appearance(landscape).alignment)
@@ -611,7 +623,7 @@ class PlaybackSettingsTest {
         }
         withPlayback { fixture ->
             fixture.play(); val original = fixture.player
-            for ((language, label) in listOf("en" to "Your Library", "zh-TW" to "我的清單")) {
+            for ((language, label) in listOf("en" to "Local music", "zh-TW" to "本地音樂")) {
                 // waitForMonitorWithTimeout removes the monitor after it receives one Activity.
                 val monitor = instrumentation.addMonitor(MainActivity::class.java.name, null, false)
                 try {

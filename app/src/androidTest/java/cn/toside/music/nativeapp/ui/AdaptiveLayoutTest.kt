@@ -1,6 +1,5 @@
 package cn.toside.music.nativeapp.ui
 
-import android.app.AlertDialog
 import android.app.Dialog
 import android.content.Intent
 import android.graphics.Bitmap
@@ -55,7 +54,7 @@ class AdaptiveLayoutTest {
         if (InstrumentationRegistry.getArguments().getString("adaptiveScreenshots") != "true") return
         SystemClock.sleep(300)
         instrumentation.runOnMainSync {
-            val dialog = listOf("playerDialog", "syncSettingsDialog").mapNotNull { field(activity, it) as? Dialog }.firstOrNull { it.isShowing }
+            val dialog = (field(activity, "playerDialog") as? Dialog)?.takeIf { it.isShowing }
             writeSnapshot(name, dialog?.window?.decorView ?: activity.window.decorView)
         }
     }
@@ -129,14 +128,14 @@ class AdaptiveLayoutTest {
         try {
             instrumentation.runOnMainSync { invoke(activity, "showSyncSettings") }
             instrumentation.waitForIdleSync()
-            val dialog = field(activity, "syncSettingsDialog") as AlertDialog
-            val inputs = descendants(dialog.window!!.decorView).filterIsInstance<EditText>()
+            val page = activity.settingsFragment()!!.requireView()
+            val inputs = descendants(page).filterIsInstance<EditText>()
             assertEquals(2, inputs.size); assertTrue(inputs.all { !it.contentDescription.isNullOrBlank() && it.width > 0 })
-            val width = dialog.window!!.decorView.width
+            val width = page.width
             assertTrue(width <= activity.window.decorView.width)
-            assertTrue(width <= (560 * activity.resources.displayMetrics.density).toInt())
+            assertSame(activity.window.decorView.windowToken, page.windowToken)
             capture(if (activity.resources.configuration.screenWidthDp >= 600) "tablet-sync" else "phone-sync", activity)
-            instrumentation.runOnMainSync { dialog.dismiss() }
+            instrumentation.runOnMainSync { activity.closeSettings() }
         } finally { instrumentation.runOnMainSync { activity.finish() } }
     }
     @Test fun darkThemeEnglishLargeFontsAndRightNavigationStayUsable() {

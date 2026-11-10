@@ -13,6 +13,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertNull
 import org.junit.Assume.assumeTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -71,10 +72,19 @@ class PermissionFlowTest {
             preferences.edit().remove("audio-requested").commit()
             val heading = MainActivity::class.java.getDeclaredField("heading").apply { isAccessible = true }.get(activity) as TextView
             instrumentation.runOnMainSync { heading.performClick() }
-            assertTrue("我的歌单应显示固定的本地音乐入口", waitUntil {
+            instrumentation.waitForIdleSync()
+            assertNull("歌单列表不应重复显示本地音乐入口", activity.window.decorView.findViewWithTag<View>("playlist-choice-local"))
+            assertEquals(PackageManager.PERMISSION_DENIED, context.checkSelfPermission(permission))
+            instrumentation.runOnMainSync {
+                MainActivity::class.java.getDeclaredMethod("showPlaylists").apply { isAccessible = true }.invoke(activity)
+                if (activity.window.decorView.findViewWithTag<View>("home-drawer-host") != null) {
+                    MainActivity::class.java.getDeclaredMethod("showNavigation").apply { isAccessible = true }.invoke(activity)
+                }
+            }
+            assertTrue("应能从独立导航入口打开本地音乐", waitUntil {
                 var clicked = false
                 instrumentation.runOnMainSync {
-                    val item = activity.window.decorView.findViewWithTag<View>("playlist-choice-local")
+                    val item = activity.window.decorView.findViewWithTag<View>("navigation-local")
                     clicked = item?.isShown == true && item.performClick()
                 }
                 clicked

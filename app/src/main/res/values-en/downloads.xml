@@ -39,4 +39,7 @@
     <string name="download_quality_hires">Hi-Res lossless %1$s</string>
     <string name="download_quality_size">%1$s · %2$s</string>
     <string name="download_size_mib">%1$.2f MiB</string>
+    <string name="download_probe_checking">Checking download availability</string>
+    <string name="download_probe_available">Download available</string>
+    <string name="download_probe_unavailable">Download currently unavailable</string>
 </resources>

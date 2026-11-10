@@ -49,6 +49,10 @@ class SettingsFragment : Fragment() {
 
     internal fun savePageState(): Bundle? = page?.saveState() ?: pageState
     internal fun refreshSources() { page?.refreshSources() }
+    internal fun refreshPlayback() { page?.refreshPlayback() }
+    internal fun selectCategory(id: String) { page?.selectCategory(id) }
+    internal fun renderSyncState(value: cn.toside.music.nativeapp.sync.BackgroundSyncState) { page?.renderSyncState(value) }
+    override fun onStop() { page?.dismissPopups(); super.onStop() }
     internal fun applyTheme() {
         val controller = page ?: return
         val root = view as? FrameLayout ?: return

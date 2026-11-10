@@ -6,7 +6,7 @@ import cn.toside.music.nativeapp.data.Playlists
 import cn.toside.music.nativeapp.data.Song
 import cn.toside.music.nativeapp.ui.MainActivity
 
-import android.app.AlertDialog
+import android.view.View
 import android.app.Notification
 import android.app.NotificationManager
 import android.content.Context
@@ -193,7 +193,7 @@ class SyncServiceTest {
         }
     }
 
-    @Test fun backgroundConflictReappearsAfterActivityRecreationWithoutChoosingADefault() = runBlocking {
+    @Test fun backgroundConflictStaysInSettingsAcrossRecreationWithoutChoosingADefault() = runBlocking {
         withEnvironment { server, _, _ ->
             server.requestDislikeConflict = true
             var activity: MainActivity? = open()
@@ -207,15 +207,18 @@ class SyncServiceTest {
                 assertEquals(request.id, running.state.value.conflict!!.id)
                 activity = open()
                 assertSame(running, service(activity!!))
-                val dialog = MainActivity::class.java.getDeclaredField("syncConflictDialog").apply { isAccessible = true }
-                waitFor { (dialog.get(activity) as? AlertDialog)?.isShowing == true }
+                assertNull(activity!!.settingsFragment())
+                instrumentation.runOnMainSync { activity!!.openSettings("sync") }
+                waitFor { activity!!.settingsFragment()?.view?.findViewWithTag<View>("sync-mode-merge_remote_local") != null }
+                instrumentation.runOnMainSync { activity!!.closeSettings() }
+                assertEquals(request.id, running.state.value.conflict!!.id)
                 finish(activity!!); activity = open()
                 service(activity!!)
-                waitFor { (dialog.get(activity) as? AlertDialog)?.isShowing == true }
+                instrumentation.runOnMainSync { activity!!.openSettings("sync") }
+                waitFor { activity!!.settingsFragment()?.view?.findViewWithTag<View>("sync-mode-merge_remote_local") != null }
                 assertEquals(request.id, running.state.value.conflict!!.id)
                 instrumentation.runOnMainSync {
-                    val choice = dialog.get(activity) as AlertDialog
-                    choice.listView.performItemClick(choice.listView.getChildAt(1), 1, 1)
+                    activity!!.settingsFragment()!!.requireView().findViewWithTag<View>("sync-mode-merge_remote_local").performClick()
                 }
                 server.nextPeer()
                 waitFor { running.state.value.connected }
