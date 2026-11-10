@@ -10,14 +10,21 @@ import org.junit.runner.RunWith
 class PlaylistSearchTest {
     @Test fun mapsProviderSearchResultsToPlayablePlaylistIds() {
         val parser = PlaylistSearch()
-        val netease = parser.parse(JSONArray("""[{"id":123,"name":"Mix","creator":{"nickname":"User"}}]"""), "wy").single()
+        val netease = parser.parse(JSONArray("""[{"id":123,"name":"Mix","creator":{"nickname":"User"},"coverImgUrl":"//img.example/wy.png"}]"""), "wy").single()
         assertEquals("User", netease.author)
-        val qq = parser.parse(JSONArray("""[{"dissid":234,"dissname":"Rock &amp; Roll","creator":{"name":"User"}}]"""), "tx").single()
+        assertEquals("https://img.example/wy.png", netease.coverUrl)
+        val qq = parser.parse(JSONArray("""[{"dissid":234,"dissname":"Rock &amp; Roll","creator":{"name":"User"},"imgurl":"https://img.example/tx.png"}]"""), "tx").single()
         assertEquals("Rock & Roll", qq.name)
-        val kuwo = parser.parse(JSONArray("""[{"playlistid":345,"name":"Mix","nickname":"User"}]"""), "kw").single()
+        assertEquals("https://img.example/tx.png", qq.coverUrl)
+        val kuwo = parser.parse(JSONArray("""[{"playlistid":345,"name":"Mix","nickname":"User","pic":"https://img.example/kw.png"}]"""), "kw").single()
         assertEquals("8", kuwo.digest)
-        val migu = parser.parse(JSONArray("""[{"id":456,"name":"Mix","userName":"User"},{"id":"bad"}]"""), "mg").single()
+        assertEquals("https://img.example/kw.png", kuwo.coverUrl)
+        val migu = parser.parse(JSONArray("""[{"id":456,"name":"Mix","userName":"User","musicListPicUrl":"https://img.example/mg.png"},{"id":"bad"}]"""), "mg").single()
         assertEquals("456", migu.id)
         assertEquals("User", migu.author)
+        assertEquals("https://img.example/mg.png", migu.coverUrl)
+        val kugou = KugouPlaylists().parseLists(JSONArray("""[{"specialid":567,"specialname":"Mix","imgurl":"https://img.example/{size}/kg.png"}]""")).single()
+        assertEquals("https://img.example/256/kg.png", kugou.coverUrl)
+        assertEquals("", parser.parse(JSONArray("""[{"id":678,"name":"No cover","coverImgUrl":"invalid"}]"""), "wy").single().coverUrl)
     }
 }

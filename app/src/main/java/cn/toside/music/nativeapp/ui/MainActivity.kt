@@ -66,6 +66,7 @@ import android.content.res.ColorStateList
 import android.content.res.Configuration
 import android.os.Build
 import android.os.Bundle
+import android.os.Parcelable
 import android.os.IBinder
 import android.app.AlertDialog
 import android.app.Dialog
@@ -79,10 +80,12 @@ import android.view.ViewGroup
 import android.view.WindowInsetsController
 import android.view.inputmethod.EditorInfo
 import android.widget.ArrayAdapter
+import android.widget.AbsListView
 import android.widget.AutoCompleteTextView
 import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.FrameLayout
+import android.widget.GridView
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ListView
@@ -224,6 +227,9 @@ class MainActivity : FragmentActivity() {
     private var searchedText = ""
     private var changingSeek = false
     private lateinit var list: ListView
+    private lateinit var playlistSearchGrid: GridView
+    private lateinit var resultsEmpty: View
+    private var playlistSearchAdapter: PlaylistCoversAdapter? = null
     private lateinit var status: TextView
     private lateinit var title: TextView
     private lateinit var time: TextView
@@ -253,7 +259,7 @@ class MainActivity : FragmentActivity() {
     private data class PageSnapshot(val songs: List<Song>, val playlist: Playlist?, val board: Board?, val onlinePlaylist: OnlinePlaylist?,
         val online: Boolean, val boards: Boolean, val onlineLists: Boolean, val source: String, val query: String, val searchVisible: Boolean,
         val searchPage: Int, val boardPage: Int, val playlistPage: Int, val more: Boolean, val loading: Boolean, val first: Int, val top: Int,
-        val searchPlaylists: Boolean, val foundPlaylists: List<OnlinePlaylist>, val nextPages: Map<String, Int>)
+        val searchPlaylists: Boolean, val foundPlaylists: List<OnlinePlaylist>, val nextPages: Map<String, Int>, val playlistGridState: Parcelable?)
     private class RetainedPageState : ViewModel() { var page: PageSnapshot? = null; var beforePlaylist: PageSnapshot? = null }
     private val retainedPageState by lazy {
         ViewModelProvider(this, object : ViewModelProvider.Factory {
@@ -262,6 +268,7 @@ class MainActivity : FragmentActivity() {
         })[RetainedPageState::class.java]
     }
     private var pendingScroll: Pair<Int, Int>? = null
+    private var pendingPlaylistGridState: Parcelable? = null
     private var restoringSearchText = false
     private var suppressPageNavigation = false
     private var beforePlaylistSaved: Bundle? = null
@@ -420,6 +427,7 @@ class MainActivity : FragmentActivity() {
         outState.putString("home-source", page.source); outState.putString("home-query", page.query.take(2000)); outState.putBoolean("home-search-visible", page.searchVisible)
         outState.putBoolean("home-search-playlists", page.searchPlaylists)
         outState.putInt("home-first", page.first); outState.putInt("home-top", page.top)
+        outState.putParcelable("home-playlist-grid-state", page.playlistGridState)
         page.playlist?.let { outState.putLong("home-playlist", it.id) }
         page.board?.let { outState.putStringArray("home-board", arrayOf(it.id, it.name, it.source)) }
         page.onlinePlaylist?.let { outState.putStringArray("home-online-list", arrayOf(it.id, it.digest, it.name, it.author, it.source)) }
@@ -427,8 +435,9 @@ class MainActivity : FragmentActivity() {
     private fun pageSnapshot() = PageSnapshot(allSongs, activePlaylist, selectedBoard, selectedOnlinePlaylist, onlineMode, boardMode, onlinePlaylistMode,
         searchSource, search.text.toString(), search.visibility == View.VISIBLE, searchPage, boardPage, onlinePlaylistPage,
         loadMore.visibility == View.VISIBLE || loadJob?.isActive == true && (allSongs.isNotEmpty() || isCatalogPage && playlistSearchResults.isNotEmpty()), loadJob?.isActive == true,
-        pendingScroll?.first ?: list.firstVisiblePosition, pendingScroll?.second ?: (list.getChildAt(0)?.top ?: 0),
-        playlistSearchMode, playlistSearchResults, searchNextPages)
+        pendingScroll?.first ?: musicResultsList().firstVisiblePosition, pendingScroll?.second ?: (musicResultsList().getChildAt(0)?.top ?: 0),
+        playlistSearchMode, playlistSearchResults, searchNextPages,
+        if (isCatalogPage && playlistSearchMode) pendingPlaylistGridState ?: playlistSearchGrid.onSaveInstanceState() else null)
     private fun restorePage(saved: Bundle?, restartLoads: Boolean = true): Boolean {
         val previous = suppressPageNavigation
         suppressPageNavigation = true
@@ -448,7 +457,7 @@ class MainActivity : FragmentActivity() {
             pageTitle.text = getString(when { boardMode -> R.string.ui_1ee95aa94712; onlinePlaylistMode -> R.string.ui_473e57b72072; onlineMode -> R.string.ui_44ce7ae909bb; activePlaylist != null -> R.string.ui_27c95ec6b766; else -> R.string.ui_a9531e47b75d })
             heading.text = when { boardMode -> "›   ${selectedBoard?.name.orEmpty()}"; onlinePlaylistMode -> "›   ${selectedOnlinePlaylist?.name.orEmpty()}"
                 onlineMode -> getString(R.string.ui_e07216a6d505, sourceLabel()); activePlaylist != null -> "›   ${activePlaylist!!.displayName}"; else -> getString(R.string.ui_33eeaa47c231) }
-            if (preferences.saveScroll) pendingScroll = retained.first to retained.top
+            if (preferences.saveScroll) { pendingScroll = retained.first to retained.top; pendingPlaylistGridState = retained.playlistGridState }
             filterSongs(); loadMore.visibility = if (retained.more) View.VISIBLE else View.GONE
             val empty = if (isCatalogPage && playlistSearchMode) playlistSearchResults.isEmpty() else allSongs.isEmpty()
             if (restartLoads) {
@@ -461,7 +470,6 @@ class MainActivity : FragmentActivity() {
         searchSource = saved.getString("home-source")?.takeIf { it in SearchCatalog.choices } ?: SearchCatalog.ALL
         playlistSearchMode = saved.getBoolean("home-search-playlists")
         val query = saved.getString("home-query").orEmpty()
-        if (preferences.saveScroll) pendingScroll = saved.getInt("home-first") to saved.getInt("home-top")
         when (saved.getInt("home-mode")) {
             1 -> { openSearchPage(false); search.setText(query); if (query.isNotBlank()) searchOnline() }
             2 -> saved.getStringArray("home-board")?.takeIf { it.size == 3 }?.let { loadBoard(Board(it[0], it[1], it[2])) } ?: return false
@@ -477,6 +485,11 @@ class MainActivity : FragmentActivity() {
                     } finally { suppressPageNavigation = false }
                 }
             }
+        }
+        if (preferences.saveScroll) {
+            pendingScroll = saved.getInt("home-first") to saved.getInt("home-top")
+            @Suppress("DEPRECATION")
+            pendingPlaylistGridState = saved.getParcelable("home-playlist-grid-state")
         }
         return true
     }
@@ -625,6 +638,7 @@ class MainActivity : FragmentActivity() {
             } }.show()
     }
     private fun buildUi() {
+        playlistSearchAdapter?.close(); playlistSearchAdapter = null
         val navContainer = findViewById<FragmentContainerView>(R.id.main_nav_host)
             ?: FragmentContainerView(this).apply { id = R.id.main_nav_host }
         (navContainer.parent as? ViewGroup)?.removeView(navContainer)
@@ -763,6 +777,34 @@ class MainActivity : FragmentActivity() {
         }
         val listContainer = FrameLayout(this)
         listContainer.addView(list, FrameLayout.LayoutParams(-1, -1))
+        playlistSearchGrid = object : GridView(this) {
+            private fun fitColumns(width: Int) {
+                val columns = (width / resources.displayMetrics.density / 110).toInt().coerceIn(3, 8)
+                if (numColumns == columns) return
+                val restore = if (childCount > 0) onSaveInstanceState() else null
+                numColumns = columns
+                restore?.let { onRestoreInstanceState(it) }
+            }
+            override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+                // Weighted parents probe several widths. Once laid out, use the actual bounds.
+                if (width == 0) fitColumns(MeasureSpec.getSize(widthMeasureSpec))
+                super.onMeasure(widthMeasureSpec, heightMeasureSpec)
+            }
+            override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+                super.onSizeChanged(w, h, oldw, oldh)
+                if (w != oldw) fitColumns(w)
+            }
+        }.apply {
+            tag = "search-playlist-grid"; numColumns = 3; stretchMode = GridView.STRETCH_COLUMN_WIDTH
+            horizontalSpacing = dp(14); verticalSpacing = dp(18); setPadding(dp(12), dp(12), dp(12), dp(24))
+            clipToPadding = false; isVerticalScrollBarEnabled = false; visibility = View.GONE
+            setOnItemClickListener { _, _, position, _ -> playlistSearchResults.getOrNull(position)?.let { loadOnlinePlaylist(it) } }
+            addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+                val restore = pendingScroll
+                if (isShown && childCount > 0 && restore != null && restore.first in firstVisiblePosition until firstVisiblePosition + numColumns) pendingScroll = null
+            }
+        }
+        listContainer.addView(playlistSearchGrid, FrameLayout.LayoutParams(-1, -1))
         val empty = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER
             setPadding(dp(24), dp(16), dp(24), dp(16)); isClickable = false
@@ -774,6 +816,7 @@ class MainActivity : FragmentActivity() {
             }
             addView(emptyHint, LinearLayout.LayoutParams(-1, -2))
         }
+        resultsEmpty = empty
         listContainer.addView(empty, FrameLayout.LayoutParams(-1, -1)); list.emptyView = empty
         body.addView(listContainer, LinearLayout.LayoutParams(-1, 0, 1f))
         loadMore = TextView(this).apply {
@@ -891,6 +934,12 @@ class MainActivity : FragmentActivity() {
     }
     private fun updateSearchChrome() {
         val catalog = isCatalogPage
+        val grid = catalog && playlistSearchMode
+        val hidden = if (grid) list else playlistSearchGrid
+        val shown = musicResultsList()
+        if (hidden.emptyView != null) hidden.emptyView = null
+        hidden.visibility = View.GONE
+        if (shown.emptyView !== resultsEmpty) shown.emptyView = resultsEmpty
         val compact = catalog && !uiLayout.expanded
         searchTabs.visibility = if (catalog) View.VISIBLE else View.GONE
         headerSyncButton.visibility = if (compact) View.GONE else View.VISIBLE
@@ -932,34 +981,32 @@ class MainActivity : FragmentActivity() {
     private fun resetCatalogResults() {
         loadJob?.cancel(); suggestionJob?.cancel(); searchGeneration++; catalogLoading = false
         allSongs = emptyList(); visibleSongs = emptyList(); playlistSearchResults = emptyList()
-        searchPage = 0; searchedText = ""; searchNextPages = emptyMap(); pendingScroll = null
-        list.adapter = null; loadMore.visibility = View.GONE
+        searchPage = 0; searchedText = ""; searchNextPages = emptyMap(); pendingScroll = null; pendingPlaylistGridState = null
+        list.adapter = null; clearPlaylistSearchGrid(); loadMore.visibility = View.GONE
         (search as? AutoCompleteTextView)?.apply { dismissDropDown(); setAdapter(ArrayAdapter(this@MainActivity, android.R.layout.simple_dropdown_item_1line, emptyList<String>())) }
         setCatalogStatus(if (uiLayout.expanded) getString(R.string.ui_bd997b86cde1) else "")
     }
     private fun renderPlaylistSearchResults() {
         updateNavigationSelection()
-        setCatalogStatus(getString(R.string.search_playlist_count, playlistSearchResults.size))
-        val first = pendingScroll?.first ?: list.firstVisiblePosition
-        val top = pendingScroll?.second ?: (list.getChildAt(0)?.top ?: 0)
-        list.adapter = object : ArrayAdapter<OnlinePlaylist>(this, android.R.layout.simple_list_item_1, playlistSearchResults) {
-            override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
-                val playlist = getItem(position)!!
-                return LinearLayout(this@MainActivity).apply {
-                    tag = "search-playlist-result"; gravity = Gravity.CENTER_VERTICAL; minimumHeight = dp(64)
-                    setPadding(dp(12), dp(8), dp(12), dp(8)); background = lx.touch()
-                    addView(lx.label(59659.toChar().toString(), 24f, palette.primary).apply { typeface = iconFont; gravity = Gravity.CENTER }, LinearLayout.LayoutParams(dp(40), dp(48)))
-                    addView(LinearLayout(this@MainActivity).apply {
-                        orientation = LinearLayout.VERTICAL; setPadding(dp(8), 0, dp(8), 0)
-                        addView(lx.label(playlist.name, 14f))
-                        addView(lx.label(listOf(UiPreferences.sourceName(this@MainActivity, playlist.source), playlist.author).filter { it.isNotBlank() }.joinToString(" · "), 11f, palette.muted))
-                    }, LinearLayout.LayoutParams(0, -2, 1f))
-                    addView(lx.label("›", 24f, palette.muted))
-                    palette.textStyle(this)
-                }
-            }
+        val first = pendingScroll?.first ?: playlistSearchGrid.firstVisiblePosition
+        val top = pendingScroll?.second ?: (playlistSearchGrid.getChildAt(0)?.top ?: 0)
+        val adapter = playlistSearchAdapter ?: PlaylistCoversAdapter(this, lx, palette, scope, showSource = true).also {
+            playlistSearchAdapter = it; playlistSearchGrid.adapter = it
         }
-        if (first < playlistSearchResults.size) list.setSelectionFromTop(first, top)
+        val changed = adapter.items != playlistSearchResults
+        val restore = pendingPlaylistGridState ?: if (changed && adapter.items.isNotEmpty()) playlistSearchGrid.onSaveInstanceState() else null
+        if (changed) { adapter.items = playlistSearchResults; adapter.notifyDataSetChanged() }
+        setCatalogStatus(getString(R.string.search_playlist_count, playlistSearchResults.size))
+        if (restore != null && playlistSearchResults.isNotEmpty()) {
+            playlistSearchGrid.onRestoreInstanceState(restore); pendingPlaylistGridState = null; pendingScroll = null
+        } else if (changed && first > 0 && first < playlistSearchResults.size) {
+            // GridView's inherited setSelectionFromTop uses a selected row, which touch mode does not have.
+            playlistSearchGrid.post { playlistSearchGrid.smoothScrollToPositionFromTop(first, top, 0) }
+        }
+    }
+    private fun musicResultsList(): AbsListView = if (isCatalogPage && playlistSearchMode) playlistSearchGrid else list
+    private fun clearPlaylistSearchGrid() {
+        playlistSearchAdapter?.close(); playlistSearchAdapter = null; playlistSearchGrid.adapter = null
     }
     private fun navigateToPage(page: Int) {
         when (page) {
@@ -1249,7 +1296,10 @@ class MainActivity : FragmentActivity() {
         val saved = state ?: Bundle().apply { category?.let { putString("category", it) } }
         if (supportFragmentManager.isStateSaved || navigation == null) { pendingSettingsState = saved; return }
         hidePageKeyboard()
-        if (preferences.saveScroll && pendingScroll == null) pendingScroll = list.firstVisiblePosition to (list.getChildAt(0)?.top ?: 0)
+        if (preferences.saveScroll && pendingScroll == null) {
+            pendingScroll = musicResultsList().let { it.firstVisiblePosition to (it.getChildAt(0)?.top ?: 0) }
+            if (isCatalogPage && playlistSearchMode) pendingPlaylistGridState = playlistSearchGrid.onSaveInstanceState()
+        }
         navigation?.navigate(R.id.settings_page, SettingsFragment.create(saved).arguments, NavOptions.Builder().setLaunchSingleTop(true).build())
     }
     private fun navigationHost() = supportFragmentManager.findFragmentById(R.id.main_nav_host) as? NavHostFragment
@@ -1369,10 +1419,16 @@ class MainActivity : FragmentActivity() {
         updateNavigationSelection()
         findViewById<ViewGroup>(android.R.id.content).getChildAt(0)?.requestApplyInsets()
         if (!settings && ::list.isInitialized) {
-            val target = list
+            val target = musicResultsList()
             target.post {
+                if (musicResultsList() !== target || !target.isShown) return@post
+                if (target === playlistSearchGrid) {
+                    pendingPlaylistGridState?.let { target.onRestoreInstanceState(it) }
+                    pendingPlaylistGridState = null; pendingScroll = null
+                    return@post
+                }
                 val restore = pendingScroll ?: return@post
-                if (list === target && target.isShown && restore.first < target.count) target.setSelectionFromTop(restore.first, restore.second)
+                if (restore.first < target.count) target.setSelectionFromTop(restore.first, restore.second)
             }
         }
     }
@@ -2514,7 +2570,7 @@ class MainActivity : FragmentActivity() {
         val cursor = if (more) searchNextPages else null
         loadJob?.cancel()
         val generation = ++searchGeneration
-        if (!more) { allSongs = emptyList(); visibleSongs = emptyList(); playlistSearchResults = emptyList(); searchPage = 0; list.adapter = null }
+        if (!more) { allSongs = emptyList(); visibleSongs = emptyList(); playlistSearchResults = emptyList(); searchPage = 0; list.adapter = null; clearPlaylistSearchGrid() }
         catalogLoading = true
         setCatalogStatus(getString(R.string.ui_c37059a3d9df))
         loadMore.visibility = View.GONE

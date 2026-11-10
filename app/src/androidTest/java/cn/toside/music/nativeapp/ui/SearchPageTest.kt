@@ -12,6 +12,9 @@ import android.view.accessibility.AccessibilityNodeInfo
 import android.view.inspector.WindowInspector
 import android.widget.EditText
 import android.widget.ListView
+import android.widget.GridView
+import android.widget.ImageView
+import android.graphics.drawable.BitmapDrawable
 import android.widget.TextView
 import androidx.activity.BackEventCompat
 import androidx.fragment.app.Fragment
@@ -79,6 +82,15 @@ class SearchPageTest {
         }
         fail("Fixture search did not complete")
     }
+    private fun awaitUi(message: String = "Timed out waiting for search layout", check: () -> Boolean) {
+        repeat(200) {
+            var ready = false
+            instrumentation.runOnMainSync { ready = check() }
+            if (ready) return
+            SystemClock.sleep(50)
+        }
+        fail(message)
+    }
     private fun measure(activity: MainActivity, widthDp: Int, heightDp: Int): ViewGroup {
         val root = root(activity); val density = activity.resources.displayMetrics.density
         repeat(2) {
@@ -90,7 +102,8 @@ class SearchPageTest {
     private fun snapshot(name: String, view: View) {
         if (InstrumentationRegistry.getArguments().getString("searchScreenshots") != "true") return
         val bitmap = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888).also { view.draw(Canvas(it)) }
-        val directory = File(instrumentation.targetContext.getExternalFilesDir(null), "search-validation").apply { mkdirs() }
+        val output = InstrumentationRegistry.getArguments().getString("additionalTestOutputDir")
+        val directory = File(output?.let(::File) ?: instrumentation.targetContext.getExternalFilesDir(null), "search-validation").apply { mkdirs() }
         File(directory, "$name.png").outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
         bitmap.recycle()
     }
@@ -244,8 +257,8 @@ class SearchPageTest {
             }
             waitForSearch(activity); SystemClock.sleep(250)
             assertEquals(true, field(activity, "playlistSearchMode"))
-            assertEquals(24, (field(activity, "list") as ListView).adapter.count)
-            assertTrue((field(activity, "list") as ListView).adapter.getItem(0) is OnlinePlaylist)
+            assertEquals(24, (field(activity, "playlistSearchGrid") as GridView).adapter.count)
+            assertTrue((field(activity, "playlistSearchGrid") as GridView).adapter.getItem(0) is OnlinePlaylist)
             assertEquals(mapOf("kg" to 2), field(activity, "searchNextPages"))
             instrumentation.runOnMainSync { snapshot("search-playlists", root(activity)) }
             val monitor = instrumentation.addMonitor(MainActivity::class.java.name, null, false)
@@ -257,7 +270,7 @@ class SearchPageTest {
             assertEquals(SearchCatalog.ALL, field(activity, "searchSource"))
             assertEquals(true, field(activity, "playlistSearchMode"))
             assertEquals("same", (field(activity, "search") as EditText).text.toString())
-            assertEquals(24, (field(activity, "list") as ListView).adapter.count)
+            assertEquals(24, (field(activity, "playlistSearchGrid") as GridView).adapter.count)
             assertEquals(mapOf("kg" to 2), field(activity, "searchNextPages"))
         }
     }
@@ -277,6 +290,106 @@ class SearchPageTest {
         }
     }
 
+    @Test fun playlistCoversUseThreePhoneColumnsAndMoreTabletColumnsAndKeepPagingAndBackPosition() {
+        CoverHttpFixture().use { server ->
+            val catalog = SearchCatalog(
+                songSearch = { source, query, _ -> listOf(song(source, query)) },
+                playlistSearch = { source, query, page -> (1..20).map { index ->
+                    val id = (page - 1) * 20 + index
+                    OnlinePlaylist("$id", "8", "$query · $source $id · 适合在海边听的音乐", "Author", source,
+                        if (source == "kg" && id == 3) "" else "${server.address}/$source-$id.png")
+                } }
+            )
+            Fixture(catalog).use { fixture ->
+                val activity = fixture.activity
+                fun grid() = field(activity, "playlistSearchGrid") as GridView
+                instrumentation.runOnMainSync {
+                    (field(activity, "search") as EditText).setText("大海")
+                    root(activity).findViewWithTag<View>("search-tab-playlists").performClick()
+                }
+                waitForSearch(activity)
+                assertEquals(100, grid().count)
+                for (layout in listOf(AdaptiveLayout(360, 800), AdaptiveLayout(600, 800), AdaptiveLayout(1024, 768))) {
+                    instrumentation.runOnMainSync {
+                        set(activity, "uiLayout", layout)
+                        val density = activity.resources.displayMetrics.density
+                        activity.window.setLayout((layout.widthDp * density).toInt(), (layout.heightDp * density).toInt())
+                        invoke(activity, "applyThemeInPlace")
+                    }
+                    awaitUi("Covers did not settle at ${layout.widthDp} dp") {
+                        val target = grid()
+                        target.isShown && target.childCount > 0 && !target.isLayoutRequested &&
+                            (0 until target.childCount).all { index ->
+                                val cover = ((target.getChildAt(index) as ViewGroup).getChildAt(0) as ViewGroup).getChildAt(1) as ImageView
+                                cover.tag == "" || cover.drawable is BitmapDrawable
+                            }
+                    }
+                    instrumentation.runOnMainSync {
+                        val target = grid()
+                        if (!layout.expanded) assertEquals(3, target.numColumns) else assertTrue(target.numColumns > 3)
+                        assertEquals(View.GONE, (field(activity, "list") as View).visibility)
+                        for (index in 0 until target.childCount) {
+                            val card = target.getChildAt(index) as ViewGroup
+                            val square = card.getChildAt(0)
+                            val item = target.adapter.getItem(target.firstVisiblePosition + index) as OnlinePlaylist
+                            assertEquals(square.width, square.height)
+                            assertTrue(card.left >= target.paddingLeft && card.right <= target.width - target.paddingRight)
+                            assertEquals(item.name, card.findViewWithTag<TextView>("playlist-card-title").text.toString())
+                            assertEquals(item.source, card.findViewWithTag<TextView>("playlist-card-source").text.toString())
+                        }
+                        snapshot("search-cover-grid-${layout.widthDp}", root(activity))
+                        target.smoothScrollBy((450 * activity.resources.displayMetrics.density).toInt(), 1)
+                    }
+                    awaitUi { grid().firstVisiblePosition > 0 }
+                    instrumentation.waitForIdleSync(); SystemClock.sleep(100)
+                }
+                awaitUi { (0 until grid().childCount).all { index ->
+                    val cover = ((grid().getChildAt(index) as ViewGroup).getChildAt(0) as ViewGroup).getChildAt(1) as ImageView
+                    cover.tag == "" || cover.drawable is BitmapDrawable
+                } }
+                val bitmaps = mutableMapOf<Any, Bitmap>()
+                instrumentation.runOnMainSync {
+                    for (index in 0 until grid().childCount) {
+                        val cover = ((grid().getChildAt(index) as ViewGroup).getChildAt(0) as ViewGroup).getChildAt(1) as ImageView
+                        (cover.drawable as? BitmapDrawable)?.let { bitmaps[cover.tag] = it.bitmap }
+                    }
+                }
+                repeat(8) {
+                    instrumentation.runOnMainSync { root(activity).requestLayout() }; SystemClock.sleep(60)
+                    instrumentation.runOnMainSync {
+                        for (index in 0 until grid().childCount) {
+                            val cover = ((grid().getChildAt(index) as ViewGroup).getChildAt(0) as ViewGroup).getChildAt(1) as ImageView
+                            bitmaps[cover.tag]?.let { assertSame("An unchanged visible cover must stay loaded", it, (cover.drawable as? BitmapDrawable)?.bitmap) }
+                        }
+                    }
+                }
+                val first = grid().firstVisiblePosition
+                instrumentation.runOnMainSync { (field(activity, "loadMore") as View).performClick() }
+                waitForSearch(activity)
+                assertEquals(200, grid().count)
+                awaitUi("Paging did not restore row $first") { grid().firstVisiblePosition == first }
+                var opened: OnlinePlaylist? = null
+                val selected = grid().adapter.getItem(first + 1) as OnlinePlaylist
+                instrumentation.runOnMainSync {
+                    activity.onlinePlaylistSongs = { playlist, _ -> opened = playlist; listOf(song(playlist.source, "Fixture track")) }
+                    grid().performItemClick(grid().getChildAt(1), first + 1, (first + 1).toLong())
+                }
+                awaitUi { activity.navigationController().currentDestination?.id == R.id.playlist_songs && (field(activity, "list") as ListView).count == 1 }
+                assertEquals(selected, opened)
+                instrumentation.runOnMainSync { activity.onBackPressedDispatcher.onBackPressed() }
+                awaitUi("Returning from a playlist did not restore row $first") { activity.navigationController().currentDestination?.id == R.id.music_page && grid().isShown && grid().firstVisiblePosition == first }
+                assertEquals(200, grid().count)
+                instrumentation.runOnMainSync { root(activity).findViewWithTag<View>("search-tab-songs").performClick() }
+                waitForSearch(activity)
+                assertEquals(View.GONE, grid().visibility)
+                assertTrue((field(activity, "list") as ListView).isShown)
+                assertEquals(5, (field(activity, "list") as ListView).count)
+                instrumentation.runOnMainSync { (field(activity, "search") as EditText).text.clear() }
+                assertEquals(0, grid().adapter?.count ?: 0)
+            }
+        }
+    }
+
     @Test fun cancellingPlaylistBackKeepsContentAndCommittedBackRestoresSearch() {
         val context = instrumentation.targetContext
         instrumentation.uiAutomation.grantRuntimePermission(context.packageName,
@@ -290,13 +403,13 @@ class SearchPageTest {
                 root(activity).findViewWithTag<View>("search-tab-playlists").performClick()
             }
             waitForSearch(activity)
-            val results = (field(activity, "list") as ListView).adapter
+            val results = (field(activity, "playlistSearchGrid") as GridView).adapter
             val count = results.count
             assertTrue(count > 0)
             val query = (field(activity, "search") as EditText).text.toString()
             val cursors = (field(activity, "searchNextPages") as Map<*, *>).toMap()
             instrumentation.runOnMainSync {
-                val list = field(activity, "list") as ListView
+                val list = field(activity, "playlistSearchGrid") as GridView
                 list.performItemClick(list.getChildAt(0), 0, list.adapter.getItemId(0))
             }
             waitForSearch(activity); instrumentation.waitForIdleSync()
@@ -351,7 +464,7 @@ class SearchPageTest {
                     assertEquals(query, (field(activity, "search") as EditText).text.toString())
                     assertEquals(true, field(activity, "playlistSearchMode"))
                     assertEquals(cursors, field(activity, "searchNextPages"))
-                    val restored = field(activity, "list") as ListView
+                    val restored = field(activity, "playlistSearchGrid") as GridView
                     assertTrue(restored.isShown); assertEquals(count, restored.count)
                     assertTrue(restored.adapter.getItem(0) is OnlinePlaylist)
                 }

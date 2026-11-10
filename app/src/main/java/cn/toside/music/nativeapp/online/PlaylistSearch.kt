@@ -67,7 +67,13 @@ internal class PlaylistSearch {
                 else -> item.optString("nickname")
             }
             fun decode(value: String) = Html.fromHtml(value, Html.FROM_HTML_MODE_LEGACY).toString()
-            add(OnlinePlaylist(id, if (source == "kw") "8" else "", decode(name), decode(author), source))
+            val cover = when (source) {
+                "wy" -> playlistCover(item.optString("coverImgUrl"), item.optString("picUrl"))
+                "tx" -> playlistCover(item.optString("imgurl"), item.optString("disscover"), item.optString("logo"))
+                "mg" -> playlistCover(item.optString("musicListPicUrl"), item.optString("imageUrl"), item.optString("img"), item.optJSONArray("pics")?.optJSONObject(0)?.optString("url"))
+                else -> playlistCover(item.optString("img"), item.optString("pic"), item.optString("picUrl"))
+            }
+            add(OnlinePlaylist(id, if (source == "kw") "8" else "", decode(name), decode(author), source, cover))
         }
     }
     private fun get(url: String, headers: Map<String, String> = emptyMap(), form: String? = null): JSONObject {
