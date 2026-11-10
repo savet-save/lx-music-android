@@ -4,6 +4,7 @@ import cn.toside.music.nativeapp.R
 import cn.toside.music.nativeapp.data.AppPreferences
 import cn.toside.music.nativeapp.data.DislikeStore
 import cn.toside.music.nativeapp.data.DownloadTask
+import cn.toside.music.nativeapp.data.DownloadProbe
 import cn.toside.music.nativeapp.data.Downloads
 import cn.toside.music.nativeapp.data.ExternalAudio
 import cn.toside.music.nativeapp.data.ImportedList
@@ -2210,8 +2211,13 @@ class MainActivity : FragmentActivity() {
     }
     private fun chooseDownloadQuality(song: Song) {
         if (downloadQualityDialog?.isShowing == true) return
-        downloadQualityDialog = showDownloadQuality(this, song, palette, lx) { quality -> requestDownload(DownloadRequest(song, quality)) }
-            .apply { setOnDismissListener { if (downloadQualityDialog === this) downloadQualityDialog = null } }
+        downloadQualityDialog = showDownloadQuality(this, song, palette, lx, scope,
+            probe = { quality, progress ->
+                val player = service ?: error(getString(R.string.ui_7ca47a28e695))
+                DownloadProbe().check(player.resolveDownloadUrl(song, quality), progress)
+            },
+            dismissed = { if (downloadQualityDialog === it) downloadQualityDialog = null }
+        ) { quality -> requestDownload(DownloadRequest(song, quality)) }
     }
     internal fun retryDownload(task: DownloadTask) {
         val quality = task.quality ?: return

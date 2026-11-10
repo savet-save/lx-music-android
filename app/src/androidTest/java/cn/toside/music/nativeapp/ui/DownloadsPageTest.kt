@@ -121,6 +121,11 @@ class DownloadsPageTest {
             val dialogField = MainActivity::class.java.getDeclaredField("downloadQualityDialog").apply { isAccessible = true }
             waitFor("quality chooser") { (dialogField.get(activity) as? Dialog)?.isShowing == true }
             val dialog = dialogField.get(activity) as Dialog
+            waitFor("failed availability probes") {
+                var finished = false
+                main { finished = listOf("128k", "320k").all { dialog.window!!.decorView.findViewWithTag<TextView>("download-quality-result-$it").text == "×" } }
+                finished
+            }
             assertTrue(downloads.list().none { it.song == song })
             main {
                 val dialogRoot = dialog.window!!.decorView
