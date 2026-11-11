@@ -118,6 +118,7 @@ import kotlinx.coroutines.withContext
 class MainActivity : FragmentActivity() {
     override fun attachBaseContext(newBase: Context) { super.attachBaseContext(UiPreferences.context(newBase)) }
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private var updateCheckJob: Job? = null
     private var service: PlaybackService? = null
     private var bound = false
     private var incomingHandled = false
@@ -367,7 +368,9 @@ class MainActivity : FragmentActivity() {
         playlistChangesJob = scope.launch { playlists.changes.onStart { emit(Unit) }.collectLatest { refreshSynchronizedPlaylist() } }
         try { SyncService.resumeIfEnabled(this) }
         catch (e: RuntimeException) { toast(getString(R.string.ui_671ad117f5de, java.lang.String.valueOf(e.localizedMessage))) }
-        checkNativeUpdatesOnStartup(this, scope) { release -> toast(getString(R.string.update_available_hint, release.version)) }
+        if (updateCheckJob?.isActive != true) {
+            updateCheckJob = checkNativeUpdatesOnStartup(this, scope) { release -> toast(getString(R.string.update_available_hint, release.version)) }
+        }
     }
     override fun onStop() {
         platformPopup.dismiss(); playlistActionsPopup.dismiss(); songActionsPopup.dismiss(); choicesPopup.dismiss()

@@ -2,6 +2,7 @@ package cn.toside.music.nativeapp.ui
 
 import android.app.Activity
 import android.app.DownloadManager
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.text.format.Formatter
@@ -13,12 +14,16 @@ import android.widget.Button
 import android.widget.CheckBox
 import android.widget.LinearLayout
 import android.widget.TextView
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleOwner
 import cn.toside.music.nativeapp.R
 import cn.toside.music.nativeapp.data.AppPreferences
 import cn.toside.music.nativeapp.update.NativeRelease
 import cn.toside.music.nativeapp.update.NativeReleases
 import cn.toside.music.nativeapp.update.NativeUpdates
 import cn.toside.music.nativeapp.update.UpdateNotes
+import cn.toside.music.nativeapp.update.UpdateChecker
+import cn.toside.music.nativeapp.update.UpdateCheckPreferences
 import cn.toside.music.nativeapp.utils.DiagnosticLog
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -35,39 +40,43 @@ import org.json.JSONObject
 /** Share a successful check with the page without opening a window or interrupting navigation. */
 internal object NativeUpdateNotice {
     val release = MutableStateFlow<NativeRelease?>(null)
-    fun restore(activity: Activity) {
+    private var checker: UpdateChecker? = null
+    @Synchronized fun checks(context: Context): UpdateChecker = checker ?: run {
+        val application = context.applicationContext
+        UpdateChecker(CoroutineScope(SupervisorJob() + Dispatchers.IO), UpdateCheckPreferences(application),
+            NativeReleases::latest, { remember(application, it) }).also { checker = it }
+    }
+    @Synchronized fun restore(context: Context) {
         if (release.value != null) return
         release.value = runCatching {
-            val saved = activity.getSharedPreferences("native-updates", Activity.MODE_PRIVATE).getString("release-notice", null) ?: return
+            val saved = context.getSharedPreferences("native-updates", Context.MODE_PRIVATE).getString("release-notice", null) ?: return
             val json = JSONObject(saved)
             NativeRelease(json.getString("version"), json.getString("url"), json.getString("notes"),
                 json.optString("apkUrl").takeIf { it.isNotBlank() }, json.optLong("size"), json.optString("digest").takeIf { it.isNotBlank() })
         }.getOrNull()
     }
-    fun remember(activity: Activity, value: NativeRelease?) {
-        release.value = value
-        activity.getSharedPreferences("native-updates", Activity.MODE_PRIVATE).edit().apply {
+    @Synchronized fun remember(context: Context, value: NativeRelease?) {
+        context.getSharedPreferences("native-updates", Context.MODE_PRIVATE).edit().apply {
             if (value == null) remove("release-notice")
             else putString("release-notice", JSONObject().put("version", value.version).put("url", value.url).put("notes", value.notes)
                 .put("apkUrl", value.apkUrl.orEmpty()).put("size", value.size).put("digest", value.digest.orEmpty()).toString())
         }.apply()
+        release.value = value
     }
 }
 
-internal fun checkNativeUpdatesOnStartup(activity: Activity, scope: CoroutineScope, available: (NativeRelease) -> Unit = {}) {
+internal fun checkNativeUpdatesOnStartup(activity: Activity, scope: CoroutineScope, available: (NativeRelease) -> Unit = {}): Job? {
     val settings = AppPreferences(activity)
     NativeUpdateNotice.restore(activity)
-    if (!settings.bool("version.autoCheck", true)) return
-    val now = System.currentTimeMillis()
-    val previous = settings.string("version.lastCheck", "0").toLongOrNull() ?: 0
-    if (now - previous in 0 until 24 * 60 * 60 * 1000L) return
-    settings.set("version.lastCheck", now.toString())
-    scope.launch {
+    if (!settings.bool("version.autoCheck", true)) return null
+    val checks = NativeUpdateNotice.checks(activity)
+    return scope.launch {
         try {
-            val release = NativeReleases.latest() ?: return@launch
-            NativeUpdateNotice.remember(activity, release)
+            val release = checks.check()?.release ?: return@launch
             @Suppress("DEPRECATION") val current = activity.packageManager.getPackageInfo(activity.packageName, 0).versionName.orEmpty()
-            if (!activity.isFinishing && NativeReleases.compare(release.version, current) > 0 && settings.string("version.ignored", "") != release.version) available(release)
+            val foreground = (activity as? LifecycleOwner)?.lifecycle?.currentState?.isAtLeast(Lifecycle.State.STARTED) == true
+            if (foreground && !activity.isFinishing && !activity.isDestroyed && settings.bool("version.autoCheck", true) &&
+                NativeReleases.compare(release.version, current) > 0 && settings.string("version.ignored", "") != release.version) available(release)
         } catch (e: CancellationException) { throw e }
         catch (e: Exception) { DiagnosticLog(activity).record("update", e.javaClass.simpleName, "INFO") }
     }
@@ -150,8 +159,7 @@ internal class AboutPage(
         check.isEnabled = false; status.text = activity.getString(R.string.ui_6b72c3d6855c)
         work.launch {
             try {
-                val release = NativeReleases.latest()
-                NativeUpdateNotice.remember(activity, release)
+                val release = NativeUpdateNotice.checks(activity).check(manual = true)?.release
                 showRelease(release)
                 if (release == null) status.text = activity.getString(R.string.ui_ca985784214d)
             } catch (e: CancellationException) { throw e }
