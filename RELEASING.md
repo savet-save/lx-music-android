@@ -73,7 +73,7 @@ python scripts/publish-release.py --tag native-v0.9.3 --prepare-only
 Actions 运行单元测试及 Release Lint，构建三个 APK，并验证包名、版本、ABI 内容和一致的签名证书。兼容 Build Tools 36 及以前的 `Signer #1` 和 37 的 `V2 Signer:` 等证书输出格式。签名验证失败、证书解析失败和不同 APK 证书不一致会分别停止。上传前再次核对工作区及远程标签仍对应本次发布提交。产物保存在 `build/releases/native-vVERSION/`，包括三个 APK、`SHA256SUMS.txt` 和 `RELEASE_NOTES.md`。
 
 - Release 标题只有版本名，例如 `0.9.3`。
-- 优先使用 `doc/release-notes/native-vVERSION.md` 中按版本维护的简短更新说明，适合旧版应用直接显示；内容不自动追加提交链接或哈希表，SHA-256 继续保存到下载附件 `SHA256SUMS.txt`。已有说明文件为空时停止发布。没有对应文件时沿用以下自动生成规则。
+- `doc/release-notes/native-vVERSION.md` 中的简短说明作为「更新摘要」置于完整正文前；仍生成下述提交记录、比较链接和 APK SHA-256 表，并提供 `SHA256SUMS.txt` 下载附件。已有说明文件为空时停止发布；没有说明文件时直接生成完整记录。客户端接收原始正文后优先展示摘要，无摘要时提取有效改动、隐藏提交链接和校验表；「完整更新说明」打开原始发布页。
 - 首个原生正式 Release 使用 README 的项目介绍，后面附三个 APK 的 SHA-256。
 - 后续 Release 使用上一个原生正式 Release 标签以来的非合并提交记录，包含提交链接、完整比较链接和三个 APK 的 SHA-256。旧 RN Release、预发布和草稿不作为前一版本。
 - 先创建草稿，再依次上传通用 APK、两个 ARM APK 和校验文件，核对上传状态、大小及 GitHub 返回的哈希后才公开发布。失败保留草稿，可重试；已公开的版本不覆盖。通用包先上传，兼容旧版应用按第一个 APK 更新的逻辑；新版应用优先选择设备对应的 ARM 包，缺少对应包时回退通用包，仍兼容旧版单 APK。

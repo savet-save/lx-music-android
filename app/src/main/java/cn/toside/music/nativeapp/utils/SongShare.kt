@@ -45,7 +45,7 @@ internal object SongShare {
     fun share(activity: Activity, song: Song) {
         if (AppPreferences(activity).string("common.shareType", "system") == "clipboard") {
             (activity.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText(song.title, link(song).toString()))
-            android.widget.Toast.makeText(activity, activity.getString(R.string.share_copied), android.widget.Toast.LENGTH_SHORT).show()
+            ToastUtils.show(activity, R.string.share_copied)
         } else activity.startActivity(Intent.createChooser(intent(song), activity.getString(R.string.share_song)))
     }
 }

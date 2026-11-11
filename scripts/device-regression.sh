@@ -65,7 +65,14 @@ bash ./gradlew --no-daemon :app:connectedDebugAndroidTest \
 mkdir -p build/permission-flow/reports build/permission-flow/results
 cp -a app/build/reports/androidTests/. build/permission-flow/reports/
 cp -a app/build/outputs/androidTest-results/. build/permission-flow/results/
-bash ./gradlew --no-daemon :app:connectedDebugAndroidTest \
+# Grant legacy storage access at installation, before instrumentation starts.
+# Keep the first-use permission pass above on the default, ungranted install.
+regression_options=()
+device_api=$(adb shell getprop ro.build.version.sdk | tr -d '\r')
+if (( device_api <= 28 )); then
+  regression_options+=(-PnativeTestGrantPermissions=true)
+fi
+bash ./gradlew --no-daemon :app:connectedDebugAndroidTest "${regression_options[@]}" \
   -Pandroid.testInstrumentationRunnerArguments.notClass=cn.toside.music.nativeapp.ui.PermissionFlowTest \
   -Pandroid.testInstrumentationRunnerArguments.runDownloadJobs=true \
   -Pandroid.testInstrumentationRunnerArguments.updateFixture=/data/local/tmp/lx-native-update-fixture.apk \

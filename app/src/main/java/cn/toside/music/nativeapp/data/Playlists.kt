@@ -29,7 +29,7 @@ private data class LocalSongRow(val song: Song, val raw: String?)
 private data class SyncList(val id: String, val name: String, val metadata: JSONObject?, val songs: List<SyncSong>)
 
 /** Persistent playlists are separate from the platform media library. */
-class Playlists(context: Context, name: String = "playlists.db") : SQLiteOpenHelper(context, name, null, 6), Closeable {
+class Playlists(context: Context, name: String = "playlists.db") : SQLiteOpenHelper(context, name, null, 7), Closeable {
     private val preferences = AppPreferences(context)
     private class Signals {
         val outgoing = MutableSharedFlow<Unit>(extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
@@ -42,6 +42,7 @@ class Playlists(context: Context, name: String = "playlists.db") : SQLiteOpenHel
     private val localMutationGate get() = signals.localMutationGate
     private fun notifyLocalChanged() { signals.outgoing.tryEmit(Unit); signals.changes.tryEmit(Unit) }
     companion object {
+        private const val TRIAL_NAME = "试听列表"
         private const val FAVORITES_NAME = "我的收藏"
         private val stores = ConcurrentHashMap<String, Signals>()
     }
@@ -52,7 +53,11 @@ class Playlists(context: Context, name: String = "playlists.db") : SQLiteOpenHel
             "sync_id TEXT NOT NULL UNIQUE, position INTEGER NOT NULL, source TEXT, source_list_id TEXT, location_update_time INTEGER, sync_meta TEXT)")
         createSongsTable(db)
         createSyncTables(db)
+        seedTrialList(db)
         seedFavorites(db)
+    }
+    private fun seedTrialList(db: SQLiteDatabase) {
+        db.execSQL("INSERT OR IGNORE INTO playlists(name, sync_id, position) VALUES (?, 'default', -2)", arrayOf(TRIAL_NAME))
     }
     private fun seedFavorites(db: SQLiteDatabase) {
         db.execSQL("INSERT OR IGNORE INTO playlists(name, sync_id, position) VALUES (?, 'love', -1)", arrayOf(FAVORITES_NAME))
@@ -91,10 +96,12 @@ class Playlists(context: Context, name: String = "playlists.db") : SQLiteOpenHel
         }
         if (oldVersion < 5) createSyncTables(db)
         if (oldVersion < 6) seedFavorites(db)
+        if (oldVersion < 7) seedTrialList(db)
     }
 
     suspend fun list(): List<Playlist> = withContext(Dispatchers.IO) {
-        readableDatabase.rawQuery("SELECT id, name, sync_id, source, source_list_id FROM playlists ORDER BY position, id", null).use { c ->
+        readableDatabase.rawQuery("SELECT id, name, sync_id, source, source_list_id FROM playlists " +
+            "ORDER BY CASE sync_id WHEN 'default' THEN 0 WHEN 'love' THEN 1 ELSE 2 END, position, id", null).use { c ->
             buildList { while (c.moveToNext()) add(Playlist(c.getLong(0), c.getString(1), c.getString(2), if (c.isNull(3)) null else c.getString(3), if (c.isNull(4)) null else c.getString(4))) }
         }
     }
@@ -204,7 +211,7 @@ class Playlists(context: Context, name: String = "playlists.db") : SQLiteOpenHel
             }
         }
         val parsed = mutableListOf(
-            SyncList("default", "试听列表", null, parseSongs(snapshot.getJSONArray("defaultList"))),
+            SyncList("default", TRIAL_NAME, null, parseSongs(snapshot.getJSONArray("defaultList"))),
             SyncList("love", FAVORITES_NAME, null, parseSongs(snapshot.getJSONArray("loveList"))),
         )
         val ids = mutableSetOf("default", "love", "temp")
@@ -334,6 +341,12 @@ class Playlists(context: Context, name: String = "playlists.db") : SQLiteOpenHel
     internal suspend fun loveList(): Long = withContext(Dispatchers.IO) {
         readableDatabase.rawQuery("SELECT id FROM playlists WHERE sync_id = 'love'", null).use { row ->
             check(row.moveToFirst()) { "内置收藏歌单不存在" }
+            row.getLong(0)
+        }
+    }
+    internal suspend fun trialList(): Long = withContext(Dispatchers.IO) {
+        readableDatabase.rawQuery("SELECT id FROM playlists WHERE sync_id = 'default'", null).use { row ->
+            check(row.moveToFirst()) { "内置试听列表不存在" }
             row.getLong(0)
         }
     }

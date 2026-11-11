@@ -14,7 +14,11 @@
     <string name="download_empty">暫無下載工作</string>
     <string name="download_no_matches">沒有符合條件的工作</string>
     <string name="download_load_error">無法讀取下載工作</string>
-    <string name="download_resolving">正在取得音樂連結</string>
+    <string name="download_resolving">正在準備下載</string>
+    <string name="download_lyric_pending">歌詞：等待自動下載</string>
+    <string name="download_lyric_saved">歌詞：已下載</string>
+    <string name="download_lyric_unavailable">歌詞：暫無可用歌詞</string>
+    <string name="download_lyric_failed">歌詞：下載失敗，音訊已保留</string>
     <string name="download_queued">等待下載</string>
     <string name="download_wait_network">等待網路連線</string>
     <string name="download_wait_wifi">等待 Wi-Fi</string>

@@ -6,6 +6,8 @@ import cn.toside.music.nativeapp.R
 import cn.toside.music.nativeapp.data.AppPreferences
 import cn.toside.music.nativeapp.data.Artwork
 import cn.toside.music.nativeapp.data.ExternalAudio
+import cn.toside.music.nativeapp.data.Downloads
+import cn.toside.music.nativeapp.data.DownloadFiles
 import cn.toside.music.nativeapp.data.LegacyBackup
 import cn.toside.music.nativeapp.data.Playlist
 import cn.toside.music.nativeapp.data.Playlists
@@ -300,6 +302,340 @@ class PlaybackSettingsTest {
             }
         } finally {
             catalog.delete(); if (saved != null) { val stream = catalog.startWrite(); stream.write(saved); catalog.finishWrite(stream) }
+        }
+    }
+    private suspend fun withQualityPlayback(test: suspend (Fixture, Song) -> Unit) {
+        val catalog = AtomicFile(File(context.filesDir, "user-sources.json"))
+        val saved = if (catalog.baseFile.isFile) catalog.readFully() else null
+        try {
+            withPlayback { fixture ->
+                context.getSharedPreferences("player", Context.MODE_PRIVATE).edit().putString("quality", "flac24bit").commit()
+                AppPreferences(context).set("player.autoSwitchSource", false)
+                val song = fixture.song.copy(source = "kw", uri = Uri.EMPTY, sourceInfo = org.json.JSONObject()
+                    .put("songmid", fixture.id).put("_types", org.json.JSONObject()
+                        .put("flac24bit", org.json.JSONObject()).put("flac", org.json.JSONObject()).put("320k", org.json.JSONObject())).toString())
+                try { test(fixture, song) }
+                finally {
+                    main { fixture.player.clearQueue() }
+                    cn.toside.music.nativeapp.source.PLAYBACK_QUALITIES.forEach { AudioStreamCache.existing()?.remove(AudioStreamCache.key(song, it)) }
+                }
+            }
+        } finally {
+            catalog.delete(); if (saved != null) { val stream = catalog.startWrite(); stream.write(saved); catalog.finishWrite(stream) }
+        }
+    }
+    private fun qualityScript(body: String) = """/** @name bitrate fallback fixture */
+        let attempts = [];
+        lx.on(lx.EVENT_NAMES.request, ({info}) => { attempts.push(info.type); $body });
+        lx.send(lx.EVENT_NAMES.inited, {sources: {kw: {type: 'music', actions: ['musicUrl'], qualitys: ['128k','320k','flac','flac24bit']}}});
+    """.trimIndent()
+
+    private fun cacheAudio(song: Song, quality: String, uri: Uri, bytes: ByteArray, length: Int = bytes.size): AudioStreamCache {
+        val cache = AudioStreamCache.get(context)
+        val key = AudioStreamCache.key(song, quality)
+        cache.remove(key)
+        val hole = cache.cache.startReadWrite(key, 0, length.toLong())
+        try {
+            val file = cache.cache.startFile(key, 0, length.toLong())
+            file.outputStream().use { it.write(bytes, 0, length) }
+            cache.cache.commitFile(file, length.toLong())
+        } finally { cache.cache.releaseHoleSpan(hole) }
+        val metadata = androidx.media3.datasource.cache.ContentMetadataMutations()
+        androidx.media3.datasource.cache.ContentMetadataMutations.setContentLength(metadata, bytes.size.toLong())
+        cache.cache.applyContentMetadataMutations(key, metadata)
+        cache.remember(key, uri)
+        return cache
+    }
+
+    private class RangeAudioServer(private val bytes: ByteArray, private val failures: Int, private val partialFailures: Boolean = false) : AutoCloseable {
+        private val server = ServerSocket(0, 8, InetAddress.getByName("127.0.0.1"))
+        private val sockets = java.util.concurrent.ConcurrentHashMap.newKeySet<java.net.Socket>()
+        val uri = Uri.parse("http://127.0.0.1:${server.localPort}/resume.wav")
+        val requests = java.util.concurrent.CopyOnWriteArrayList<Int>()
+        private val sequence = java.util.concurrent.atomic.AtomicInteger()
+        private val worker = Thread {
+            while (!server.isClosed) {
+                val socket = try { server.accept() } catch (_: java.io.IOException) { break }
+                sockets.add(socket)
+                Thread {
+                    try { socket.use { client ->
+                        client.soTimeout = 5000
+                        val input = client.getInputStream().bufferedReader()
+                        input.readLine()
+                        var start = 0
+                        while (true) {
+                            val line = input.readLine()?.takeIf { it.isNotBlank() } ?: break
+                            if (line.startsWith("Range:", true)) start = Regex("bytes=(\\d+)-").find(line)?.groupValues?.get(1)?.toInt() ?: 0
+                        }
+                        requests.add(start)
+                        val fail = sequence.incrementAndGet() <= failures
+                        client.getOutputStream().apply {
+                            if (fail && !partialFailures) write("HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray())
+                            else {
+                                val remaining = bytes.size - start
+                                write("HTTP/1.1 206 Partial Content\r\nContent-Type: audio/wav\r\nAccept-Ranges: bytes\r\nContent-Range: bytes $start-${bytes.lastIndex}/${bytes.size}\r\nContent-Length: $remaining\r\nConnection: close\r\n\r\n".toByteArray())
+                                write(bytes, start, if (fail) minOf(1024, remaining) else remaining)
+                            }
+                            flush()
+                        }
+                    } } catch (_: java.io.IOException) { }
+                    finally { sockets.remove(socket) }
+                }.apply { isDaemon = true; start() }
+            }
+        }.apply { isDaemon = true; start() }
+        override fun close() { server.close(); sockets.forEach { it.close() }; worker.join(1000) }
+    }
+
+    @Test fun downloadedAudioHasPriorityOverCacheAndMissingOrCorruptDownloadsFallBackWithoutDeletion() = runBlocking {
+        PermissionPolicy.downloadWrite(Build.VERSION.SDK_INT)?.let { permission ->
+            if (context.checkSelfPermission(permission) != PackageManager.PERMISSION_GRANTED) instrumentation.uiAutomation.grantRuntimePermission(context.packageName, permission)
+        }
+        withQualityPlayback { fixture, song ->
+            val bytes = fixture.file.readBytes()
+            val cachedUri = Uri.parse("http://127.0.0.1:1/complete.wav")
+            cacheAudio(song, "128k", cachedUri, bytes)
+            cacheAudio(song, "flac24bit", cachedUri, bytes)
+            Lyrics(context).cache(song, listOf(LyricLine(0, "priority fixture")))
+            val downloads = Downloads(context, scheduleLyrics = {})
+            try {
+                downloads.start(song, "128k") { _, _ -> error("download must use the complete cache") }
+                val task = downloads.list().single { it.song == song }
+                fixture.player.selectSource(null)
+                main { fixture.player.play(listOf(song), 0) }
+                waitFor { fixture.player.state.value.playing }
+                main {
+                    val item = (field(fixture.player, "nativePlayer") as NativeAudioPlayer).engine.currentMediaItem!!.localConfiguration!!
+                    assertEquals(task.localUri, item.uri); assertNull(item.customCacheKey)
+                    assertEquals(song, fixture.player.state.value.song)
+                    assertEquals("flac24bit", context.getSharedPreferences("player", 0).getString("quality", null))
+                    fixture.player.clearQueue()
+                }
+                // A readable but corrupt downloaded file is preserved; the full cache can still play.
+                DownloadFiles(context).output(task.localUri!!).use { it.write(ByteArray(bytes.size)) }
+                main { fixture.player.play(listOf(song), 0) }
+                waitFor { fixture.player.state.value.playing }
+                main {
+                    val item = (field(fixture.player, "nativePlayer") as NativeAudioPlayer).engine.currentMediaItem!!.localConfiguration!!
+                    assertEquals(cachedUri, item.uri)
+                    assertEquals(AudioStreamCache.key(song, "flac24bit"), item.customCacheKey)
+                    fixture.player.clearQueue()
+                }
+                context.contentResolver.openFileDescriptor(task.localUri!!, "r")!!.close()
+                DownloadFiles(context).delete(task.localUri!!)
+                context.getSharedPreferences("player", 0).edit().putString("quality", "128k").commit()
+                main { fixture.player.play(listOf(song), 0) }
+                waitFor { fixture.player.state.value.playing }
+                main { assertEquals(cachedUri, (field(fixture.player, "nativePlayer") as NativeAudioPlayer).engine.currentMediaItem!!.localConfiguration!!.uri) }
+            } finally {
+                main { fixture.player.clearQueue() }
+                downloads.list().filter { it.song == song }.forEach { downloads.remove(it) }
+            }
+        }
+    }
+
+    @Test fun partialCachePlaysWithoutResolvingAndRetriesOnlyTheMissingRange() = runBlocking {
+        withQualityPlayback { fixture, song ->
+            val bytes = fixture.file.readBytes()
+            RangeAudioServer(bytes, failures = 2).use { server ->
+                val prefix = 96 * 1024
+                val cache = cacheAudio(song, "128k", server.uri, bytes, prefix)
+                val key = AudioStreamCache.key(song, "128k")
+                context.getSharedPreferences("player", 0).edit().putString("quality", "128k").commit()
+                AppPreferences(context).set("player.autoLowerQuality", false)
+                fixture.player.selectSource(null)
+                Lyrics(context).cache(song, listOf(LyricLine(0, "resume fixture")))
+                assertNull(cache.cachedUri(key)); assertEquals(server.uri, cache.playbackUri(key))
+                main { fixture.player.play(listOf(song), 0) }
+                waitFor { fixture.player.state.value.playing && cache.cachedUri(key) != null }
+                assertNull(fixture.player.state.value.error)
+                assertEquals(listOf(prefix, prefix, prefix), server.requests.toList())
+                val exported = java.io.ByteArrayOutputStream()
+                assertTrue(cache.copyComplete(cache.completeAudio(song, "128k")!!, exported))
+                assertArrayEquals(bytes, exported.toByteArray())
+            }
+        }
+    }
+
+    @Test fun threeRetriesAcrossPartialProgressClearOnlyTheFailedCacheAndShowTheReason() = runBlocking {
+        withQualityPlayback { fixture, song ->
+            val bytes = fixture.file.readBytes()
+            val other = song.copy(id = song.id + 1, sourceInfo = org.json.JSONObject(song.sourceInfo!!).put("songmid", song.id + 1).toString())
+            RangeAudioServer(bytes, failures = Int.MAX_VALUE, partialFailures = true).use { server ->
+                val prefix = 16 * 1024
+                val cache = cacheAudio(song, "128k", server.uri, bytes, prefix)
+                val key = AudioStreamCache.key(song, "128k")
+                val otherKey = AudioStreamCache.key(other, "128k")
+                cacheAudio(other, "128k", Uri.parse("http://127.0.0.1:1/protected.wav"), bytes)
+                context.getSharedPreferences("player", 0).edit().putString("quality", "128k").commit()
+                AppPreferences(context).set("player.autoLowerQuality", false)
+                fixture.player.selectSource(null)
+                Lyrics(context).cache(song, listOf(LyricLine(0, "retry fixture")))
+                try {
+                    main { fixture.player.play(listOf(song), 0) }
+                    waitFor { fixture.player.state.value.error != null }
+                    val expectedError = fixture.activity.getString(R.string.playback_cache_failed)
+                    assertEquals(expectedError, fixture.player.state.value.error)
+                    assertFalse(fixture.player.state.value.preparing); assertFalse(fixture.player.state.value.playing)
+                    assertEquals(4, server.requests.size)
+                    assertEquals(prefix, server.requests.first())
+                    assertTrue(server.requests.zipWithNext().all { (before, after) -> after > before })
+                    assertTrue(cache.cache.getCachedSpans(key).isEmpty())
+                    assertNull(cache.playbackUri(key)); assertNull(cache.cachedUri(key))
+                    assertNotNull(cache.cachedUri(otherKey))
+                    main { assertEquals(expectedError, (field(fixture.activity, "title") as TextView).text.toString()) }
+                    delay(400); assertEquals(4, server.requests.size)
+                } finally { cache.remove(otherKey) }
+            }
+        }
+    }
+
+    @Test fun failedMusicUrlLowersQualityByDefaultButDisabledAndDownloadsKeepTheirQuality() = runBlocking {
+        withQualityPlayback { fixture, song ->
+            assertTrue(AppPreferences(context).autoLowerQuality)
+            fixture.player.importSource(qualityScript("if (info.type !== '128k') throw new Error('unavailable ' + info.type); return Promise.resolve('http://127.0.0.1/' + attempts.join(','));"))
+            assertEquals("http://127.0.0.1/flac24bit,flac,320k,128k", fixture.player.resolveUrl(song))
+            assertEquals("flac24bit", context.getSharedPreferences("player", 0).getString("quality", null))
+            AppPreferences(context).set("player.autoLowerQuality", false)
+            try { fixture.player.resolveUrl(song); fail("disabled fallback must fail at the selected bitrate") }
+            catch (e: IllegalStateException) { assertTrue(e.message.orEmpty().contains("unavailable flac24bit")) }
+            try { fixture.player.resolveUrl(song.copy(sourceInfo = """{"songmid":42}""")); fail("missing metadata must not lower bitrate when disabled") }
+            catch (e: IllegalStateException) { assertTrue(e.message.orEmpty().contains("unavailable flac24bit")) }
+            AppPreferences(context).set("player.autoLowerQuality", true)
+            try { fixture.player.resolveDownloadUrl(song, "320k"); fail("downloads must keep the exact bitrate") }
+            catch (e: IllegalStateException) { assertTrue(e.message.orEmpty().contains("unavailable 320k")) }
+        }
+    }
+
+    private class QualityAudioServer(private val audio: ByteArray) : AutoCloseable {
+        private val server = ServerSocket(0, 8, InetAddress.getByName("127.0.0.1"))
+        val address = "http://127.0.0.1:${server.localPort}"
+        val requests = java.util.concurrent.CopyOnWriteArrayList<String>()
+        @Volatile var failAll = false
+        @Volatile var playableQuality = "320k"
+        @Volatile var holdAudio = false
+        val audioStarted = CountDownLatch(1)
+        val releaseAudio = CountDownLatch(1)
+        private val sockets = java.util.concurrent.ConcurrentHashMap.newKeySet<java.net.Socket>()
+        private val worker = Thread {
+            while (!server.isClosed) {
+                val socket = try { server.accept() } catch (_: java.io.IOException) { break }
+                sockets.add(socket)
+                Thread {
+                    try { socket.use { client ->
+                        client.soTimeout = 5000
+                        val reader = client.getInputStream().bufferedReader()
+                        val path = reader.readLine().split(' ')[1].removePrefix("/")
+                        while (!reader.readLine().isNullOrEmpty()) { }
+                        requests.add(path)
+                        if (path == "320k" && holdAudio) { audioStarted.countDown(); releaseAudio.await(8, TimeUnit.SECONDS) }
+                        val success = path == playableQuality && !failAll
+                        val invalid = path == "flac"
+                        val bytes = if (success) audio else if (invalid) "invalid audio".toByteArray() else byteArrayOf()
+                        val status = if (success || invalid) "200 OK" else "404 Not Found"
+                        client.getOutputStream().apply {
+                            write("HTTP/1.1 $status\r\nContent-Type: audio/wav\r\nContent-Length: ${bytes.size}\r\nConnection: close\r\n\r\n".toByteArray())
+                            write(bytes); flush()
+                        }
+                    } } catch (_: java.io.IOException) { }
+                    finally { sockets.remove(socket) }
+                }.apply { isDaemon = true; start() }
+            }
+        }.apply { isDaemon = true; start() }
+        override fun close() { releaseAudio.countDown(); server.close(); sockets.forEach { it.close() }; worker.join(1000) }
+    }
+
+    @Test fun httpAndDecoderFailuresLowerBitrateUseSeparateCachesAndStopWhenExhaustedOrDisabled() = runBlocking {
+        withQualityPlayback { fixture, song ->
+            QualityAudioServer(fixture.file.readBytes()).use { server ->
+                fixture.player.importSource(qualityScript("return Promise.resolve('${server.address}/' + info.type);"))
+                main { fixture.player.play(listOf(song), 0) }
+                waitFor { fixture.player.state.value.playing }
+                assertEquals(listOf("flac24bit", "flac", "320k"), server.requests.distinct())
+                assertNull(fixture.player.state.value.error)
+                val cache = AudioStreamCache.existing()!!
+                waitFor { cache.cachedUri(AudioStreamCache.key(song, "320k")) != null }
+                assertNull(cache.cachedUri(AudioStreamCache.key(song, "flac24bit")))
+                assertNull(cache.cachedUri(AudioStreamCache.key(song, "flac")))
+                assertEquals("flac24bit", context.getSharedPreferences("player", 0).getString("quality", null))
+                main { fixture.player.clearQueue() }
+                AppPreferences(context).set("player.autoLowerQuality", false)
+                server.requests.clear()
+                main { fixture.player.play(listOf(song), 0) }
+                waitFor { fixture.player.state.value.error != null }
+                assertFalse(fixture.player.state.value.preparing)
+                assertEquals(listOf("flac24bit"), server.requests.distinct())
+                main { fixture.player.clearQueue() }
+                AppPreferences(context).set("player.autoLowerQuality", true)
+                cache.remove(AudioStreamCache.key(song, "320k"))
+                server.failAll = true; server.requests.clear()
+                main { fixture.player.play(listOf(song), 0) }
+                waitFor { fixture.player.state.value.error != null }
+                assertEquals(listOf("flac24bit", "flac", "320k", "128k"), server.requests.distinct())
+                assertFalse(fixture.player.state.value.preparing)
+                val count = server.requests.size
+                delay(400)
+                assertEquals(count, server.requests.size)
+            }
+        }
+    }
+
+    @Test fun bitrateRetryKeepsPauseSpeedAndVolumeAndCannotReplaceANewerTrack() = runBlocking {
+        withQualityPlayback { fixture, song ->
+            QualityAudioServer(fixture.file.readBytes()).use { server ->
+                server.holdAudio = true
+                fixture.player.importSource(qualityScript("return Promise.resolve('${server.address}/' + info.type);"))
+                main { fixture.player.play(listOf(song), 0) }
+                assertTrue(server.audioStarted.await(10, TimeUnit.SECONDS))
+                main { fixture.player.pause(); fixture.player.setPlaybackRate(1.25f); fixture.player.setVolume(.3f) }
+                server.releaseAudio.countDown()
+                waitFor { !fixture.player.state.value.preparing }
+                assertFalse(fixture.player.state.value.playing)
+                assertNull(fixture.player.state.value.error)
+                main {
+                    val engine = (field(fixture.player, "nativePlayer") as NativeAudioPlayer).engine
+                    assertEquals(1.25f, engine.playbackParameters.speed, .01f)
+                    assertEquals(.3f, engine.volume, .01f)
+                    fixture.player.resume()
+                }
+                waitFor { fixture.player.state.value.playing }
+                server.playableQuality = "128k"
+                main {
+                    fixture.player.pause(); fixture.player.seekTo(7000)
+                    val current = field(fixture.player, "nativePlayer") as NativeAudioPlayer
+                    @Suppress("UNCHECKED_CAST")
+                    val failed = field(current, "failed") as (NativeAudioPlayer, String) -> Unit
+                    failed(current, "position recovery fixture")
+                }
+                waitFor { !fixture.player.state.value.preparing }
+                assertFalse(fixture.player.state.value.playing)
+                assertNull(fixture.player.state.value.error)
+                assertEquals(7000, fixture.player.state.value.position)
+            }
+            QualityAudioServer(fixture.file.readBytes()).use { server ->
+                main { fixture.player.clearQueue() }
+                cn.toside.music.nativeapp.source.PLAYBACK_QUALITIES.forEach { AudioStreamCache.existing()?.remove(AudioStreamCache.key(song, it)) }
+                server.holdAudio = true
+                fixture.player.importSource(qualityScript("return Promise.resolve('${server.address}/' + info.type);"))
+                main { fixture.player.play(listOf(song), 0) }
+                assertTrue(server.audioStarted.await(10, TimeUnit.SECONDS))
+                main { fixture.player.play(listOf(fixture.song), 0) }
+                server.releaseAudio.countDown()
+                waitFor { fixture.player.state.value.playing }
+                assertEquals(fixture.song, fixture.player.state.value.song)
+                assertNotNull(field(fixture.player, "player"))
+                assertNull(field(fixture.player, "nativePlayer"))
+            }
+        }
+    }
+    @Test fun sourceTimeoutLowersBitrateWhileCallerCancellationStopsTheRequest() = runBlocking {
+        withQualityPlayback { fixture, song ->
+            fixture.player.importSource(qualityScript("if (info.type === 'flac24bit') return new Promise(() => {}); return Promise.resolve('http://127.0.0.1/' + attempts.join(','));"))
+            assertEquals("http://127.0.0.1/flac24bit,flac", withTimeout(26_000) { fixture.player.resolveUrl(song) })
+            val cancelled = kotlinx.coroutines.withTimeoutOrNull(150) { fixture.player.resolveUrl(song) }
+            assertNull(cancelled)
+            // The cancelled request must not try the next quality in the background.
+            AppPreferences(context).set("player.autoLowerQuality", false)
+            assertNull(kotlinx.coroutines.withTimeoutOrNull(150) { fixture.player.resolveUrl(song) })
         }
     }
     @Test fun darkThemeRecreatesActivityWithoutInterruptingPlayback() = runBlocking {

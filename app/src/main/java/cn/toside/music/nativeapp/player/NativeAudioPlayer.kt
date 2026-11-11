@@ -18,7 +18,10 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 internal class NativeAudioPlayer(context: Context, cache: AudioStreamCache?, offload: Boolean,
     private val changed: (NativeAudioPlayer) -> Unit, private val completed: (NativeAudioPlayer) -> Unit,
     private val failed: (NativeAudioPlayer, String) -> Unit) {
-    internal val engine = ExoPlayer.Builder(context).setMediaSourceFactory(if (cache == null) DefaultMediaSourceFactory(context) else DefaultMediaSourceFactory(cache.dataSource())).build()
+    private val retryPolicy = StreamingRetryPolicy()
+    internal val streamRetriesExhausted get() = retryPolicy.exhausted
+    internal val engine = ExoPlayer.Builder(context).setMediaSourceFactory(if (cache == null) DefaultMediaSourceFactory(context)
+        else DefaultMediaSourceFactory(cache.dataSource()).setLoadErrorHandlingPolicy(retryPolicy)).build()
     var recorded = false
     init {
         engine.setWakeMode(C.WAKE_MODE_NETWORK)

@@ -176,6 +176,11 @@ class UserSource(private val context: Context) {
     suspend fun musicUrl(source: String, info: JSONObject, quality: String = "128k", exactQuality: Boolean = false): String {
         return sourceRequest(source, "musicUrl", info, quality, exactQuality).getJSONObject("data").getString("url")
     }
+    internal suspend fun playbackQualities(source: String, info: JSONObject, preferred: String): List<String> = withContext(dispatcher) {
+        val supported = sourceInfo.optJSONObject("sources")?.optJSONObject(source)?.optJSONArray("qualitys") ?: JSONArray()
+        qualityFallbacks(preferred, info.optJSONObject("_types") ?: JSONObject(),
+            (0 until supported.length()).map { supported.optString(it) }.toSet())
+    }
     internal suspend fun supports(source: String, action: String): Boolean = withContext(dispatcher) {
         val actions = sourceInfo.optJSONObject("sources")?.optJSONObject(source)?.optJSONArray("actions") ?: return@withContext false
         (0 until actions.length()).any { actions.optString(it) == action }
@@ -322,8 +327,12 @@ class UserSource(private val context: Context) {
 }
 
 /** Match the original preference: use the highest supported quality up to the requested level. */
-internal fun selectQuality(preferred: String, types: JSONObject, supported: Set<String>): String {
-    val order = listOf("flac24bit", "flac", "320k", "128k")
-    val start = order.indexOf(preferred).takeIf { it >= 0 } ?: order.lastIndex
-    return order.drop(start).firstOrNull { it != "128k" && types.has(it) && it in supported } ?: "128k"
+internal fun selectQuality(preferred: String, types: JSONObject, supported: Set<String>): String =
+    qualityFallbacks(preferred, types, supported).first()
+
+internal val PLAYBACK_QUALITIES = listOf("flac24bit", "flac", "320k", "128k")
+
+internal fun qualityFallbacks(preferred: String, types: JSONObject, supported: Set<String>): List<String> {
+    val start = PLAYBACK_QUALITIES.indexOf(preferred).takeIf { it >= 0 } ?: PLAYBACK_QUALITIES.lastIndex
+    return PLAYBACK_QUALITIES.drop(start).filter { it == "128k" || types.has(it) && it in supported }
 }

@@ -1,3 +1,5 @@
+@file:androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+
 package cn.toside.music.nativeapp.ui
 
 import android.app.Dialog
@@ -23,6 +25,10 @@ import cn.toside.music.nativeapp.DownloadTestScheduler
 import cn.toside.music.nativeapp.R
 import cn.toside.music.nativeapp.data.DownloadStatus
 import cn.toside.music.nativeapp.data.Downloads
+import cn.toside.music.nativeapp.data.DownloadLyricStatus
+import cn.toside.music.nativeapp.lyrics.Lyrics
+import cn.toside.music.nativeapp.lyrics.LyricLine
+import android.app.job.JobScheduler
 import cn.toside.music.nativeapp.data.Song
 import cn.toside.music.nativeapp.player.PlaybackService
 import cn.toside.music.nativeapp.utils.PermissionPolicy
@@ -89,6 +95,7 @@ class DownloadsPageTest {
         val song = Song(-130, Uri.EMPTY, "下载测试歌曲", "下载测试歌手", 8000, "kg",
             """{"songmid":"130","_types":{"128k":{"bytes":3932160},"320k":{}}}""")
         val downloads = Downloads(context)
+        Lyrics(context).cache(song, listOf(LyricLine(0, "download lyric fixture")))
         fun source(name: String, body: String) = """/** @name $name */
             lx.on(lx.EVENT_NAMES.request, ({info}) => { $body });
             lx.send(lx.EVENT_NAMES.inited, {sources:{kg:{type:'music',actions:['musicUrl'],qualitys:['128k','320k']}}});
@@ -166,8 +173,30 @@ class DownloadsPageTest {
                 task.status == DownloadStatus.COMPLETE
             }
             val completed = downloads.list().single { it.song == song }
+            waitFor("automatic lyrics after the system download completes") {
+                val task = downloads.list().single { it.song == song }
+                context.getSystemService(JobScheduler::class.java).allPendingJobs.firstOrNull {
+                    it.service.className.endsWith("DownloadLyricsJob")
+                }?.let { job ->
+                    android.os.ParcelFileDescriptor.AutoCloseInputStream(instrumentation.uiAutomation.executeShellCommand(
+                        "cmd jobscheduler run -f ${context.packageName} ${job.id}"
+                    )).use { it.readBytes() }
+                }
+                task.lyricStatus == DownloadLyricStatus.SAVED
+            }
             assertEquals(failed.key, completed.key)
             assertEquals(100, completed.percent)
+            // Playing the original online entry must select the completed system download first.
+            main { player.play(listOf(song), 0) }
+            waitFor("online entry uses its completed download") { player.state.value.playing }
+            main {
+                assertEquals(song, player.state.value.song)
+                val current = PlaybackService::class.java.getDeclaredField("nativePlayer").apply { isAccessible = true }.get(player)
+                    as cn.toside.music.nativeapp.player.NativeAudioPlayer
+                val item = current.engine.currentMediaItem!!.localConfiguration!!
+                assertEquals(context.getSystemService(DownloadManager::class.java).getUriForDownloadedFile(completed.systemId!!), item.uri)
+                assertNull(item.customCacheKey)
+            }
             main { view("downloads-filter-COMPLETE").performClick() }
             waitFor("the completed task row") { view("downloads-task-${failed.key}")?.isShown == true }
             main { view("downloads-task-${failed.key}").findViewWithTag<View>("downloads-row-primary").performClick() }
@@ -201,6 +230,7 @@ class DownloadsPageTest {
             main { activity.settingsPlayer()?.clearQueue(); activity.finish() }
             context.stopService(Intent(context, PlaybackService::class.java))
             downloads.list().filter { it.song == song }.forEach { downloads.remove(it) }
+            Lyrics(context).clearOnlineCache(song)
             catalog.delete(); if (previous != null) { val stream = catalog.startWrite(); stream.write(previous); catalog.finishWrite(stream) }
             preferences.edit().apply { saved.forEach { (key, value) -> when (value) {
                 is Boolean -> putBoolean(key, value); is String -> putString(key, value); else -> remove(key)

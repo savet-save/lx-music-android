@@ -2,6 +2,7 @@
     <string name="settings_title">設定</string>
     <string name="settings_basic">基本設定</string>
     <string name="settings_playback">播放設定</string>
+    <string name="settings_auto_lower_quality">無法播放時自動降低碼率</string>
     <string name="settings_sources">自訂音源</string>
     <string name="settings_about">關於與版本</string>
     <string name="settings_selected">已啟用</string>

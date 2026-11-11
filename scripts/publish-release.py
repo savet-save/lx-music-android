@@ -287,11 +287,12 @@ def sha256(path):
 
 def release_notes(repo, tag, previous, checksums):
     notes_path = ROOT / "doc" / "release-notes" / f"{tag}.md"
+    summary = ""
     if notes_path.is_file():
         notes = notes_path.read_text(encoding="utf-8-sig").strip()
         if not notes:
             raise ValueError(f"Release notes must not be empty: {notes_path}")
-        return notes + "\n"
+        summary = "## 更新摘要\n\n" + notes + "\n\n"
     page = f"https://github.com/{repo}"
     if previous:
         run(["git", "rev-parse", "--verify", f"{previous}^{{commit}}"])
@@ -306,6 +307,7 @@ def release_notes(repo, tag, previous, checksums):
     else:
         body = (ROOT / "README.md").read_text(encoding="utf-8").split("## 构建与验证", 1)[0].strip()
         body += f"\n\n支持 Android 9 及以上版本。[使用说明]({page}/blob/{quote(tag, safe='')}/DEVELOPMENT.md)"
+    body = summary + body
     body += "\n\n## APK SHA-256\n\n| 文件 | SHA-256 |\n| --- | --- |\n"
     for name, digest in checksums.items():
         body += f"| [{name}]({page}/releases/download/{quote(tag, safe='')}/{quote(name, safe='')}) | `{digest}` |\n"

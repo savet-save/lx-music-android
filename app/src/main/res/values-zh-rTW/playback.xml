@@ -1,4 +1,7 @@
 <resources>
+    <string name="playback_cache_failed">歌曲續傳失敗，重試 3 次後已清理未完成快取</string>
+    <string name="playback_stream_failed">歌曲下載重試 3 次後仍失敗，請稍後重試</string>
+    <string name="playback_url_timeout">取得播放連結逾時</string>
     <string name="playback_channel">音樂播放</string>
     <string name="playback_lyrics_error">讀取歌詞失敗：%1$s</string>
     <string name="playback_rate_range">播放倍速應在 0.60 到 2.00 之間</string>

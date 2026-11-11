@@ -27,6 +27,7 @@ internal class AppPreferences(context: Context, name: String = "app-settings") {
     val hotSearch get() = bool("search.isShowHotSearch")
     val recordHistory get() = bool("player.recordHistory", true)
     val autoCleanQueue get() = bool("player.isAutoCleanPlayedList")
+    val autoLowerQuality get() = bool("player.autoLowerQuality", true)
     val audioOffload get() = bool("player.isEnableAudioOffload")
     val audioCacheBytes get() = string("player.cacheSize", "1024").toLongOrNull()?.coerceIn(0, 8192)?.times(1024 * 1024) ?: (1024L * 1024 * 1024)
     val downloadPattern get() = string("download.fileName", "歌名 - 歌手")

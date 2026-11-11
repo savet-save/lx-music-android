@@ -1,11 +1,7 @@
 package cn.toside.music.nativeapp.ui
 
-import android.content.Context
 import android.graphics.Typeface
-import android.graphics.Bitmap
-import android.util.LruCache
 import android.os.Bundle
-import android.text.TextUtils
 import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
@@ -16,13 +12,11 @@ import androidx.fragment.app.viewModels
 import androidx.lifecycle.*
 import androidx.lifecycle.viewmodel.CreationExtras
 import cn.toside.music.nativeapp.R
-import cn.toside.music.nativeapp.data.Artwork
+import cn.toside.music.nativeapp.utils.ToastUtils
 import cn.toside.music.nativeapp.online.*
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
 
 /** A real browsing destination: its ViewModel keeps filters, paging and position on the back stack. */
 class PlaylistBrowserFragment : Fragment() {
@@ -41,9 +35,8 @@ class PlaylistBrowserFragment : Fragment() {
     private var retry: TextView? = null
     private var more: TextView? = null
     private var progress: ProgressBar? = null
-    private var adapter: CoversAdapter? = null
+    private var adapter: PlaylistCoversAdapter? = null
     private var categoriesJob: Job? = null
-    private val covers = Semaphore(4)
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
         palette = UiPalette(requireContext(), NativeThemes(requireContext()).active())
@@ -92,7 +85,7 @@ class PlaylistBrowserFragment : Fragment() {
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
         val target = requireNotNull(grid)
-        adapter = CoversAdapter().also { target.adapter = it }
+        adapter = PlaylistCoversAdapter(requireContext(), styles, palette, viewLifecycleOwner.lifecycleScope).also { target.adapter = it }
         target.onItemClickListener = AdapterView.OnItemClickListener { _, _, position, _ ->
             rememberPosition()
             model.state.value.items.getOrNull(position)?.let { (requireActivity() as MainActivity).openBrowserPlaylist(it) }
@@ -183,7 +176,7 @@ class PlaylistBrowserFragment : Fragment() {
                         }
                     }
             } catch (e: CancellationException) { throw e }
-            catch (e: Exception) { Toast.makeText(requireContext(), getString(R.string.playlist_error, e.localizedMessage.orEmpty()), Toast.LENGTH_LONG).show() }
+            catch (e: Exception) { ToastUtils.show(requireContext(), getString(R.string.playlist_error, e.localizedMessage.orEmpty()), ToastUtils.LONG) }
         }
     }
     private fun rememberPosition() { grid?.let { if (it.childCount > 0) { model.firstVisible = it.firstVisiblePosition; model.scrollTop = it.getChildAt(0).top; model.gridState = it.onSaveInstanceState() } } }
@@ -196,74 +189,9 @@ class PlaylistBrowserFragment : Fragment() {
     override fun onStop() { platformPopup.dismiss(); categoryPopup.dismiss(); categoriesJob?.cancel(); super.onStop() }
     override fun onDestroyView() {
         platformPopup.dismiss(); categoryPopup.dismiss()
+        adapter?.close()
         rememberPosition(); categoriesJob = null; adapter = null; grid = null; filters = null; status = null; retry = null; more = null; progress = null
         super.onDestroyView()
     }
 
-    private inner class CoversAdapter : BaseAdapter() {
-        var items = emptyList<OnlinePlaylist>()
-        private val artwork = Artwork(requireContext().applicationContext)
-        private val memory = object : LruCache<String, Bitmap>(8 * 1024 * 1024) {
-            override fun sizeOf(key: String, value: Bitmap) = value.allocationByteCount
-        }
-        override fun getCount() = items.size
-        override fun getItem(position: Int) = items[position]
-        override fun getItemId(position: Int) = position.toLong()
-        override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
-            val card = (convertView as? CoverCard) ?: CoverCard(requireContext())
-            val item = getItem(position)
-            if (card.title.text.toString() != item.name) card.title.text = item.name
-            card.contentDescription = listOf(item.name, item.author).filter(String::isNotBlank).joinToString(" · ")
-            card.tag = "playlist-card-${item.source}-${item.id}"
-            if (card.cover.tag != item.coverUrl) { card.job?.cancel(); card.cover.show(null); card.cover.tag = item.coverUrl }
-            // Measurement also binds recycled cells. A loaded cover must remain untouched,
-            // even after its cache entry is evicted by the larger tablet viewport.
-            if (card.cover.drawable != null) return card
-            val cached = memory.get(item.coverUrl)
-            if (cached != null) card.cover.show(cached)
-            else if (item.coverUrl.isNotEmpty() && card.cover.drawable == null && card.job?.isActive != true) card.job = viewLifecycleOwner.lifecycleScope.launch {
-                try {
-                    val bitmap = covers.withPermit { artwork.loadUrl(item.coverUrl) }
-                    if (bitmap != null) {
-                        memory.put(item.coverUrl, bitmap)
-                        if (card.cover.tag == item.coverUrl) card.cover.show(bitmap)
-                    }
-                } catch (e: CancellationException) { throw e }
-                catch (_: Exception) { /* Keep the placeholder; a failed image must not hide the playlist. */ }
-            }
-            return card
-        }
-    }
-    private inner class CoverCard(context: Context) : LinearLayout(context) {
-        var job: Job? = null
-        val cover = FixedCoverView(context)
-        val title = styles.label("", 13.5f).apply { maxLines = 2; minLines = 2; ellipsize = TextUtils.TruncateAt.END; gravity = Gravity.TOP; setPadding(0, dp(5), 0, 0) }
-        init {
-            orientation = VERTICAL
-            val square = FrameLayout(context).apply {
-                background = styles.shape(palette.placeholder, 5); clipToOutline = true
-                addView(styles.label("LX", 22f, palette.primary).apply { gravity = Gravity.CENTER }, FrameLayout.LayoutParams(-1, -1))
-                addView(cover, FrameLayout.LayoutParams(-1, -2))
-            }
-            addView(square, LayoutParams(-1, -2)); addView(title, LayoutParams(-1, -2))
-            // GridView owns item click/focus handling and supplies a bounded recycled set of cards.
-            descendantFocusability = ViewGroup.FOCUS_BLOCK_DESCENDANTS
-        }
-    }
-    private class FixedCoverView(context: Context) : ImageView(context) {
-        private var updatingPixels = false
-        private var shown: Bitmap? = null
-        init { scaleType = ScaleType.CENTER_CROP; importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO }
-        fun show(bitmap: Bitmap?) {
-            if (shown === bitmap) return
-            shown = bitmap; updatingPixels = true
-            try { if (bitmap == null) setImageDrawable(null) else setImageBitmap(bitmap) }
-            finally { updatingPixels = false }
-        }
-        override fun requestLayout() { if (!updatingPixels) super.requestLayout() }
-        override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-            val size = MeasureSpec.getSize(widthMeasureSpec)
-            super.onMeasure(widthMeasureSpec, MeasureSpec.makeMeasureSpec(size, MeasureSpec.EXACTLY))
-        }
-    }
 }

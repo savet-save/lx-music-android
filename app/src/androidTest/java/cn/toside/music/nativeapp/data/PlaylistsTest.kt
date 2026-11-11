@@ -26,7 +26,7 @@ class PlaylistsTest {
             val path = context.getDatabasePath(name)
             try {
                 val (favoriteId, customId) = Playlists(context, name).use { lists ->
-                    val favorites = lists.list().single()
+                    val favorites = lists.list().single { it.syncId == "love" }
                     assertEquals("love", favorites.syncId)
                     assertTrue(lists.songs(favorites.id).isEmpty())
                     if (hadFavorites) assertTrue(lists.add(favorites.id, song))
@@ -38,8 +38,8 @@ class PlaylistsTest {
                 }
                 Playlists(context, name).use { lists ->
                     val items = lists.list()
-                    assertEquals(listOf("love", "custom"), items.map { if (it.syncId == "love") it.syncId else it.name })
-                    val favorites = items.first()
+                    assertEquals(listOf("default", "love", "custom"), items.map { if (it.syncId in setOf("default", "love")) it.syncId else it.name })
+                    val favorites = items.single { it.syncId == "love" }
                     assertEquals(favorites.id, lists.loveList())
                     assertEquals(customId, items.last().id)
                     assertEquals(if (hadFavorites) listOf(song) else emptyList<Song>(), lists.songs(favorites.id))
@@ -47,6 +47,59 @@ class PlaylistsTest {
                     assertEquals(if (hadFavorites) 1 else 0, lists.syncSnapshot(emptyMap()).getJSONArray("loveList").length())
                     try { lists.delete(favorites.id); org.junit.Assert.fail("favorites must be protected") }
                     catch (_: IllegalArgumentException) { }
+                }
+            } finally { context.deleteDatabase(name) }
+        }
+    }
+
+    @Test fun createsTrialListAndUpgradesVersionSixWithoutReplacingExistingSongs() = runBlocking {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val song = Song(42, Uri.EMPTY, "trial", "artist", 1000, "kw", """{"songmid":"42"}""")
+        for (hadTrialList in listOf(false, true)) {
+            val name = "playlist-trial-$hadTrialList-${System.nanoTime()}.db"
+            try {
+                val (trialId, favoriteId, customId) = Playlists(context, name).use { lists ->
+                    val items = lists.list()
+                    assertEquals(listOf("default", "love"), items.map { it.syncId })
+                    val trial = items.first()
+                    assertEquals("试听列表", trial.name)
+                    assertTrue(lists.songs(trial.id).isEmpty())
+                    if (hadTrialList) assertTrue(lists.add(trial.id, song))
+                    val favoriteId = lists.loveList()
+                    lists.add(favoriteId, song)
+                    Triple(trial.id, favoriteId, lists.create("custom"))
+                }
+                SQLiteDatabase.openDatabase(context.getDatabasePath(name).absolutePath, null, SQLiteDatabase.OPEN_READWRITE).use { db ->
+                    if (!hadTrialList) db.delete("playlists", "sync_id = 'default'", null)
+                    else db.execSQL("UPDATE playlists SET position = 100 WHERE sync_id = 'default'")
+                    db.version = 6
+                }
+                Playlists(context, name).use { lists ->
+                    val items = lists.list()
+                    assertEquals(listOf("default", "love", "custom"), items.map { if (it.id == customId) it.name else it.syncId })
+                    val trial = items.first()
+                    assertEquals(trial.id, lists.trialList())
+                    if (hadTrialList) assertEquals(trialId, trial.id)
+                    assertEquals(if (hadTrialList) listOf(song) else emptyList<Song>(), lists.songs(trial.id))
+                    assertEquals(favoriteId, lists.loveList())
+                    assertEquals(listOf(song), lists.songs(favoriteId))
+                    try { lists.delete(trial.id); org.junit.Assert.fail("trial list must be protected") }
+                    catch (_: IllegalArgumentException) { }
+                    lists.setSyncTracking(true)
+                    assertEquals(!hadTrialList, lists.add(trial.id, song))
+                    assertFalse(lists.add(trial.id, song))
+                    assertEquals(1, lists.syncSnapshot(emptyMap()).getJSONArray("defaultList").length())
+                    if (!hadTrialList) {
+                        val event = lists.pendingSyncActions(emptyMap()).single().event
+                        assertEquals("list_music_add", event.getString("action"))
+                        assertEquals("default", event.getJSONObject("data").getString("id"))
+                    }
+                    lists.remove(trial.id, song)
+                    assertTrue(lists.songs(trial.id).isEmpty())
+                    lists.add(trial.id, song)
+                    lists.clear(trial.id)
+                    assertEquals(trial.id, lists.trialList())
+                    assertTrue(lists.songs(trial.id).isEmpty())
                 }
             } finally { context.deleteDatabase(name) }
         }
@@ -144,8 +197,8 @@ class PlaylistsTest {
                 "meta":{"songId":"123","albumName":"Album","qualitys":[],"_qualitys":{},"extra":"keep song"}}]}]}""")
             try { playlists.overwriteSyncSnapshot(remote, emptyMap()); org.junit.Assert.fail("missing local path must fail") }
             catch (_: IllegalStateException) { }
-            assertEquals(listOf("我的收藏", "existing"), playlists.list().map { it.name })
-            assertEquals(oldId, playlists.list().single { it.syncId != "love" }.id)
+            assertEquals(listOf("试听列表", "我的收藏", "existing"), playlists.list().map { it.name })
+            assertEquals(oldId, playlists.list().single { it.name == "existing" }.id)
             playlists.overwriteSyncSnapshot(remote, mapOf("/music/a.mp3" to local))
             val roundTrip = playlists.syncSnapshot(mapOf(7L to "/music/a.mp3"))
             assertEquals("keep", roundTrip.getJSONArray("loveList").getJSONObject(0).getJSONObject("meta").getString("custom"))

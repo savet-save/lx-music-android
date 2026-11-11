@@ -13,6 +13,7 @@ import cn.toside.music.nativeapp.R
 import cn.toside.music.nativeapp.data.Playlist
 import cn.toside.music.nativeapp.data.Playlists
 import cn.toside.music.nativeapp.utils.PermissionPolicy
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.*
 import org.junit.Test
@@ -39,6 +40,11 @@ class LocalNavigationTest {
         val localRow = root.findViewWithTag<ViewGroup>("navigation-local")
         val listsRow = root.findViewWithTag<ViewGroup>("navigation-0")
         val palette = field(activity, "palette") as UiPalette
+        val entries = localRow.parent as ViewGroup
+        assertFalse((0 until entries.childCount).any { index ->
+            val row = entries.getChildAt(index) as? ViewGroup
+            (0 until (row?.childCount ?: 0)).any { (row?.getChildAt(it) as? TextView)?.text?.toString() == activity.getString(R.string.ui_c2dd14825672) }
+        })
         assertEquals(local, localRow.isSelected)
         assertEquals(!local, listsRow.isSelected)
         assertEquals(if (local) palette.primary else palette.muted, (localRow.getChildAt(1) as TextView).currentTextColor)
@@ -78,7 +84,12 @@ class LocalNavigationTest {
                     if (!layout.expanded) invoke(activity, "showNavigation")
                     assertSelection(activity, local = true)
                     activity.window.decorView.findViewWithTag<View>("navigation-0").performClick()
-                    assertTrue((field(activity, "playlistDrawer") as HomeDrawerLayout).isOpen)
+                }
+                await("my lists at ${layout.widthDp} dp") { (field(activity, "activePlaylist") as? Playlist)?.id == favorites.id }
+                main {
+                    assertSelection(activity, local = false)
+                    assertFalse((field(activity, "playlistDrawer") as HomeDrawerLayout).isOpen)
+                    (field(activity, "heading") as View).performClick()
                 }
                 await("favorites row at ${layout.widthDp} dp") { activity.window.decorView.findViewWithTag<View>("playlist-choice-${favorites.id}")?.isShown == true }
                 main {
@@ -100,5 +111,60 @@ class LocalNavigationTest {
                 assertSelection(activity, local = true)
             }
         } finally { main { activity.finish() } }
+    }
+
+    @Test fun myListsOpensFavoritesOrLastSelectionWithoutAChooserAndSurvivesFreshLaunch() = runBlocking {
+        val context = instrumentation.targetContext
+        val permission = PermissionPolicy.audio(Build.VERSION.SDK_INT)
+        if (context.checkSelfPermission(permission) != PackageManager.PERMISSION_GRANTED) instrumentation.uiAutomation.grantRuntimePermission(context.packageName, permission)
+        val preferences = context.getSharedPreferences("app-settings", 0)
+        val previous = preferences.getString("list.lastOpenedId", null)
+        preferences.edit().remove("list.lastOpenedId").commit()
+        val lists = Playlists(context)
+        val favorites = lists.list().first { it.syncId == "love" }
+        val customId = lists.create("Last opened ${System.nanoTime()}")
+        fun launch() = instrumentation.startActivitySync(Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
+        var activity = launch()
+        fun clickMyLists() = main {
+            if (field(activity, "navigationDrawer") != null) invoke(activity, "showNavigation")
+            activity.window.decorView.findViewWithTag<View>("navigation-0").performClick()
+        }
+        fun assertOpened(id: Long) {
+            await("playlist $id and closed chooser") { (field(activity, "activePlaylist") as? Playlist)?.id == id && (field(activity, "loadJob") as? Job)?.isActive != true && !(field(activity, "playlistDrawer") as HomeDrawerLayout).isOpen }
+            main {
+                assertSelection(activity, local = false)
+                assertFalse((field(activity, "playlistDrawer") as HomeDrawerLayout).isOpen)
+            }
+        }
+        try {
+            await { activity.settingsPlayer() != null && activity.hasWindowFocus() }
+            clickMyLists(); assertOpened(favorites.id)
+            main { (field(activity, "heading") as View).performClick() }
+            await { activity.window.decorView.findViewWithTag<View>("playlist-choice-$customId")?.isShown == true }
+            main { activity.window.decorView.findViewWithTag<View>("playlist-choice-$customId").performClick() }
+            assertOpened(customId)
+            assertEquals(customId.toString(), preferences.getString("list.lastOpenedId", null))
+            main { activity.window.decorView.findViewWithTag<View>("navigation-1").performClick() }
+            clickMyLists(); assertOpened(customId)
+            main { activity.finish() }
+            await { activity.isDestroyed }
+            activity = launch()
+            await { activity.settingsPlayer() != null && activity.hasWindowFocus() }
+            clickMyLists(); assertOpened(customId)
+            main { activity.window.decorView.findViewWithTag<View>("navigation-local").performClick() }
+            lists.delete(customId)
+            clickMyLists(); assertOpened(favorites.id)
+            main {
+                activity.window.decorView.findViewWithTag<View>("navigation-0").performClick()
+                invoke(activity, "showSettings")
+            }
+            await { activity.settingsFragment()?.isResumed == true && (field(activity, "loadJob") as? Job)?.isActive != true }
+            main { assertEquals(R.id.settings_page, activity.navigationController().currentDestination?.id) }
+        } finally {
+            main { activity.finish() }
+            if (lists.list().any { it.id == customId }) lists.delete(customId)
+            lists.close()
+            preferences.edit().apply { if (previous == null) remove("list.lastOpenedId") else putString("list.lastOpenedId", previous) }.commit()
+        }
     }
 }

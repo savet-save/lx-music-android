@@ -43,7 +43,9 @@ class HomeNavigationTest {
             preferences.edit().putBoolean("common.homePageScroll", false).commit()
             gesture(true); assertTrue(online.getBoolean(activity))
             preferences.edit().putBoolean("common.homePageScroll", true).commit()
-            gesture(true); assertFalse(online.getBoolean(activity))
+            gesture(true)
+            repeat(100) { if (online.getBoolean(activity)) SystemClock.sleep(30) }
+            assertFalse(online.getBoolean(activity))
         } finally {
             instrumentation.runOnMainSync { activity.finish() }
             preferences.edit().apply { saved.forEach { (key, value) -> if (value is Boolean) putBoolean(key, value) else remove(key) } }.commit()

@@ -64,6 +64,10 @@ class UserSourceTest {
         assertEquals("320k", selectQuality("flac", types, setOf("320k")))
         assertEquals("128k", selectQuality("128k", types, setOf("flac", "320k")))
         assertEquals("128k", selectQuality("flac", JSONObject(), setOf("flac")))
+        assertEquals(listOf("flac", "320k", "128k"), qualityFallbacks("flac24bit", types, setOf("flac", "320k")))
+        assertEquals(listOf("320k", "128k"), qualityFallbacks("flac", types, setOf("320k")))
+        assertEquals(listOf("128k"), qualityFallbacks("128k", types, setOf("flac", "320k")))
+        assertEquals(listOf("128k"), qualityFallbacks("unknown", types, setOf("flac", "320k")))
     }
     @Test fun cancelRequestReportsErrorWithoutWaitingForServer() = runBlocking {
         val target = InstrumentationRegistry.getInstrumentation().targetContext
