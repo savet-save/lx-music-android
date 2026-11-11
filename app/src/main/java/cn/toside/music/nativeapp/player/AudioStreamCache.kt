@@ -10,6 +10,7 @@ import android.net.Uri
 import androidx.media3.common.C
 import androidx.media3.database.StandaloneDatabaseProvider
 import androidx.media3.datasource.DefaultDataSource
+import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.cache.Cache
 import androidx.media3.datasource.cache.CacheDataSource
 import androidx.media3.datasource.cache.CacheEvictor
@@ -21,6 +22,12 @@ import androidx.media3.datasource.okhttp.OkHttpDataSource
 import okhttp3.OkHttpClient
 import java.util.TreeSet
 import java.io.File
+import java.io.OutputStream
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
 /** One process-wide cache avoids overlapping SimpleCache directory locks across service restarts. */
@@ -44,6 +51,31 @@ internal class AudioStreamCache(context: Context, directory: File = context.cach
         return if (length > 0 && url.isNotBlank() && cache.isCached(key, 0, length)) Uri.parse(url) else null
     }
     fun remember(key: String, uri: Uri) { cache.applyContentMetadataMutations(key, ContentMetadataMutations().set("native_uri", uri.toString())) }
+    internal data class CompleteAudio(val key: String, val uri: Uri, val length: Long)
+    internal fun completeAudio(song: Song, quality: String): CompleteAudio? {
+        val key = key(song, quality)
+        val uri = cachedUri(key) ?: return null
+        return CompleteAudio(key, uri, ContentMetadata.getContentLength(cache.getContentMetadata(key)))
+    }
+    /** Cache spans are fragments, not standalone audio files. Never fetch missing bytes here. */
+    internal suspend fun copyComplete(audio: CompleteAudio, output: OutputStream): Boolean = withContext(Dispatchers.IO) {
+        val reader = CacheDataSource.Factory().setCache(cache).setUpstreamDataSourceFactory(null)
+            .setCacheWriteDataSinkFactory(null).createDataSource()
+        try {
+            reader.open(DataSpec.Builder().setUri(audio.uri).setKey(audio.key).setLength(audio.length).build())
+            val buffer = ByteArray(64 * 1024)
+            var copied = 0L
+            while (copied < audio.length) {
+                currentCoroutineContext().ensureActive()
+                val count = reader.read(buffer, 0, minOf(buffer.size.toLong(), audio.length - copied).toInt())
+                if (count < 0) break
+                output.write(buffer, 0, count); copied += count
+            }
+            copied == audio.length
+        } catch (e: CancellationException) { throw e }
+        catch (_: java.io.IOException) { false }
+        finally { reader.close() }
+    }
     override fun close() { cache.release(); database.close() }
     companion object {
         @Volatile private var instance: AudioStreamCache? = null

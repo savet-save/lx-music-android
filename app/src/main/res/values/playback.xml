@@ -1,4 +1,5 @@
 <resources>
+    <string name="playback_url_timeout">获取播放链接超时</string>
     <string name="playback_channel">音乐播放</string>
     <string name="playback_lyrics_error">读取歌词失败：%1$s</string>
     <string name="playback_rate_range">播放倍速应在 0.60 到 2.00 之间</string>

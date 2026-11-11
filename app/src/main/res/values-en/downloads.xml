@@ -14,7 +14,11 @@
     <string name="download_empty">No download tasks yet</string>
     <string name="download_no_matches">No matching downloads</string>
     <string name="download_load_error">Could not load downloads</string>
-    <string name="download_resolving">Getting music link</string>
+    <string name="download_resolving">Preparing download</string>
+    <string name="download_lyric_pending">Lyrics: waiting to download</string>
+    <string name="download_lyric_saved">Lyrics: downloaded</string>
+    <string name="download_lyric_unavailable">Lyrics: unavailable</string>
+    <string name="download_lyric_failed">Lyrics: download failed; audio kept</string>
     <string name="download_queued">Queued</string>
     <string name="download_wait_network">Waiting for network</string>
     <string name="download_wait_wifi">Waiting for Wi-Fi</string>

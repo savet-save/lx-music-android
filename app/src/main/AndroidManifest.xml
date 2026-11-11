@@ -71,6 +71,15 @@
             android:foregroundServiceType="dataSync"
             android:stopWithTask="false"/>
 
+        <service
+            android:name=".data.DownloadLyricsJob"
+            android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE"/>
+
+        <receiver android:name=".data.DownloadCompleteReceiver" android:exported="true">
+            <intent-filter><action android:name="android.intent.action.DOWNLOAD_COMPLETE"/></intent-filter>
+        </receiver>
+
         <provider
             android:name=".update.UpdateFileProvider"
             android:authorities="${applicationId}.updates"

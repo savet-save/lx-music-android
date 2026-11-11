@@ -2,6 +2,7 @@
     <string name="settings_title">Settings</string>
     <string name="settings_basic">Basic settings</string>
     <string name="settings_playback">Playback</string>
+    <string name="settings_auto_lower_quality">Automatically lower bitrate when playback fails</string>
     <string name="settings_sources">Custom sources</string>
     <string name="settings_about">About and updates</string>
     <string name="settings_selected">Enabled</string>

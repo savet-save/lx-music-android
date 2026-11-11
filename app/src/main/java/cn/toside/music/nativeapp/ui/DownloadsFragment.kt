@@ -26,6 +26,7 @@ import cn.toside.music.nativeapp.R
 import cn.toside.music.nativeapp.data.DownloadStatus
 import cn.toside.music.nativeapp.data.DownloadTask
 import cn.toside.music.nativeapp.data.Downloads
+import cn.toside.music.nativeapp.data.DownloadLyricStatus
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -207,8 +208,15 @@ class DownloadsFragment : Fragment() {
 
     private fun details(task: DownloadTask) {
         val size = if (task.total > 0) getString(R.string.download_size_mib, task.total / (1024.0 * 1024)) else null
+        val lyric = task.lyricStatus?.let { getString(when (it) {
+            DownloadLyricStatus.PENDING -> R.string.download_lyric_pending
+            DownloadLyricStatus.SAVED -> R.string.download_lyric_saved
+            DownloadLyricStatus.UNAVAILABLE -> R.string.download_lyric_unavailable
+            DownloadLyricStatus.FAILED -> R.string.download_lyric_failed
+        }) }
         val text = listOfNotNull(task.song.artist.takeIf { it.isNotBlank() }, status(task), task.quality?.let(::downloadQualityLabel),
-            size, task.fileName?.let { "Music/LX Music/$it" }).joinToString("\n")
+            size, task.fileName?.let { "${task.directory}$it" }, lyric,
+            task.lyricUri?.let { "${task.directory}${task.fileName?.substringBeforeLast('.')}.lrc" }).joinToString("\n")
         AlertDialog.Builder(requireContext()).setTitle(task.song.title).setMessage(text)
             .setNeutralButton(R.string.download_search_song) { _, _ -> host.searchDownloadedSong(task.song) }
             .setPositiveButton(android.R.string.ok, null).show()

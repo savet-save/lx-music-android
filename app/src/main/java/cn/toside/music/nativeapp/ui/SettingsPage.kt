@@ -252,6 +252,7 @@ internal class SettingsPage(
             }
         }
         row.tag = "settings-playback-quality"
+        toggle(R.string.settings_auto_lower_quality, "player.autoLowerQuality", true)
         actions.playbackContent()?.let { content.addView(it) }
         action(text(R.string.ui_486b54a7b0af), click = actions.desktopLyrics)
         toggle(R.string.ui_8a47499c40e0, "player.startupAutoPlay")

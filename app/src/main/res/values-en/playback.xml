@@ -1,4 +1,5 @@
 <resources>
+    <string name="playback_url_timeout">Timed out getting the playback URL</string>
     <string name="playback_channel">Music playback</string>
     <string name="playback_lyrics_error">Could not read lyrics: %1$s</string>
     <string name="playback_rate_range">Playback speed must be between 0.60 and 2.00</string>

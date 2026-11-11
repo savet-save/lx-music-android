@@ -6,6 +6,8 @@ import cn.toside.music.nativeapp.data.DislikeStore
 import cn.toside.music.nativeapp.data.DownloadTask
 import cn.toside.music.nativeapp.data.DownloadProbe
 import cn.toside.music.nativeapp.data.Downloads
+import cn.toside.music.nativeapp.data.DownloadLyricsJob
+import cn.toside.music.nativeapp.player.AudioStreamCache
 import cn.toside.music.nativeapp.data.ExternalAudio
 import cn.toside.music.nativeapp.data.ImportedList
 import cn.toside.music.nativeapp.data.LegacyBackup
@@ -316,6 +318,7 @@ class MainActivity : FragmentActivity() {
         setTheme(if (activeTheme.dark) R.style.NativeDark else R.style.NativeLight)
         super.onCreate(savedInstanceState)
         beforePlaylistSaved = savedInstanceState?.getBundle("music-before-playlist")
+        DownloadLyricsJob.schedule(applicationContext)
         pendingSettingsState = savedInstanceState?.getBundle("settings-state")?.takeIf { settingsFragment() == null }
         restoreNavigation = savedInstanceState?.getBoolean("navigation-open") == true
         palette = UiPalette(this, activeTheme)
@@ -2301,8 +2304,12 @@ class MainActivity : FragmentActivity() {
         if (downloadQualityDialog?.isShowing == true) return
         downloadQualityDialog = showDownloadQuality(this, song, palette, lx, scope,
             probe = { quality, progress ->
-                val player = service ?: error(getString(R.string.ui_7ca47a28e695))
-                DownloadProbe().check(player.resolveDownloadUrl(song, quality), progress)
+                val cached = withContext(Dispatchers.IO) { AudioStreamCache.get(applicationContext).completeAudio(song, quality) != null }
+                if (cached) progress(DownloadProbe.MAX_BYTES)
+                else {
+                    val player = service ?: error(getString(R.string.ui_7ca47a28e695))
+                    DownloadProbe().check(player.resolveDownloadUrl(song, quality), progress)
+                }
             },
             dismissed = { if (downloadQualityDialog === it) downloadQualityDialog = null }
         ) { quality -> requestDownload(DownloadRequest(song, quality)) }

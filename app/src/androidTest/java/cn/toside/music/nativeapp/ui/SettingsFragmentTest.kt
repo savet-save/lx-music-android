@@ -243,6 +243,32 @@ class SettingsFragmentTest {
         }
     }
 
+    @Test fun automaticBitrateFallbackDefaultsOnAndPersistsWhenDisabled() {
+        val preferences = instrumentation.targetContext.getSharedPreferences("app-settings", 0)
+        val key = "player.autoLowerQuality"
+        val previous = preferences.all[key] as? Boolean
+        preferences.edit().remove(key).commit()
+        val activity = start()
+        try {
+            instrumentation.runOnMainSync { activity.openSettings("playback") }
+            var root = settings(activity).requireView()
+            instrumentation.runOnMainSync {
+                val toggle = root.findViewWithTag<Switch>("settings-$key")
+                assertTrue(toggle.isChecked)
+                toggle.performClick()
+                assertFalse(cn.toside.music.nativeapp.data.AppPreferences(instrumentation.targetContext).autoLowerQuality)
+                activity.openSettings("basic")
+            }
+            settings(activity)
+            instrumentation.runOnMainSync { activity.openSettings("playback") }
+            root = settings(activity).requireView()
+            instrumentation.runOnMainSync { assertFalse(root.findViewWithTag<Switch>("settings-$key").isChecked) }
+        } finally {
+            instrumentation.runOnMainSync { activity.finish() }
+            preferences.edit().apply { if (previous == null) remove(key) else putBoolean(key, previous) }.commit()
+        }
+    }
+
     @SdkSuppress(minSdkVersion = 29)
     @Test fun qualityPopupSelectsWithoutLeavingSettingsAndBackOnlyClosesThePopup() {
         val preferences = instrumentation.targetContext.getSharedPreferences("player", 0)
