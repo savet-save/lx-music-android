@@ -49,6 +49,7 @@ import android.os.Build
 import android.os.IBinder
 import android.net.Uri
 import android.graphics.Bitmap
+import cn.toside.music.nativeapp.utils.ToastUtils
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.currentCoroutineContext
@@ -495,30 +496,44 @@ class PlaybackService : Service() {
         player?.release(); player = null
         val previous = nativePlayer; nativePlayer = null; previous?.release()
     }
-    private suspend fun prepareStreamingPlayer(song: Song, preferred: String, position: Int) {
+    private suspend fun prepareStreamingPlayer(song: Song, preferred: String, position: Int, useDownloads: Boolean = true) {
         if (song.source == "local") { prepareNativePlayer(song, song.uri, position, null, null); return }
+        if (useDownloads) Downloads(applicationContext).playbackUri(song, preferred)?.let {
+            prepareNativePlayer(song, it, position, null, null, downloaded = true); return
+        }
         val cache = withContext(Dispatchers.IO) { AudioStreamCache.get(applicationContext).also { it.updateLimit(preferences.audioCacheBytes) } }
-        val preferredKey = AudioStreamCache.key(song, preferred)
-        val cached = withContext(Dispatchers.IO) { cache.cachedUri(preferredKey) }
-        val resolved = if (cached != null) ResolvedAudio(cached.toString(), preferred) else resolveAudio(song, preferred)
+        val qualities = if (preferences.autoLowerQuality) PLAYBACK_QUALITIES.drop(PLAYBACK_QUALITIES.indexOf(preferred).takeIf { it >= 0 } ?: PLAYBACK_QUALITIES.lastIndex)
+            else listOf(preferred)
+        val cached = withContext(Dispatchers.IO) {
+            qualities.firstNotNullOfOrNull { quality -> cache.playbackUri(AudioStreamCache.key(song, quality))?.let { ResolvedAudio(it.toString(), quality) } }
+        }
+        val resolved = cached ?: resolveAudio(song, preferred)
         val key = AudioStreamCache.key(song, resolved.quality)
         val uri = Uri.parse(resolved.url)
         withContext(Dispatchers.IO) { cache.remember(key, uri) }
         prepareNativePlayer(song, uri, position, cache, key, resolved.quality)
     }
 
-    private fun failNativePlayback(song: Song, position: Int, cache: AudioStreamCache?, key: String?, quality: String?, error: String) {
+    private fun failNativePlayback(song: Song, position: Int, cache: AudioStreamCache?, key: String?, quality: String?, error: String,
+        exhausted: Boolean = false) {
         val next = if (preferences.autoLowerQuality && quality != null) PLAYBACK_QUALITIES.indexOf(quality)
             .takeIf { it >= 0 }?.let { PLAYBACK_QUALITIES.getOrNull(it + 1) } else null
         releasePlayback()
-        mutableState.value = mutableState.value.copy(preparing = next != null, playing = false, position = position,
-            error = if (next == null) message(R.string.playback_error, error) else null)
+        mutableState.value = mutableState.value.copy(preparing = next != null || exhausted, playing = false, position = position,
+            error = if (next == null && !exhausted) message(R.string.playback_error, error) else null)
         publish()
         resolveJob?.cancel()
         resolveJob = scope.launch {
             try {
-                if (key != null) withContext(Dispatchers.IO) { cache?.remove(key) }
-                if (next != null) prepareStreamingPlayer(song, next, position)
+                val cleared = if (key != null) withContext(Dispatchers.IO) {
+                    if (!exhausted || cache?.cachedUri(key) == null) { cache?.remove(key); true } else false
+                } else false
+                if (exhausted) {
+                    val notice = message(if (cleared) R.string.playback_cache_failed else R.string.playback_stream_failed)
+                    if (next == null) { mutableState.value = mutableState.value.copy(preparing = false, error = notice); publish() }
+                    ToastUtils.show(this@PlaybackService, notice, ToastUtils.LONG)
+                }
+                if (next != null) prepareStreamingPlayer(song, next, position, useDownloads = false)
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) {
                 mutableState.value = mutableState.value.copy(preparing = false, playing = false, error = message(R.string.playback_error, e.localizedMessage.orEmpty()))
@@ -527,7 +542,23 @@ class PlaybackService : Service() {
         }
     }
 
-    private fun prepareNativePlayer(song: Song, uri: Uri, position: Int, cache: AudioStreamCache?, key: String?, quality: String? = null) {
+    private fun retryDownloadedPlayback(song: Song, position: Int, error: String) {
+        releasePlayback()
+        DiagnosticLog(this).record("playback", "$error; trying cache after downloaded audio failed", "WARN")
+        mutableState.value = mutableState.value.copy(preparing = true, playing = false, position = position, error = null)
+        publish(); resolveJob?.cancel()
+        resolveJob = scope.launch {
+            try { prepareStreamingPlayer(song, preferredQuality(), position, useDownloads = false) }
+            catch (e: CancellationException) { throw e }
+            catch (e: Exception) {
+                mutableState.value = mutableState.value.copy(preparing = false, playing = false, error = message(R.string.playback_error, e.localizedMessage.orEmpty()))
+                publish()
+            }
+        }
+    }
+
+    private fun prepareNativePlayer(song: Song, uri: Uri, position: Int, cache: AudioStreamCache?, key: String?, quality: String? = null,
+        downloaded: Boolean = false) {
         val current = NativeAudioPlayer(this, cache, preferences.audioOffload, { engine ->
             if (nativePlayer === engine) {
                 mutableState.value = mutableState.value.copy(preparing = engine.preparing, playing = engine.isPlaying,
@@ -537,12 +568,16 @@ class PlaybackService : Service() {
             }
         }, { engine -> if (nativePlayer === engine) onCompleted() }, { engine, error ->
             if (nativePlayer === engine) {
-                failNativePlayback(song, engine.position, cache, key, quality, error)
+                if (downloaded) retryDownloadedPlayback(song, engine.position, error)
+                else failNativePlayback(song, engine.position, cache, key, quality, error, engine.streamRetriesExhausted)
             }
         })
         nativePlayer = current
         try { current.prepare(uri, key, position, state.value.playbackRate, state.value.volume, playWhenReady) }
-        catch (e: Exception) { failNativePlayback(song, position, cache, key, quality, e.localizedMessage.orEmpty()) }
+        catch (e: Exception) {
+            if (downloaded) retryDownloadedPlayback(song, position, e.localizedMessage.orEmpty())
+            else failNativePlayback(song, position, cache, key, quality, e.localizedMessage.orEmpty())
+        }
     }
     private fun preparePlayer(song: Song, uri: Uri, resumePosition: Int) {
         val current = MediaPlayer()

@@ -1,4 +1,6 @@
 <resources>
+    <string name="playback_cache_failed">歌曲续传失败，重试 3 次后已清理未完成缓存</string>
+    <string name="playback_stream_failed">歌曲下载重试 3 次后仍失败，请稍后重试</string>
     <string name="playback_url_timeout">获取播放链接超时</string>
     <string name="playback_channel">音乐播放</string>
     <string name="playback_lyrics_error">读取歌词失败：%1$s</string>

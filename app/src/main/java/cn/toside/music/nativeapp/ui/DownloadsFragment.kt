@@ -16,7 +16,7 @@ import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.ListView
 import android.widget.TextView
-import android.widget.Toast
+import cn.toside.music.nativeapp.utils.ToastUtils
 import androidx.core.widget.doAfterTextChanged
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.Lifecycle
@@ -229,7 +229,7 @@ class DownloadsFragment : Fragment() {
                 viewLifecycleOwner.lifecycleScope.launch {
                     try { downloads.remove(task); refresh() }
                     catch (e: CancellationException) { throw e }
-                    catch (_: Exception) { Toast.makeText(context, R.string.download_operation_failed, Toast.LENGTH_SHORT).show() }
+                    catch (_: Exception) { context?.let { ToastUtils.show(it, R.string.download_operation_failed) } }
                 }
             }.show()
     }
@@ -242,7 +242,7 @@ class DownloadsFragment : Fragment() {
                 val song = downloads.downloadedSong(task) ?: error("missing download")
                 host.playPageSongs(listOf(song), 0)
             } catch (e: CancellationException) { throw e }
-            catch (_: Exception) { Toast.makeText(context, R.string.download_operation_failed, Toast.LENGTH_SHORT).show() }
+            catch (_: Exception) { context?.let { ToastUtils.show(it, R.string.download_operation_failed) } }
         }
     }
 

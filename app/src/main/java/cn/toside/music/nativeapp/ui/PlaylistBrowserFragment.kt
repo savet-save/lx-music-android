@@ -12,6 +12,7 @@ import androidx.fragment.app.viewModels
 import androidx.lifecycle.*
 import androidx.lifecycle.viewmodel.CreationExtras
 import cn.toside.music.nativeapp.R
+import cn.toside.music.nativeapp.utils.ToastUtils
 import cn.toside.music.nativeapp.online.*
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -175,7 +176,7 @@ class PlaylistBrowserFragment : Fragment() {
                         }
                     }
             } catch (e: CancellationException) { throw e }
-            catch (e: Exception) { Toast.makeText(requireContext(), getString(R.string.playlist_error, e.localizedMessage.orEmpty()), Toast.LENGTH_LONG).show() }
+            catch (e: Exception) { ToastUtils.show(requireContext(), getString(R.string.playlist_error, e.localizedMessage.orEmpty()), ToastUtils.LONG) }
         }
     }
     private fun rememberPosition() { grid?.let { if (it.childCount > 0) { model.firstVisible = it.firstVisiblePosition; model.scrollTop = it.getChildAt(0).top; model.gridState = it.onSaveInstanceState() } } }

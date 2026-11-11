@@ -94,7 +94,7 @@ import android.widget.ListView
 import android.widget.SeekBar
 import android.widget.ScrollView
 import android.widget.TextView
-import android.widget.Toast
+import cn.toside.music.nativeapp.utils.ToastUtils
 import androidx.activity.OnBackPressedCallback
 import androidx.fragment.app.FragmentActivity
 import androidx.fragment.app.FragmentContainerView
@@ -2515,7 +2515,7 @@ class MainActivity : FragmentActivity() {
             } catch (e: Exception) { toast(getString(R.string.ui_ef6e30183259, java.lang.String.valueOf(e.localizedMessage))) }
         }
     }
-    private fun toast(message: String) { Toast.makeText(this, message, Toast.LENGTH_SHORT).show() }
+    private fun toast(message: String) = ToastUtils.show(this, message)
     private fun updateSuggestions(query: String) {
         suggestionJob?.cancel()
         if (!onlineMode || boardMode || onlinePlaylistMode || query.isBlank()) return

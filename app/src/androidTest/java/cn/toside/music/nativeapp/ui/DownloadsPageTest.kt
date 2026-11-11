@@ -1,3 +1,5 @@
+@file:androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+
 package cn.toside.music.nativeapp.ui
 
 import android.app.Dialog
@@ -184,6 +186,17 @@ class DownloadsPageTest {
             }
             assertEquals(failed.key, completed.key)
             assertEquals(100, completed.percent)
+            // Playing the original online entry must select the completed system download first.
+            main { player.play(listOf(song), 0) }
+            waitFor("online entry uses its completed download") { player.state.value.playing }
+            main {
+                assertEquals(song, player.state.value.song)
+                val current = PlaybackService::class.java.getDeclaredField("nativePlayer").apply { isAccessible = true }.get(player)
+                    as cn.toside.music.nativeapp.player.NativeAudioPlayer
+                val item = current.engine.currentMediaItem!!.localConfiguration!!
+                assertEquals(context.getSystemService(DownloadManager::class.java).getUriForDownloadedFile(completed.systemId!!), item.uri)
+                assertNull(item.customCacheKey)
+            }
             main { view("downloads-filter-COMPLETE").performClick() }
             waitFor("the completed task row") { view("downloads-task-${failed.key}")?.isShown == true }
             main { view("downloads-task-${failed.key}").findViewWithTag<View>("downloads-row-primary").performClick() }

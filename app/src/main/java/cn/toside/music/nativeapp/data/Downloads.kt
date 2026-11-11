@@ -10,6 +10,7 @@ import cn.toside.music.nativeapp.lyrics.LrcParser
 import cn.toside.music.nativeapp.lyrics.exportLrc
 import cn.toside.music.nativeapp.online.OnlineLyrics
 import cn.toside.music.nativeapp.player.AudioStreamCache
+import cn.toside.music.nativeapp.source.PLAYBACK_QUALITIES
 import cn.toside.music.nativeapp.utils.readBounded
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -205,6 +206,24 @@ class Downloads(private val context: Context, private val scheduleLyrics: (Conte
             catch (_: Exception) { }
         }
         song
+    }
+
+    internal suspend fun playbackUri(song: Song, preferred: String): Uri? = withContext(Dispatchers.IO) {
+        val matches = list().filter { it.status == DownloadStatus.COMPLETE && it.song.source == song.source && it.song.id == song.id }
+            .sortedWith(compareBy<DownloadTask> { it.quality != preferred }.thenBy {
+                PLAYBACK_QUALITIES.indexOf(it.quality).takeIf { rank -> rank >= 0 } ?: Int.MAX_VALUE
+            })
+        for (task in matches) {
+            try {
+                val uri = task.localUri ?: task.systemId?.let(manager::getUriForDownloadedFile) ?: continue
+                val readable = context.contentResolver.openFileDescriptor(uri, "r")?.use {
+                    it.statSize > 0 && (task.total <= 0 || it.statSize >= task.total)
+                } == true
+                if (readable) return@withContext uri
+            } catch (e: CancellationException) { throw e }
+            catch (_: Exception) { }
+        }
+        null
     }
 
     internal fun ownsSystemId(id: Long): Boolean = synchronized(lock) { history.all.keys.any { read(it)?.systemId == id } }

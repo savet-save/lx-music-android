@@ -36,19 +36,30 @@ internal class AudioStreamCache(context: Context, directory: File = context.cach
     private val database = StandaloneDatabaseProvider(context)
     internal val cache = SimpleCache(directory, evictor, database)
     private val upstream = DefaultDataSource.Factory(context, OkHttpDataSource.Factory(OkHttpClient.Builder()
-        .connectTimeout(13, java.util.concurrent.TimeUnit.SECONDS).readTimeout(20, java.util.concurrent.TimeUnit.SECONDS).build()))
+        .connectTimeout(13, java.util.concurrent.TimeUnit.SECONDS).readTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
+        .retryOnConnectionFailure(false).build()))
     fun dataSource(): CacheDataSource.Factory = CacheDataSource.Factory().setCache(cache).setUpstreamDataSourceFactory(upstream)
         .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
     fun updateLimit(bytes: Long) = synchronized(cache) { evictor.update(cache, bytes) }
     fun clear() { cache.keys.toList().forEach { cache.removeResource(it) } }
     val bytes: Long get() = cache.cacheSpace
-    internal fun remove(key: String) { cache.removeResource(key) }
+    internal fun remove(key: String) {
+        cache.removeResource(key)
+        if (key in cache.keys) cache.applyContentMetadataMutations(key, ContentMetadataMutations().remove("native_uri").also {
+            ContentMetadataMutations.setContentLength(it, C.LENGTH_UNSET.toLong())
+            ContentMetadataMutations.setRedirectedUri(it, null)
+        })
+    }
     internal fun removeSong(prefix: String) { cache.keys.filter { it.startsWith(prefix) }.forEach { cache.removeResource(it) } }
     fun cachedUri(key: String): Uri? {
         val metadata = cache.getContentMetadata(key)
         val length = ContentMetadata.getContentLength(metadata)
         val url = metadata.get("native_uri", "") ?: ""
         return if (length > 0 && url.isNotBlank() && cache.isCached(key, 0, length)) Uri.parse(url) else null
+    }
+    internal fun playbackUri(key: String): Uri? {
+        if (cache.getCachedSpans(key).isEmpty()) return null
+        return cache.getContentMetadata(key).get("native_uri", "")?.takeIf { it.isNotBlank() }?.let(Uri::parse)
     }
     fun remember(key: String, uri: Uri) { cache.applyContentMetadataMutations(key, ContentMetadataMutations().set("native_uri", uri.toString())) }
     internal data class CompleteAudio(val key: String, val uri: Uri, val length: Long)

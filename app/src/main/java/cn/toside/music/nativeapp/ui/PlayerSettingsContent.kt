@@ -15,7 +15,7 @@ import android.widget.RadioButton
 import android.widget.RadioGroup
 import android.widget.SeekBar
 import android.widget.TextView
-import android.widget.Toast
+import cn.toside.music.nativeapp.utils.ToastUtils
 import java.util.Locale
 import kotlin.math.roundToInt
 
@@ -41,7 +41,7 @@ internal class PlayerSettingsContent(
                 override fun onProgressChanged(bar: SeekBar?, progress: Int, fromUser: Boolean) {
                     title.text = format(progress)
                     if (fromUser) try { change(progress) }
-                    catch (e: RuntimeException) { Toast.makeText(activity, e.localizedMessage ?: activity.getString(R.string.ui_e919e87486b4), Toast.LENGTH_SHORT).show() }
+                    catch (e: RuntimeException) { ToastUtils.show(activity, e.localizedMessage ?: activity.getString(R.string.ui_e919e87486b4)) }
                 }
                 override fun onStartTrackingTouch(bar: SeekBar?) = Unit
                 override fun onStopTrackingTouch(bar: SeekBar?) = Unit
@@ -122,7 +122,7 @@ internal class PlayerSettingsContent(
                     rate.progress = 100; volume.progress = 100; font.progress = if (landscape) 22 else 21
                     alignment.check(choices.getValue(LyricAlignment.LEFT).id)
                     changeOffset(0); appearanceChanged()
-                } catch (e: RuntimeException) { Toast.makeText(activity, e.localizedMessage ?: activity.getString(R.string.ui_3a89dbc96a55), Toast.LENGTH_SHORT).show() }
+                } catch (e: RuntimeException) { ToastUtils.show(activity, e.localizedMessage ?: activity.getString(R.string.ui_3a89dbc96a55)) }
             }
         })
         return content
