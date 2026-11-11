@@ -473,7 +473,8 @@ class PlaybackSettingsTest {
                 try {
                     main { fixture.player.play(listOf(song), 0) }
                     waitFor { fixture.player.state.value.error != null }
-                    assertEquals(context.getString(R.string.playback_cache_failed), fixture.player.state.value.error)
+                    val expectedError = fixture.activity.getString(R.string.playback_cache_failed)
+                    assertEquals(expectedError, fixture.player.state.value.error)
                     assertFalse(fixture.player.state.value.preparing); assertFalse(fixture.player.state.value.playing)
                     assertEquals(4, server.requests.size)
                     assertEquals(prefix, server.requests.first())
@@ -481,7 +482,7 @@ class PlaybackSettingsTest {
                     assertTrue(cache.cache.getCachedSpans(key).isEmpty())
                     assertNull(cache.playbackUri(key)); assertNull(cache.cachedUri(key))
                     assertNotNull(cache.cachedUri(otherKey))
-                    main { assertEquals(context.getString(R.string.playback_cache_failed), (field(fixture.activity, "title") as TextView).text.toString()) }
+                    main { assertEquals(expectedError, (field(fixture.activity, "title") as TextView).text.toString()) }
                     delay(400); assertEquals(4, server.requests.size)
                 } finally { cache.remove(otherKey) }
             }

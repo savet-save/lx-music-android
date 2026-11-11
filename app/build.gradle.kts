@@ -50,6 +50,10 @@ android {
         versionName = providers.gradleProperty("nativeVersionName").get().also { require(it.matches(Regex("\\d+\\.\\d+\\.\\d+"))) }
         testInstrumentationRunner = "cn.toside.music.nativeapp.NativeTestRunner"
     }
+    // CI enables this only after testing first-use permission dialogs.
+    if (providers.gradleProperty("nativeTestGrantPermissions").map { it.toBooleanStrict() }.orElse(false).get()) {
+        installation { installOptions.add("-g") }
+    }
     signingConfigs.create("nativeRelease") {
         storeFile = releaseKeystore
         storePassword = releaseSigningValues["NATIVE_STORE_PASSWORD"]
