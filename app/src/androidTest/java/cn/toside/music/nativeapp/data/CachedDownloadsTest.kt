@@ -4,6 +4,7 @@ package cn.toside.music.nativeapp.data
 
 import android.net.Uri
 import android.os.Build
+import android.os.Environment
 import android.content.pm.PackageManager
 import android.provider.OpenableColumns
 import android.provider.MediaStore
@@ -25,6 +26,7 @@ import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.ByteArrayOutputStream
+import java.io.File
 
 @RunWith(AndroidJUnit4::class)
 class CachedDownloadsTest {
@@ -92,12 +94,21 @@ class CachedDownloadsTest {
                 }
             }
             assertEquals(exportLrc(lines), bytes(task.lyricUri!!).toString(Charsets.UTF_8))
-            context.contentResolver.query(task.lyricUri!!, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)!!.use {
-                assertTrue(it.moveToFirst()); assertEquals(task.fileName!!.substringBeforeLast('.') + ".lrc", it.getString(0))
-            }
-            if (Build.VERSION.SDK_INT >= 29) context.contentResolver.query(task.lyricUri!!,
-                arrayOf(MediaStore.MediaColumns.RELATIVE_PATH), null, null, null)!!.use {
-                assertTrue(it.moveToFirst()); assertEquals(DownloadFiles.RELATIVE_PATH, it.getString(0))
+            val lyricName = task.fileName!!.substringBeforeLast('.') + ".lrc"
+            if (Build.VERSION.SDK_INT >= 29) {
+                assertEquals("content", task.lyricUri!!.scheme)
+                context.contentResolver.query(task.lyricUri!!,
+                    arrayOf(OpenableColumns.DISPLAY_NAME, MediaStore.MediaColumns.RELATIVE_PATH), null, null, null)!!.use {
+                    assertTrue(it.moveToFirst())
+                    assertEquals(lyricName, it.getString(0)); assertEquals(DownloadFiles.RELATIVE_PATH, it.getString(1))
+                }
+            } else {
+                assertEquals("file", task.lyricUri!!.scheme)
+                val lyricFile = File(requireNotNull(task.lyricUri!!.path))
+                assertEquals(lyricName, lyricFile.name)
+                assertEquals(File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
+                    DownloadFiles.DIRECTORY), lyricFile.parentFile)
+                assertEquals(File(requireNotNull(task.localUri!!.path)).parentFile, lyricFile.parentFile)
             }
             local = downloads.downloadedSong(task)!!
             assertEquals(lines, Lyrics(context).load(local!!.id, "local"))
