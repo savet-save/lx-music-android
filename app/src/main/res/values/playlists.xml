@@ -4,6 +4,7 @@
     <string name="playlist_recommended">推荐</string>
     <string name="playlist_default">默认</string>
     <string name="playlist_favorites">我的收藏</string>
+    <string name="playlist_trial">试听列表</string>
     <string name="playlist_actions_for">%1$s的歌单操作</string>
     <string name="playlist_close_picker">关闭歌单列表</string>
     <string name="playlist_open">打开</string>

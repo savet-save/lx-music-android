@@ -114,6 +114,7 @@ class PlatformPopupTest {
     @Test fun playlistNamesSwitchDirectlyAndMoreOpensTheAnchoredMenu() = kotlinx.coroutines.runBlocking {
         val context = instrumentation.targetContext
         Playlists(context).use { lists ->
+            val trial = lists.trialList()
             val favorites = lists.loveList()
             val custom = lists.create("测试歌单")
             val activity = instrumentation.startActivitySync(Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
@@ -149,29 +150,33 @@ class PlatformPopupTest {
                     assertNull(option("playlist-choice-local"))
                     assertNull(option("playlist-more-local"))
                     assertFalse(requireNotNull(option("playlist-choice-$favorites")).isSelected)
+                    assertTrue(bounds(requireNotNull(option("playlist-choice-$trial"))).top < bounds(requireNotNull(option("playlist-choice-$favorites"))).top)
+                    assertEquals(activity.getString(R.string.playlist_trial), (option("playlist-choice-$trial") as TextView).text.toString())
                 }
-                tap("playlist-more-$favorites")
-                await("favorites popup input focus") { actions()?.rootView?.hasWindowFocus() == true }
-                main {
-                    val popup = requireNotNull(actions())
-                    val button = bounds(requireNotNull(option("playlist-more-$favorites")))
-                    val menu = bounds(popup)
-                    assertEquals(button.bottom, menu.top)
-                    assertTrue(abs(button.right - menu.right) <= 1)
-                    assertTrue(visibleWindow(option("playlist-more-$favorites")!!).contains(menu))
-                    assertNull(field(activity, "activePlaylist"))
-                    val remove = actionPosition(popup, "DELETE")
-                    assertFalse(popup.adapter.isEnabled(remove))
-                    assertFalse(popup.adapter.isEnabled(actionPosition(popup, "RENAME")))
-                    val refresh = descendants(popup).filterIsInstance<TextView>().first { it.tag == "playlist-actions-REFRESH" }
-                    assertEquals(0, refresh.layout.getEllipsisCount(0))
-                    popup.performItemClick(popup.getChildAt(remove - popup.firstVisiblePosition), remove, remove.toLong())
-                    assertSame(popup, actions())
-                    capture(activity, "playlist-picker-phone", popup)
+                for (builtin in listOf(trial, favorites)) {
+                    tap("playlist-more-$builtin")
+                    await("built-in playlist popup input focus") { actions()?.rootView?.hasWindowFocus() == true }
+                    main {
+                        val popup = requireNotNull(actions())
+                        val button = bounds(requireNotNull(option("playlist-more-$builtin")))
+                        val menu = bounds(popup)
+                        assertEquals(button.bottom, menu.top)
+                        assertTrue(abs(button.right - menu.right) <= 1)
+                        assertTrue(visibleWindow(option("playlist-more-$builtin")!!).contains(menu))
+                        assertNull(field(activity, "activePlaylist"))
+                        val remove = actionPosition(popup, "DELETE")
+                        assertFalse(popup.adapter.isEnabled(remove))
+                        assertFalse(popup.adapter.isEnabled(actionPosition(popup, "RENAME")))
+                        val refresh = descendants(popup).filterIsInstance<TextView>().first { it.tag == "playlist-actions-REFRESH" }
+                        assertEquals(0, refresh.layout.getEllipsisCount(0))
+                        popup.performItemClick(popup.getChildAt(remove - popup.firstVisiblePosition), remove, remove.toLong())
+                        assertSame(popup, actions())
+                        capture(activity, "playlist-picker-phone-$builtin", popup)
+                    }
+                    instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
+                    await("popup dismissal") { actions() == null && option("playlist-choice-$custom")?.isShown == true }
+                    awaitHostFocus(activity)
                 }
-                instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
-                await("popup dismissal") { actions() == null && option("playlist-choice-$custom")?.isShown == true }
-                awaitHostFocus(activity)
                 tap("playlist-choice-$custom")
                 await("single-tap playlist switch") {
                     (field(activity, "activePlaylist") as? Playlist)?.id == custom && option("playlist-drawer-panel")?.isShown == false

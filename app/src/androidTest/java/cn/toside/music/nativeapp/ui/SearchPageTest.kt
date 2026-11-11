@@ -21,15 +21,18 @@ import androidx.fragment.app.Fragment
 import androidx.fragment.app.FragmentManager
 import androidx.navigation.fragment.NavHostFragment
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.filters.SdkSuppress
 import androidx.test.platform.app.InstrumentationRegistry
 import cn.toside.music.nativeapp.R
 import cn.toside.music.nativeapp.data.Song
+import cn.toside.music.nativeapp.data.Playlists
 import cn.toside.music.nativeapp.online.OnlinePlaylist
 import cn.toside.music.nativeapp.online.SearchCatalog
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import org.junit.Assert.*
@@ -44,7 +47,7 @@ import java.util.concurrent.atomic.AtomicInteger
 class SearchPageTest {
     private val instrumentation get() = InstrumentationRegistry.getInstrumentation()
     private fun field(activity: MainActivity, name: String): Any? = MainActivity::class.java.getDeclaredField(name).apply { isAccessible = true }.get(activity)
-    private fun set(activity: MainActivity, name: String, value: Any) = MainActivity::class.java.getDeclaredField(name).apply { isAccessible = true }.set(activity, value)
+    private fun set(activity: MainActivity, name: String, value: Any?) = MainActivity::class.java.getDeclaredField(name).apply { isAccessible = true }.set(activity, value)
     private fun invoke(activity: MainActivity, name: String) = MainActivity::class.java.getDeclaredMethod(name).apply { isAccessible = true }.invoke(activity)
     private fun open(activity: MainActivity) = MainActivity::class.java.getDeclaredMethod("openSearchPage", Boolean::class.javaPrimitiveType).apply { isAccessible = true }.invoke(activity, false)
     private fun submit(activity: MainActivity, more: Boolean = false) = MainActivity::class.java.getDeclaredMethod("searchOnline", Boolean::class.javaPrimitiveType).apply { isAccessible = true }.invoke(activity, more)
@@ -128,6 +131,74 @@ class SearchPageTest {
         while (target != null && !target.isClickable) target = target.parent
         assertTrue(target?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true)
         instrumentation.waitForIdleSync()
+    }
+
+    @Test @SdkSuppress(minSdkVersion = 29)
+    fun searchRowAndMenuPlaybackAddOnlyChosenSongsToTrialList() = runBlocking {
+        val identity = System.nanoTime()
+        val catalog = SearchCatalog(songSearch = { source, query, _ ->
+            listOf(song(source, query).copy(id = identity, sourceInfo = """{"songmid":"$identity"}"""))
+        })
+        Playlists(instrumentation.targetContext).use { lists ->
+            val trialId = lists.trialList()
+            val original = lists.songs(trialId)
+            Fixture(catalog, mapOf("list.addMusicLocationType" to "bottom")).use { fixture ->
+                val activity = fixture.activity
+                awaitUi { activity.settingsPlayer() != null }
+                val player = field(activity, "service")
+                try {
+                    // Capture the playback handoff without contacting online audio providers.
+                    instrumentation.runOnMainSync {
+                        set(activity, "service", null)
+                        (field(activity, "search") as EditText).setText("trial fixture")
+                        submit(activity)
+                    }
+                    waitForSearch(activity)
+                    awaitUi { (field(activity, "list") as ListView).childCount > 1 }
+                    val results = (field(activity, "allSongs") as List<*>).filterIsInstance<Song>()
+                    assertEquals(SearchCatalog.sources.size, results.size)
+                    assertEquals(original, lists.songs(trialId))
+                    fun request() = field(activity, "waitingForServicePlayback")
+                    fun clickRow() {
+                        val previous = request()
+                        instrumentation.runOnMainSync {
+                            val list = field(activity, "list") as ListView
+                            list.performItemClick(list.getChildAt(0), 0, list.adapter.getItemId(0))
+                        }
+                        awaitUi { request() != null && request() !== previous }
+                    }
+                    clickRow()
+                    assertEquals(original + results[0], lists.songs(trialId))
+                    clickRow()
+                    assertEquals(original + results[0], lists.songs(trialId))
+                    val previous = request()
+                    instrumentation.runOnMainSync {
+                        val row = (field(activity, "list") as ListView).getChildAt(1) as ViewGroup
+                        row.getChildAt(row.childCount - 1).performClick()
+                    }
+                    fun menu() = WindowInspector.getGlobalWindowViews().firstNotNullOfOrNull {
+                        it.findViewWithTag<ListView>("song-actions-menu")?.takeIf(View::isShown)
+                    }
+                    awaitUi { menu()?.childCount?.let { it > 0 } == true }
+                    instrumentation.runOnMainSync {
+                        val menu = requireNotNull(menu())
+                        assertEquals(activity.getString(R.string.ui_c3396195e91c), menu.adapter.getItem(0))
+                        menu.performItemClick(menu.getChildAt(0), 0, menu.adapter.getItemId(0))
+                    }
+                    awaitUi { request() !== previous }
+                    assertEquals(original + results.take(2), lists.songs(trialId))
+                    val action = requireNotNull(request())
+                    assertEquals(results, action.javaClass.getDeclaredField("songs").apply { isAccessible = true }.get(action))
+                    assertEquals(1, action.javaClass.getDeclaredField("position").apply { isAccessible = true }.get(action))
+                } finally {
+                    instrumentation.runOnMainSync {
+                        set(activity, "waitingForServicePlayback", null)
+                        set(activity, "service", player)
+                    }
+                    lists.songs(trialId).filter { it.id == identity }.forEach { lists.remove(trialId, it) }
+                }
+            }
+        }
     }
 
     @Test fun themeChangesKeepThePendingSearchWithoutRestartingRequests() {

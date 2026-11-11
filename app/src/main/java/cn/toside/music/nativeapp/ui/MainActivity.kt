@@ -1321,7 +1321,18 @@ class MainActivity : FragmentActivity() {
         showSongActionsFor(anchor, song, null) { playPageSongs(songs, position) }
     }
     private fun playListedSong(song: Song) {
-        playPageSongs(allSongs, allSongs.indexOf(song))
+        val songs = allSongs
+        val position = songs.indexOf(song)
+        if (position < 0) return
+        if (isCatalogPage && !playlistSearchMode) {
+            scope.launch {
+                try {
+                    playlists.add(playlists.trialList(), song)
+                    playPageSongs(songs, position)
+                } catch (e: CancellationException) { throw e }
+                catch (e: Exception) { toast(getString(R.string.ui_3350538a51ed, e.localizedMessage.orEmpty())) }
+            }
+        } else playPageSongs(songs, position)
     }
     internal fun downloadTableLayout() = uiLayout.contentWidth >= 620
     internal fun searchDownloadedSong(song: Song) {
@@ -1947,7 +1958,11 @@ class MainActivity : FragmentActivity() {
         }
     }
     private val Playlist.displayName: String
-        get() = if (syncId == "love") getString(R.string.playlist_favorites) else name
+        get() = when (syncId) {
+            "default" -> getString(R.string.playlist_trial)
+            "love" -> getString(R.string.playlist_favorites)
+            else -> name
+        }
 
     private fun openMyLists() {
         playlistDrawer?.close(false)
@@ -2006,7 +2021,7 @@ class MainActivity : FragmentActivity() {
         }
     }
     private fun renderPlaylistPicker(items: List<Playlist>, reveal: Boolean = false) {
-        if (playlistPicker?.render(items.sortedBy { it.syncId != "love" }, activePlaylist?.id, !onlineMode, reveal) == true) {
+        if (playlistPicker?.render(items, activePlaylist?.id, !onlineMode, reveal) == true) {
             playlistActionsPopup.dismiss()
         }
     }
