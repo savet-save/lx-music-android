@@ -465,3 +465,11 @@ adb pull /sdcard/Android/data/cn.toside.music.nativeapp/files/adaptive-validatio
 Debug/测试 APK 构建、48 项 JVM 单元测试和 Debug Lint 通过。Android 12（API 31）平板上的独立验证包通过首次授权流程，以及 `LocalNavigationTest`、`SearchPageTest`、`PlatformPopupTest` 的全部 17 项回归。覆盖 360×800、1024×768 dp 的顶栏布局、歌单切换、页内搜索、页面重建、平台弹层和在线歌单分页。日志保存在 `build/header-validation/permission-tests.txt`、`build/header-validation/final-all-tests.txt`。
 
 原生 View 截图位于 `build/header-validation/final-screens/`；手机尺寸预览来自平板窗口的布局绘制，不是手机硬件截图。本轮未运行 API 28/35 设备回归，也未推送或发布。
+
+## 侧栏「更多」对齐与菜单去重（2026-11-12）
+
+平板侧栏底部的「更多」改为与导航条目相同的 40 dp 图标列，整行保持可点击。菜单移除当前侧栏或手机抽屉已有的页面入口，合并指向播放设置页的重复项；手机的返回桌面和退出入口保留在抽屉底部。过滤菜单后继续使用原始动作 ID，点击设置项仍进入对应分类。
+
+Debug/测试 APK 构建、48 项 JVM 单元测试和 Debug Lint 通过。Android 12 盒子的独立验证包执行 `PlatformPopupTest`、`PhoneNavigationDrawerTest` 和 `LocalNavigationTest`：12 项通过，1 项因真实窗口不是手机尺寸跳过。覆盖 600/1024 dp 左右侧栏图标中心对齐、360 dp 左右抽屉菜单去重、弹层边界和菜单动作分发。日志及截图位于 `build/menu-validation/`；原生 View 测量截图不等同于手机硬件截图。
+
+使用原正式签名构建 32 位 ARM 包，覆盖更新盒子上的 0.9.14，并实际打开左下角菜单确认对齐及去重效果。盒子截图为 `build/menu-validation/box-menu-open.png`，安装包和签名核对记录为 `build/menu-validation/verified-update.json`。

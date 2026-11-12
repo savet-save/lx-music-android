@@ -1075,7 +1075,10 @@ class MainActivity : FragmentActivity() {
             val row = LinearLayout(this@MainActivity).apply {
                 gravity = Gravity.CENTER_VERTICAL; background = lx.touch(); minimumHeight = dp(56)
                 setPadding(dp(12), dp(4), dp(12), dp(4)); isFocusable = true
-                setOnClickListener { navigationDrawer?.close(); click() }
+                setOnClickListener {
+                    if (label != R.string.ui_38844b135cf7) navigationDrawer?.close()
+                    click()
+                }
             }
             val icon = if (label == R.string.ui_b0d269c8707c) ImageView(this@MainActivity).apply {
                 setImageResource(android.R.drawable.ic_lock_power_off); imageTintList = ColorStateList.valueOf(palette.muted)
@@ -1086,6 +1089,7 @@ class MainActivity : FragmentActivity() {
             val text = lx.label(getString(label), 16f, palette.muted).apply { maxLines = 2; setPadding(dp(8), 0, 0, 0) }
             row.addView(text, LinearLayout.LayoutParams(0, -2, 1f))
             if (page != null) { navigationItems[page] = text; row.tag = if (page == PAGE_LOCAL) "navigation-local" else "navigation-$page" }
+            if (label == R.string.ui_38844b135cf7) row.tag = "navigation-more"
             parent.addView(row, LinearLayout.LayoutParams(-1, -2))
         }
         val items = LinearLayout(this@MainActivity).apply {
@@ -1129,7 +1133,15 @@ class MainActivity : FragmentActivity() {
         entry(59655, R.string.settings_title) { showSettings() }
         entry(59659, R.string.ui_788db1cfec2a) { openSettings("theme") }
         addView(ScrollView(this@MainActivity).apply { isVerticalScrollBarEnabled = false; addView(items) }, LinearLayout.LayoutParams(-1, 0, 1f))
-        addView(lx.icon(59680, getString(R.string.ui_e35a36e26d52), 19f) { showNavigation() }, LinearLayout.LayoutParams(-1, dp(48)))
+        val more = LinearLayout(this@MainActivity).apply {
+            tag = "navigation-more"; gravity = Gravity.CENTER_VERTICAL
+            background = lx.touch(); isFocusable = true; contentDescription = getString(R.string.ui_38844b135cf7)
+            setOnClickListener { showNavigation() }
+            addView(lx.label(59680.toChar().toString(), 19f, palette.muted).apply {
+                typeface = iconFont; gravity = Gravity.CENTER; importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            }, LinearLayout.LayoutParams(dp(40), dp(48)))
+        }
+        addView(more, LinearLayout.LayoutParams(-1, dp(48)))
     }
     private fun updateNavigationSelection() {
         val current = when { navigation?.currentDestination?.id == R.id.downloads_page -> 4; navigation?.currentDestination?.id == R.id.playlist_browser -> 3; navigation?.currentDestination?.id == R.id.charts_page -> 2; boardMode -> 2; onlinePlaylistMode -> 3; onlineMode -> 1; activePlaylist != null -> 0; else -> PAGE_LOCAL }
@@ -1171,10 +1183,14 @@ class MainActivity : FragmentActivity() {
     private fun showNavigationActions() {
         val labels = mutableListOf(getString(R.string.ui_a9531e47b75d), getString(R.string.ui_27c95ec6b766), getString(R.string.ui_87a2113eb66f), getString(R.string.ui_1ee95aa94712), getString(R.string.ui_259597bf6ca7), getString(R.string.ui_3158c8d56b7b), getString(R.string.ui_a5cd0a9169e8), getString(R.string.ui_3facd3e00be5), getString(R.string.ui_599818eb56df), getString(R.string.ui_727036c7fc2a), getString(R.string.ui_2a3ec620e12c), getString(R.string.ui_8c38525734c0), getString(R.string.ui_486b54a7b0af), getString(R.string.ui_6e763b71e69c), getString(R.string.ui_f01b6815d826), getString(R.string.ui_cad84b75d661), getString(R.string.ui_426744e26e7e), getString(R.string.ui_ac7aa03a458f), getString(R.string.settings_title), getString(R.string.ui_788db1cfec2a), getString(R.string.ui_4fd38bc4f6d4), getString(R.string.ui_bb1d19b85634))
         labels.add(getString(R.string.download_page))
-        if (preferences.showBack) labels.add(getString(R.string.ui_f75a93326a3c))
-        if (preferences.showExit) labels.add(getString(R.string.ui_b0d269c8707c))
+        if (uiLayout.expanded && preferences.showBack) labels.add(getString(R.string.ui_f75a93326a3c))
+        if (uiLayout.expanded && preferences.showExit) labels.add(getString(R.string.ui_b0d269c8707c))
+        // Keep the original action IDs when filtering so each remaining label dispatches correctly.
+        val repeated = setOf(0, 1, 2, 3, 4, 8, 18, 22) + if (uiLayout.expanded) setOf(9, 19) else emptySet()
+        val actions = labels.indices.filterNot { it in repeated }
         val anchor = navigationMenuAnchor() ?: return
-        choicesPopup.show(anchor, labels.indices.map(Int::toString), labels, "", palette, alignEnd = preferences.menuOnRight) { id ->
+        choicesPopup.show(anchor, actions.map(Int::toString), actions.map { labels[it] }, "", palette, alignEnd = preferences.menuOnRight) { id ->
+            navigationDrawer?.close(false)
             val which = id.toInt()
             if (labels[which] == getString(R.string.download_page)) { showDownloads(); return@show }
             if (labels[which] == getString(R.string.ui_f75a93326a3c)) { moveTaskToBack(true); return@show }
@@ -1210,6 +1226,7 @@ class MainActivity : FragmentActivity() {
         }
     }
     private fun navigationMenuAnchor(): View? {
+        window.decorView.findViewWithTag<View>("navigation-more")?.takeIf { it.isShown }?.let { return it }
         fun find(view: View): View? {
             if (!view.isShown) return null
             if (view.contentDescription == getString(R.string.ui_e35a36e26d52)) return view
