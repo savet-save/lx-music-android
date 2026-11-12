@@ -70,13 +70,12 @@ class PermissionFlowTest {
             assertEquals(context.packageName, instrumentation.uiAutomation.rootInActiveWindow?.packageName?.toString())
             // Ensure the first-use path is exercised without changing the device's permission flags.
             preferences.edit().remove("audio-requested").commit()
-            val heading = MainActivity::class.java.getDeclaredField("heading").apply { isAccessible = true }.get(activity) as TextView
-            instrumentation.runOnMainSync { heading.performClick() }
+            val title = MainActivity::class.java.getDeclaredField("pageTitle").apply { isAccessible = true }.get(activity) as TextView
+            instrumentation.runOnMainSync { assertTrue(!title.isClickable); title.performClick() }
             instrumentation.waitForIdleSync()
             assertNull("歌单列表不应重复显示本地音乐入口", activity.window.decorView.findViewWithTag<View>("playlist-choice-local"))
             assertEquals(PackageManager.PERMISSION_DENIED, context.checkSelfPermission(permission))
             instrumentation.runOnMainSync {
-                MainActivity::class.java.getDeclaredMethod("showPlaylists").apply { isAccessible = true }.invoke(activity)
                 if (activity.window.decorView.findViewWithTag<View>("home-drawer-host") != null) {
                     MainActivity::class.java.getDeclaredMethod("showNavigation").apply { isAccessible = true }.invoke(activity)
                 }

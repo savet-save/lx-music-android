@@ -2,22 +2,28 @@ package cn.toside.music.nativeapp.ui
 
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.net.Uri
 import android.os.Build
 import android.os.SystemClock
 import android.view.View
 import android.view.ViewGroup
 import android.widget.TextView
+import android.widget.EditText
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import cn.toside.music.nativeapp.R
 import cn.toside.music.nativeapp.data.Playlist
 import cn.toside.music.nativeapp.data.Playlists
+import cn.toside.music.nativeapp.data.Song
 import cn.toside.music.nativeapp.utils.PermissionPolicy
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
+import java.io.File
 
 @RunWith(AndroidJUnit4::class)
 class LocalNavigationTest {
@@ -49,7 +55,94 @@ class LocalNavigationTest {
         assertEquals(!local, listsRow.isSelected)
         assertEquals(if (local) palette.primary else palette.muted, (localRow.getChildAt(1) as TextView).currentTextColor)
         assertEquals(if (local) palette.muted else palette.primary, (listsRow.getChildAt(1) as TextView).currentTextColor)
-        assertEquals(activity.getString(if (local) R.string.ui_a9531e47b75d else R.string.ui_27c95ec6b766), (field(activity, "pageTitle") as TextView).text.toString())
+        val title = field(activity, "pageTitle") as TextView
+        val playlist = field(activity, "activePlaylist") as? Playlist
+        val name = when (playlist?.syncId) {
+            "default" -> activity.getString(R.string.playlist_trial)
+            "love" -> activity.getString(R.string.playlist_favorites)
+            else -> playlist?.name
+        }
+        assertEquals(if (local) activity.getString(R.string.ui_a9531e47b75d) else "$name ▾", title.text.toString())
+        assertEquals(!local, title.isClickable)
+        assertFalse((field(activity, "listHeaderView") as View).isShown)
+        assertSame(field(activity, "headerListActions"), (field(activity, "listActionButton") as View).parent)
+        if (local) {
+            val drawer = field(activity, "playlistDrawer") as HomeDrawerLayout
+            val wasOpen = drawer.isOpen
+            title.performClick()
+            (field(activity, "heading") as View).performClick()
+            assertEquals(wasOpen, drawer.isOpen)
+        }
+    }
+
+    private fun capture(activity: MainActivity, name: String) {
+        if (InstrumentationRegistry.getArguments().getString("localHeaderScreenshots") != "true") return
+        val root = activity.findViewById<ViewGroup>(android.R.id.content).getChildAt(0)
+        val image = Bitmap.createBitmap(root.width, root.height, Bitmap.Config.ARGB_8888)
+        root.draw(Canvas(image))
+        val directory = File(instrumentation.targetContext.getExternalFilesDir(null), "local-header-validation").apply { mkdirs() }
+        File(directory, "$name.png").outputStream().use { image.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        image.recycle()
+    }
+
+    @Test fun headerSearchFiltersTheCurrentPlaylistAndLocalTitleNeverOpensThePicker() = runBlocking {
+        val context = instrumentation.targetContext
+        val lists = Playlists(context)
+        val id = lists.create("页内搜索测试")
+        val first = Song(System.nanoTime(), Uri.EMPTY, "海底", "测试歌手", 245000, "kw", "{}")
+        val second = first.copy(id = first.id + 1, title = "晴天", artist = "另一位歌手")
+        lists.add(id, first); lists.add(id, second)
+        val playlist = lists.list().single { it.id == id }
+        val activity = instrumentation.startActivitySync(Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
+        try {
+            await { activity.settingsPlayer() != null && activity.hasWindowFocus() }
+            for (layout in listOf(AdaptiveLayout(360, 800), AdaptiveLayout(1024, 768))) {
+                main {
+                    MainActivity::class.java.getDeclaredField("uiLayout").apply { isAccessible = true }.set(activity, layout)
+                    val density = activity.resources.displayMetrics.density
+                    activity.window.setLayout((layout.widthDp * density).toInt(), (layout.heightDp * density).toInt())
+                    invoke(activity, "applyThemeInPlace")
+                    MainActivity::class.java.getDeclaredMethod("loadPlaylist", Playlist::class.java).apply { isAccessible = true }.invoke(activity, playlist)
+                }
+                await("playlist and header layout") {
+                    (field(activity, "loadJob") as? Job)?.isActive != true &&
+                        (field(activity, "visibleSongs") as List<*>).size == 2 &&
+                        (field(activity, "pageTitle") as View).isLaidOut && !activity.window.decorView.isLayoutRequested
+                }
+                main {
+                    assertSelection(activity, local = false)
+                    capture(activity, "${layout.widthDp}-playlist")
+                    val action = field(activity, "listActionButton") as View
+                    val title = field(activity, "pageTitle") as View
+                    val actionPosition = IntArray(2); val titlePosition = IntArray(2)
+                    action.getLocationOnScreen(actionPosition); title.getLocationOnScreen(titlePosition)
+                    assertEquals(titlePosition[1] + title.height / 2, actionPosition[1] + action.height / 2)
+                    action.performClick()
+                    val search = field(activity, "search") as EditText
+                    assertTrue(search.isShown); assertTrue(search.hasFocus())
+                    search.setText("海底")
+                    assertEquals(listOf(first), field(activity, "visibleSongs"))
+                    invoke(activity, "applyThemeInPlace")
+                    assertEquals("海底", (field(activity, "search") as EditText).text.toString())
+                    assertEquals(listOf(first), field(activity, "visibleSongs"))
+                    assertSelection(activity, local = false)
+                }
+                await("search layout") { !(field(activity, "search") as View).rootView.isLayoutRequested }
+                main {
+                    capture(activity, "${layout.widthDp}-search")
+                    (field(activity, "searchClearButton") as View).performClick()
+                    assertEquals(2, (field(activity, "visibleSongs") as List<*>).size)
+                    (field(activity, "search") as EditText).setText("另一位")
+                    assertEquals(listOf(second), field(activity, "visibleSongs"))
+                    (field(activity, "listActionButton") as View).performClick()
+                    assertFalse((field(activity, "search") as View).isShown)
+                    assertEquals(2, (field(activity, "visibleSongs") as List<*>).size)
+                    MainActivity::class.java.getDeclaredMethod("openLocalPage", Boolean::class.javaPrimitiveType).apply { isAccessible = true }.invoke(activity, false)
+                }
+                await("local header") { (field(activity, "loadJob") as? Job)?.isActive != true && !activity.window.decorView.isLayoutRequested }
+                main { assertSelection(activity, local = true); capture(activity, "${layout.widthDp}-local") }
+            }
+        } finally { main { activity.finish() }; lists.delete(id); lists.close() }
     }
 
     @Test fun localSelectionAndTitleStaySeparateFromPlaylistsAcrossLayoutsAndRecreation() = runBlocking {
@@ -71,8 +164,8 @@ class LocalNavigationTest {
                     invoke(activity, "applyThemeInPlace")
                 }
                 await("${layout.widthDp} dp layout") {
-                    val heading = field(activity, "heading") as View
-                    heading.isAttachedToWindow && heading.isLaidOut && !heading.rootView.isLayoutRequested
+                    val title = field(activity, "pageTitle") as View
+                    title.isAttachedToWindow && title.isLaidOut && !title.rootView.isLayoutRequested
                 }
                 main {
                     MainActivity::class.java.getDeclaredMethod("loadPlaylist", Playlist::class.java).apply { isAccessible = true }.invoke(activity, favorites)
@@ -89,7 +182,7 @@ class LocalNavigationTest {
                 main {
                     assertSelection(activity, local = false)
                     assertFalse((field(activity, "playlistDrawer") as HomeDrawerLayout).isOpen)
-                    (field(activity, "heading") as View).performClick()
+                    (field(activity, "pageTitle") as View).performClick()
                 }
                 await("favorites row at ${layout.widthDp} dp") { activity.window.decorView.findViewWithTag<View>("playlist-choice-${favorites.id}")?.isShown == true }
                 main {
@@ -139,7 +232,7 @@ class LocalNavigationTest {
         try {
             await { activity.settingsPlayer() != null && activity.hasWindowFocus() }
             clickMyLists(); assertOpened(favorites.id)
-            main { (field(activity, "heading") as View).performClick() }
+            main { (field(activity, "pageTitle") as View).performClick() }
             await { activity.window.decorView.findViewWithTag<View>("playlist-choice-$customId")?.isShown == true }
             main { activity.window.decorView.findViewWithTag<View>("playlist-choice-$customId").performClick() }
             assertOpened(customId)

@@ -7,6 +7,7 @@
     <string name="playlist_trial">试听列表</string>
     <string name="playlist_actions_for">%1$s的歌单操作</string>
     <string name="playlist_close_picker">关闭歌单列表</string>
+    <string name="playlist_switch">切换歌单</string>
     <string name="playlist_open">打开</string>
     <string name="playlist_category">歌单分类</string>
     <string name="playlist_retry">重试</string>

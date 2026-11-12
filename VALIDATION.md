@@ -457,3 +457,11 @@ adb pull /sdcard/Android/data/cn.toside.music.nativeapp/files/adaptive-validatio
 - Android 9 的 `getPackageArchiveInfo` 仅在包含 `GET_SIGNATURES` 时收集 APK 证书；解析时额外传入该标志，仍通过 `SigningInfo` 严格验证签名、包名和版本，没有放宽安装校验。[Android 9 框架实现](https://android.googlesource.com/platform/frameworks/base/+/android-9.0.0_r61/core/java/android/content/pm/PackageManager.java)
 
 本地 Debug/测试 APK 构建、14 项 JVM 单元测试、Debug Lint（0 错误、53 警告）和 `bash -n scripts/device-regression.sh` 均通过。API 28 与 API 35 的完整设备回归结果以本次修复提交对应的 Native Android Actions 运行为准；本地 Android 12 设备不能替代 Android 9 的兼容性验收。
+
+## 本地音乐与歌单顶栏调整（2026-11-11）
+
+本地音乐和「我的列表」移除重复的第二行标题，搜索入口移入顶栏；当前歌单名称显示在顶栏并可点击切换，本地音乐标题不再打开歌单抽屉。搜索支持筛选当前列表、清空和收起，主题重建保留筛选。顶栏仅在内容或交互状态变化时更新，避免干扰在线歌单分页的滚动位置恢复。
+
+Debug/测试 APK 构建、48 项 JVM 单元测试和 Debug Lint 通过。Android 12（API 31）平板上的独立验证包通过首次授权流程，以及 `LocalNavigationTest`、`SearchPageTest`、`PlatformPopupTest` 的全部 17 项回归。覆盖 360×800、1024×768 dp 的顶栏布局、歌单切换、页内搜索、页面重建、平台弹层和在线歌单分页。日志保存在 `build/header-validation/permission-tests.txt`、`build/header-validation/final-all-tests.txt`。
+
+原生 View 截图位于 `build/header-validation/final-screens/`；手机尺寸预览来自平板窗口的布局绘制，不是手机硬件截图。本轮未运行 API 28/35 设备回归，也未推送或发布。

@@ -740,15 +740,17 @@ class PlaybackSettingsTest {
                 waitFor { fixture.player.artworkState.value.bitmap != null }
 
                 val activity = fixture.activity
-                val heading = field(activity, "heading") as TextView
                 fun selectPage(tag: String) = main { activity.window.decorView.findViewWithTag<View>(tag).performClick() }
                 selectPage("navigation-1")
                 assertEquals(true, field(activity, "onlineMode"))
                 selectPage("navigation-local")
-                assertEquals(activity.getString(R.string.ui_33eeaa47c231), heading.text.toString())
+                assertEquals(activity.getString(R.string.ui_a9531e47b75d), (field(activity, "pageTitle") as TextView).text.toString())
+                assertFalse((field(activity, "pageTitle") as View).isClickable)
                 assertTrue((field(activity, "visibleSongs") as List<*>).all { (it as Song).source == "local" })
                 val favorites = Playlists(context).use { it.loveList() }
-                main { heading.performClick() }
+                selectPage("navigation-0")
+                waitFor { (field(activity, "activePlaylist") as? Playlist)?.id == favorites }
+                main { (field(activity, "pageTitle") as View).performClick() }
                 val favoriteTag = "playlist-choice-$favorites"
                 waitFor { activity.window.decorView.findViewWithTag<View>(favoriteTag)?.isShown == true }
                 assertNull(activity.window.decorView.findViewWithTag<View>("playlist-choice-local"))

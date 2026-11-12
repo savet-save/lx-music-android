@@ -220,6 +220,7 @@ class MainActivity : FragmentActivity() {
     private lateinit var searchSourceButton: TextView
     private lateinit var searchClearButton: TextView
     private lateinit var headerSyncButton: View
+    private lateinit var headerListActions: LinearLayout
     private lateinit var listHeaderView: LinearLayout
     private lateinit var emptyIcon: TextView
     private lateinit var emptyHint: TextView
@@ -460,7 +461,6 @@ class MainActivity : FragmentActivity() {
             try { search.setText(retained.query) } finally { restoringSearchText = false }
             suggestionJob?.cancel(); setSearchVisible(retained.searchVisible)
             updateListAction()
-            pageTitle.text = getString(when { boardMode -> R.string.ui_1ee95aa94712; onlinePlaylistMode -> R.string.ui_473e57b72072; onlineMode -> R.string.ui_44ce7ae909bb; activePlaylist != null -> R.string.ui_27c95ec6b766; else -> R.string.ui_a9531e47b75d })
             heading.text = when { boardMode -> "›   ${selectedBoard?.name.orEmpty()}"; onlinePlaylistMode -> "›   ${selectedOnlinePlaylist?.name.orEmpty()}"
                 onlineMode -> getString(R.string.ui_e07216a6d505, sourceLabel()); activePlaylist != null -> "›   ${activePlaylist!!.displayName}"; else -> getString(R.string.ui_33eeaa47c231) }
             if (preferences.saveScroll) { pendingScroll = retained.first to retained.top; pendingPlaylistGridState = retained.playlistGridState }
@@ -695,11 +695,16 @@ class MainActivity : FragmentActivity() {
         val menu = lx.icon(59680, getString(R.string.ui_e35a36e26d52), 19f) { showNavigation() }
         pageTitle = lx.label(getString(R.string.ui_a9531e47b75d), 19f).apply {
             setPadding(dp(8), 0, dp(8), 0); setTypeface(null, Typeface.BOLD)
+            tag = "music-page-title"; gravity = Gravity.CENTER_VERTICAL; minHeight = dp(48)
+            maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END; isAccessibilityHeading = true
+            setOnClickListener { if (!onlineMode && activePlaylist != null) showPlaylists() }
         }
         if (!uiLayout.expanded && !preferences.menuOnRight) header.addView(menu, LinearLayout.LayoutParams(dp(48), dp(48)))
         header.addView(pageTitle, LinearLayout.LayoutParams(0, -2, 1f))
         searchTabs = buildSearchTabs()
         header.addView(searchTabs, LinearLayout.LayoutParams(-2, -2))
+        headerListActions = LinearLayout(this).apply { tag = "music-header-actions"; visibility = View.GONE }
+        header.addView(headerListActions, LinearLayout.LayoutParams(dp(48), dp(48)))
         headerSyncButton = lx.icon(59687, getString(R.string.ui_727036c7fc2a)) { showSyncSettings() }
         header.addView(headerSyncButton, LinearLayout.LayoutParams(dp(48), dp(48)))
         if (uiLayout.expanded || preferences.menuOnRight) header.addView(menu, LinearLayout.LayoutParams(dp(48), dp(48)))
@@ -719,7 +724,7 @@ class MainActivity : FragmentActivity() {
             text = getString(R.string.ui_33eeaa47c231); textSize = 14f; setTextColor(foreground); gravity = Gravity.CENTER_VERTICAL
             background = lx.touch(); isFocusable = true; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
             setPadding(dp(15), 0, dp(8), 0); setOnClickListener {
-                if (boardMode) showBoards() else if (onlinePlaylistMode) showOnlinePlaylists() else if (onlineMode) showSearchSources() else showPlaylists()
+                if (boardMode) showBoards() else if (onlinePlaylistMode) showOnlinePlaylists() else if (onlineMode) showSearchSources() else if (activePlaylist != null) showPlaylists()
             }
             setOnLongClickListener {
                 if ((boardMode || onlinePlaylistMode) && allSongs.isNotEmpty()) { saveCurrentOnlineList(); true } else false
@@ -731,7 +736,20 @@ class MainActivity : FragmentActivity() {
             background = lx.touch(); isFocusable = true
             setOnClickListener {
                 if (boardMode || onlinePlaylistMode) showOnlineListActions()
-                else setSearchVisible(search.visibility != View.VISIBLE)
+                else {
+                    if (!onlineMode) playlistDrawer?.close(false)
+                    val visible = search.visibility != View.VISIBLE
+                    setSearchVisible(visible)
+                    if (!onlineMode) {
+                        if (visible) {
+                            search.requestFocus()
+                            search.post {
+                                if (search.isShown && !onlineMode) (getSystemService(INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager)
+                                    .showSoftInput(search, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT)
+                            }
+                        } else { search.text.clear(); hidePageKeyboard() }
+                    }
+                }
             }
             setOnLongClickListener { showBatchSongs(); true }
         }
@@ -947,9 +965,17 @@ class MainActivity : FragmentActivity() {
         hidden.visibility = View.GONE
         if (shown.emptyView !== resultsEmpty) shown.emptyView = resultsEmpty
         val compact = catalog && !uiLayout.expanded
+        val personal = !onlineMode
+        val actionsParent = if (personal) headerListActions else listHeaderView
+        if (listActionButton.parent !== actionsParent) {
+            (listActionButton.parent as? ViewGroup)?.removeView(listActionButton)
+            actionsParent.addView(listActionButton, LinearLayout.LayoutParams(dp(48), dp(48)))
+        }
+        headerListActions.visibility = if (personal) View.VISIBLE else View.GONE
+        updatePageTitle()
         searchTabs.visibility = if (catalog) View.VISIBLE else View.GONE
         headerSyncButton.visibility = if (compact) View.GONE else View.VISIBLE
-        listHeaderView.visibility = if (compact) View.GONE else View.VISIBLE
+        listHeaderView.visibility = if (personal || compact) View.GONE else View.VISIBLE
         searchTabLabels.forEach { (playlists, label) ->
             val selected = playlistSearchMode == playlists
             label.isSelected = selected; (label.parent as View).isSelected = selected
@@ -961,7 +987,7 @@ class MainActivity : FragmentActivity() {
         searchSourceButton.visibility = if (compact) View.VISIBLE else View.GONE
         searchSourceButton.text = sourceLabel()
         searchSourceButton.contentDescription = "${getString(R.string.ui_9b980a0136e4)}: ${sourceLabel()}"
-        searchClearButton.visibility = if (catalog) View.VISIBLE else View.GONE
+        searchClearButton.visibility = if (catalog || personal) View.VISIBLE else View.GONE
         searchClearButton.isEnabled = search.text.isNotEmpty(); searchClearButton.alpha = if (searchClearButton.isEnabled) .8f else .35f
         search.background = if (compact) null else lx.shape(lx.panel, border = palette.divider)
         search.setPadding(if (compact) 0 else dp(16), dp(8), if (compact) 0 else dp(16), dp(8))
@@ -979,6 +1005,23 @@ class MainActivity : FragmentActivity() {
         emptyHint.setPadding(0, if (catalog) 0 else dp(16), 0, 0)
         tableHeader?.visibility = if (catalog && playlistSearchMode) View.GONE else View.VISIBLE
         status.visibility = if (compact && status.text.isBlank()) View.GONE else View.VISIBLE
+    }
+    private fun updatePageTitle() {
+        val playlist = activePlaylist.takeUnless { onlineMode }
+        val label = when {
+            boardMode -> getString(R.string.ui_1ee95aa94712)
+            onlinePlaylistMode -> getString(R.string.ui_473e57b72072)
+            onlineMode -> getString(R.string.ui_44ce7ae909bb)
+            playlist != null -> "${playlist.displayName} ▾"
+            else -> getString(R.string.ui_a9531e47b75d)
+        }
+        if (pageTitle.text.toString() != label) pageTitle.text = label
+        val selectable = playlist != null
+        if (pageTitle.isClickable != selectable || selectable && pageTitle.background == null) {
+            pageTitle.isClickable = selectable; pageTitle.isFocusable = selectable
+            pageTitle.background = if (selectable) lx.touch() else null
+        }
+        pageTitle.contentDescription = playlist?.let { "${it.displayName}, ${getString(R.string.playlist_switch)}" }
     }
     private fun setCatalogStatus(message: CharSequence) {
         status.setTextColor(palette.muted); status.contentDescription = null; status.text = message
@@ -1184,7 +1227,7 @@ class MainActivity : FragmentActivity() {
             pendingScroll = null
         }
         onlineMode = false; boardMode = false; onlinePlaylistMode = false; activePlaylist = null
-        updateListAction(); pageTitle.text = getString(R.string.ui_a9531e47b75d); loadMore.visibility = View.GONE
+        updateListAction(); loadMore.visibility = View.GONE
         heading.text = getString(R.string.ui_33eeaa47c231); search.text.clear(); setSearchVisible(false)
         if (hasAudioPermission()) {
             filterSongs()
@@ -1197,7 +1240,7 @@ class MainActivity : FragmentActivity() {
     private fun openSearchPage(showTools: Boolean = true) {
         playlistDrawer?.close(false)
         showMusicPage()
-        onlineMode = true; boardMode = false; onlinePlaylistMode = false; updateListAction(); pageTitle.text = getString(R.string.ui_44ce7ae909bb); activePlaylist = null; heading.text = getString(R.string.ui_e07216a6d505, sourceLabel()); loadMore.visibility = View.GONE
+        onlineMode = true; boardMode = false; onlinePlaylistMode = false; updateListAction(); activePlaylist = null; heading.text = getString(R.string.ui_e07216a6d505, sourceLabel()); loadMore.visibility = View.GONE
         search.text.clear(); setSearchVisible(true); resetCatalogResults()
         if (showTools && preferences.hotSearch && uiLayout.expanded) showSearchTools()
     }
@@ -1270,6 +1313,7 @@ class MainActivity : FragmentActivity() {
             activePlaylist = updated; heading.text = "›   ${updated.displayName}"
             allSongs = songs; filterSongs()
         }
+        updateListAction()
     }
     private fun showPlaybackQuality() = openSettings("playback")
     private fun showPlaybackSettings() {
@@ -1593,7 +1637,7 @@ class MainActivity : FragmentActivity() {
         }
         val more = append && onlinePlaylistMode && selectedOnlinePlaylist == playlist && onlinePlaylistPage > 0
         val page = if (more) onlinePlaylistPage + 1 else 1
-        onlineMode = true; boardMode = false; onlinePlaylistMode = true; updateListAction(); pageTitle.text = getString(R.string.ui_473e57b72072); activePlaylist = null
+        onlineMode = true; boardMode = false; onlinePlaylistMode = true; updateListAction(); activePlaylist = null
         selectedOnlinePlaylist = playlist; heading.text = "›   ${playlist.name}"; setSearchVisible(false)
         if (!more) { allSongs = emptyList(); visibleSongs = emptyList(); list.adapter = null; onlinePlaylistPage = 0 }
         loadJob?.cancel(); loadMore.visibility = View.GONE; status.text = getString(R.string.ui_aed6f82d382c)
@@ -1618,7 +1662,7 @@ class MainActivity : FragmentActivity() {
         showMusicPage()
         val more = append && boardMode && selectedBoard == board && boardPage > 0
         val page = if (more) boardPage + 1 else 1
-        onlineMode = true; boardMode = true; onlinePlaylistMode = false; updateListAction(); pageTitle.text = getString(R.string.ui_1ee95aa94712); activePlaylist = null
+        onlineMode = true; boardMode = true; onlinePlaylistMode = false; updateListAction(); activePlaylist = null
         selectedBoard = board; heading.text = "›   ${board.name}"; setSearchVisible(false)
         if (!more) { allSongs = emptyList(); visibleSongs = emptyList(); list.adapter = null; boardPage = 0 }
         loadJob?.cancel(); loadMore.visibility = View.GONE; status.text = getString(R.string.ui_4760ac1e18cc)
@@ -1999,7 +2043,7 @@ class MainActivity : FragmentActivity() {
             if (!suppressPageNavigation) pendingScroll = null
         }
         onlineMode = false; boardMode = false; onlinePlaylistMode = false; activePlaylist = playlist
-        updateListAction(); pageTitle.text = getString(R.string.ui_27c95ec6b766)
+        updateListAction()
         loadMore.visibility = View.GONE
         heading.text = "›   ${playlist.displayName}"
         search.text.clear()

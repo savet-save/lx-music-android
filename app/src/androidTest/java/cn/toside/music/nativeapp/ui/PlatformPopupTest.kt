@@ -140,8 +140,10 @@ class PlatformPopupTest {
                     activity.window.setLayout((360 * density).toInt(), (800 * density).toInt())
                     invoke(activity, "applyThemeInPlace")
                 }
-                awaitLayout { field(activity, "heading") as View }
-                main { (field(activity, "heading") as View).performClick() }
+                awaitLayout { field(activity, "pageTitle") as View }
+                main { invoke(activity, "openMyLists") }
+                await("favorites page") { (field(activity, "activePlaylist") as? Playlist)?.id == favorites && (field(activity, "loadJob") as? Job)?.isActive != true }
+                main { (field(activity, "pageTitle") as View).performClick() }
                 await("the playlist rows") {
                     option("playlist-drawer-panel")?.translationX == 0f && option("playlist-more-$favorites")?.isShown == true &&
                         option("playlist-choice-$custom")?.isShown == true
@@ -149,7 +151,7 @@ class PlatformPopupTest {
                 main {
                     assertNull(option("playlist-choice-local"))
                     assertNull(option("playlist-more-local"))
-                    assertFalse(requireNotNull(option("playlist-choice-$favorites")).isSelected)
+                    assertTrue(requireNotNull(option("playlist-choice-$favorites")).isSelected)
                     assertTrue(bounds(requireNotNull(option("playlist-choice-$trial"))).top < bounds(requireNotNull(option("playlist-choice-$favorites"))).top)
                     assertEquals(activity.getString(R.string.playlist_trial), (option("playlist-choice-$trial") as TextView).text.toString())
                 }
@@ -163,7 +165,7 @@ class PlatformPopupTest {
                         assertEquals(button.bottom, menu.top)
                         assertTrue(abs(button.right - menu.right) <= 1)
                         assertTrue(visibleWindow(option("playlist-more-$builtin")!!).contains(menu))
-                        assertNull(field(activity, "activePlaylist"))
+                        assertEquals(favorites, (field(activity, "activePlaylist") as Playlist).id)
                         val remove = actionPosition(popup, "DELETE")
                         assertFalse(popup.adapter.isEnabled(remove))
                         assertFalse(popup.adapter.isEnabled(actionPosition(popup, "RENAME")))
@@ -181,7 +183,7 @@ class PlatformPopupTest {
                 await("single-tap playlist switch") {
                     (field(activity, "activePlaylist") as? Playlist)?.id == custom && option("playlist-drawer-panel")?.isShown == false
                 }
-                main { (field(activity, "heading") as View).performClick() }
+                main { (field(activity, "pageTitle") as View).performClick() }
                 await("the selected playlist row") { option("playlist-choice-$custom")?.let { it.isShown && it.isSelected } == true && option("playlist-drawer-panel")?.translationX == 0f }
                 tap("playlist-more-$custom")
                 await("custom playlist actions") { actions()?.rootView?.hasWindowFocus() == true }
@@ -399,7 +401,7 @@ class PlatformPopupTest {
         try {
             await { activity.settingsPlayer() != null }
             main {
-                val anchor = field(activity, "heading") as View
+                val anchor = field(activity, "pageTitle") as View
                 assertTrue(anchor.isAttachedToWindow)
                 activity.finish()
                 popup.show(anchor, listOf("kw"), listOf("Kuwo"), "kw", field(activity, "palette") as UiPalette) { }

@@ -7,6 +7,7 @@
     <string name="playlist_trial">Trial List</string>
     <string name="playlist_actions_for">Playlist actions for %1$s</string>
     <string name="playlist_close_picker">Close playlist picker</string>
+    <string name="playlist_switch">Switch playlist</string>
     <string name="playlist_open">Open</string>
     <string name="playlist_category">Playlist categories</string>
     <string name="playlist_retry">Retry</string>
