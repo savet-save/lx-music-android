@@ -19,9 +19,9 @@ internal class UserSourceLibrary(private val context: Context) {
     fun read(): UserSourceCatalog = synchronized(lock) {
         if (!target.baseFile.isFile) {
             val legacy = File(context.filesDir, "user-source.js")
-            val bundled = bundled()
-            val entry = if (legacy.isFile) metadata(legacy.inputStream().use { it.readBounded(2 * 1024 * 1024) }.toString(Charsets.UTF_8)) else bundled
-            return@synchronized UserSourceCatalog(entry.id, listOf(entry, bundled).distinctBy { it.id }).also(::write)
+            val bundled = listOf(bundled(BUNDLED_ASSET), bundled(BUNDLED_KUWO_ASSET))
+            val entry = if (legacy.isFile) metadata(legacy.inputStream().use { it.readBounded(2 * 1024 * 1024) }.toString(Charsets.UTF_8)) else bundled.first()
+            return@synchronized UserSourceCatalog(entry.id, (listOf(entry) + bundled).distinctBy { it.id }).also(::write)
         }
         val data = target.openRead().use { JSONObject(it.readBounded(32 * 1024 * 1024).toString(Charsets.UTF_8)) }
         val values = data.getJSONArray("sources")
@@ -30,10 +30,14 @@ internal class UserSourceLibrary(private val context: Context) {
             metadata(entry.getString("script")).copy(allowUpdateAlert = entry.optBoolean("allowUpdateAlert", true))
         }.distinctBy { it.id }
         val catalog = UserSourceCatalog(data.optString("selected").takeIf { id -> entries.any { it.id == id } }, entries)
-        // Migrate once, retaining existing selection (including an explicit disabled state).
-        // Version 2 also remembers removal, so deleted bundled sources are not re-added on restart.
-        if (data.optInt("version", 1) < 2) {
-            return@synchronized catalog.copy(entries = (entries + bundled()).distinctBy { it.id }).also(::write)
+        // Add each newly packaged source once, preserving selection, disabled state and earlier removals.
+        val version = data.optInt("version", 1)
+        if (version < CATALOG_VERSION) {
+            val additions = buildList {
+                if (version < 2) add(bundled(BUNDLED_ASSET))
+                if (version < 3) add(bundled(BUNDLED_KUWO_ASSET))
+            }
+            return@synchronized catalog.copy(entries = (entries + additions).distinctBy { it.id }).also(::write)
         }
         catalog
     }
@@ -56,11 +60,11 @@ internal class UserSourceLibrary(private val context: Context) {
         val current = read()
         write(current.copy(entries = current.entries.map { if (it.id == id) it.copy(allowUpdateAlert = enabled) else it }))
     }
-    private fun bundled(): UserSourceEntry = metadata(context.assets.open(BUNDLED_ASSET).use {
+    private fun bundled(asset: String): UserSourceEntry = metadata(context.assets.open(asset).use {
         it.readBounded(2 * 1024 * 1024).toString(Charsets.UTF_8)
     })
     private fun write(data: UserSourceCatalog) {
-        val raw = JSONObject().put("version", 2).put("selected", data.selected ?: JSONObject.NULL)
+        val raw = JSONObject().put("version", CATALOG_VERSION).put("selected", data.selected ?: JSONObject.NULL)
             .put("sources", JSONArray().apply { data.entries.forEach { put(JSONObject().put("script", it.script).put("allowUpdateAlert", it.allowUpdateAlert)) } })
             .toString().toByteArray(Charsets.UTF_8)
         require(raw.size <= 32 * 1024 * 1024) { "音源库超过 32 MB" }
@@ -70,6 +74,8 @@ internal class UserSourceLibrary(private val context: Context) {
     }
     companion object {
         const val BUNDLED_ASSET = "script/flower.js"
+        const val BUNDLED_KUWO_ASSET = "script/oiapi-kuwo.js"
+        private const val CATALOG_VERSION = 3
         private val lock = Any()
         fun metadata(script: String): UserSourceEntry {
             require(script.toByteArray(Charsets.UTF_8).size <= 2 * 1024 * 1024) { "音源文件超过 2 MB" }

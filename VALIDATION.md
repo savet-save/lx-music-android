@@ -473,3 +473,22 @@ Debug/测试 APK 构建、48 项 JVM 单元测试和 Debug Lint 通过。Android
 Debug/测试 APK 构建、48 项 JVM 单元测试和 Debug Lint 通过。Android 12 盒子的独立验证包执行 `PlatformPopupTest`、`PhoneNavigationDrawerTest` 和 `LocalNavigationTest`：12 项通过，1 项因真实窗口不是手机尺寸跳过。覆盖 600/1024 dp 左右侧栏图标中心对齐、360 dp 左右抽屉菜单去重、弹层边界和菜单动作分发。日志及截图位于 `build/menu-validation/`；原生 View 测量截图不等同于手机硬件截图。
 
 使用原正式签名构建 32 位 ARM 包，覆盖更新盒子上的 0.9.14，并实际打开左下角菜单确认对齐及去重效果。盒子截图为 `build/menu-validation/box-menu-open.png`，安装包和签名核对记录为 `build/menu-validation/verified-update.json`。
+
+## 内置酷我 320 kbps 与盒子升级（2026-11-13）
+
+0.9.16 新增内置 OIAPI 酷我音源。音源目录升级到版本 3，仅补充新增的酷我脚本，保留当前选择、停用状态、更新提醒偏好以及此前删除的野花；新目录写入后删除酷我也不会在重启时恢复。新安装仍默认选择野花，可在设置中切换到酷我。
+
+同签名 Release ARMv7 包在 YYA-H618（Android 12 / API 31）从 0.9.14 原位覆盖到 0.9.16 / 9016，首次安装时间保持不变。Release 构建、48 项 JVM 单元测试和 Release Lint 通过。最终音源库/在线导入设备回归报告为 `OK (16 tests)`，旧野花联网检查未开启。验证新增源初始化、旧版目录和单脚本迁移、禁用、删除、去重与原偏好保留；一次实时取链出现 DNS 失败，检查连通后重试通过，未更改系统 DNS。
+
+使用显式开启联网的 `BuiltinKuwoPlaybackTest` 调用正式应用的播放服务和下载管理流程，验证《茶花开了》—王睿卓（酷我 ID `442087398`）。播放设置为 320k，自动降低音质关闭，实际 Media3 解码格式为 320,000 bit/s / 44.1 kHz，进度在 6 秒内正常推进，无播放错误。随后应用完整下载成功，下载页显示 100%、下载完成、320K。Android MediaExtractor 检测文件为 320,000 bit/s，时长 270,027 ms，总长 10,802,282 字节。
+
+拉取盒子实际下载的文件并核对 SHA-256，顺序扫描全部 10,338 个 MP3 帧，码率均为 320 kbps / 44.1 kHz，末尾保留 128 字节标签，无截断帧。SHA-256 为 `72bee22ac28b0d2b264b99525726a3277494ffacc3c2af6ac8164bc17c968414`。
+
+该联网测试默认跳过，显式执行命令为：
+
+```powershell
+adb shell am instrument -w -e class cn.toside.music.nativeapp.source.UserSourceLibraryTest -e liveKuwoSource true cn.toside.music.nativeapp.test/cn.toside.music.nativeapp.NativeTestRunner
+adb shell am instrument -w -e class cn.toside.music.nativeapp.player.BuiltinKuwoPlaybackTest -e liveKuwoPlayback true cn.toside.music.nativeapp.test/cn.toside.music.nativeapp.NativeTestRunner
+```
+
+本轮使用与正式包相同证书的 Release 测试包，没有卸载目标应用。播放/下载测试会实际播放示例歌曲、插入队列并保留完成的下载；成功后保留酷我音源、320k 和关闭自动降质的设置并暂停播放。设备生成的报告位于应用外部文件目录 `verification-320.json`；本地独立核验报告及下载页截图分别为 `build/source-diagnostics/box-320-verification.json`、`build/source-diagnostics/box-download-complete.png`。结果仅覆盖该歌曲和本次接口状态。
