@@ -17,6 +17,17 @@ internal object ForegroundTestActivities {
             "am start -W -n $packageName/cn.toside.music.nativeapp.ui.MainActivity"
         )).bufferedReader().use { it.readText() }
         instrumentation.waitForIdleSync()
+        if (intent.component?.className == MainActivity::class.java.name) {
+            var activity: MainActivity? = null
+            instrumentation.runOnMainSync {
+                activity = ActivityLifecycleMonitorRegistry.getInstance().getActivitiesInStage(Stage.RESUMED).filterIsInstance<MainActivity>().firstOrNull()
+            }
+            val host = requireNotNull(activity) { "Test host did not open" }
+            if (intent.action != null || intent.data != null || intent.extras != null) instrumentation.runOnMainSync {
+                MainActivity::class.java.getDeclaredMethod("onNewIntent", Intent::class.java).apply { isAccessible = true }.invoke(host, intent)
+            }
+            return host
+        }
         val monitor = instrumentation.addMonitor(requireNotNull(intent.component).className, null, false)
         try {
             instrumentation.runOnMainSync {

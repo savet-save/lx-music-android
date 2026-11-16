@@ -55,11 +55,14 @@ class PermissionFlowTest {
         val context = instrumentation.targetContext
         val permission = PermissionPolicy.audio(Build.VERSION.SDK_INT)
         assumeTrue(context.checkSelfPermission(permission) != PackageManager.PERMISSION_GRANTED)
-        val activity = instrumentation.startActivitySync(Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
+        val activity = ForegroundTestActivities.start(Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
         val preferences = context.getSharedPreferences("permission-history", 0)
         val hadHistory = preferences.contains("audio-requested")
         val oldHistory = preferences.getBoolean("audio-requested", false)
         try {
+            instrumentation.runOnMainSync {
+                MainActivity::class.java.getDeclaredMethod("openLocalPage", Boolean::class.javaPrimitiveType).apply { isAccessible = true }.invoke(activity, false)
+            }
             val field = MainActivity::class.java.getDeclaredField("status").apply { isAccessible = true }
             val status = field.get(activity) as TextView
             assertTrue(status.text.toString().contains("点击这里"))

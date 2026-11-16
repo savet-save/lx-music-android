@@ -275,6 +275,7 @@ class MainActivity : FragmentActivity() {
     private var pendingPlaylistGridState: Parcelable? = null
     private var restoringSearchText = false
     private var suppressPageNavigation = false
+    private var homePageMemoryReady = false
     private var beforePlaylistSaved: Bundle? = null
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
@@ -348,12 +349,14 @@ class MainActivity : FragmentActivity() {
         buildUi()
         initializeNavigation()
         if (preferences.bool("common.isAgreePact")) {
-            if (!restorePage(savedInstanceState)) { if (hasAudioPermission()) loadSongs() else showLocalPermissionPrompt() }
+            if (!restorePage(savedInstanceState)) openStartupPage()
+            homePageMemoryReady = true
             if (savedInstanceState?.getBoolean("playlist-drawer-open") == true) window.decorView.post {
                 if (navigation?.currentDestination?.id == R.id.music_page) showPlaylists()
             }
         } else pactDialog = showPact(this, scope) {
-            if (hasAudioPermission()) loadSongs() else showLocalPermissionPrompt()
+            openStartupPage()
+            homePageMemoryReady = true
             startAppServices()
         }
     }
@@ -503,6 +506,34 @@ class MainActivity : FragmentActivity() {
             onlineMode -> if (search.text.isNotBlank()) searchOnline() else { setCatalogStatus("") }
             activePlaylist != null -> { val query = search.text.toString(); loadPlaylist(activePlaylist!!); search.setText(query) }
             hasAudioPermission() -> loadSongs(); else -> showLocalPermissionPrompt() }
+    }
+
+    private fun openStartupPage() {
+        val page = preferences.string("home.lastPage", "search")
+        openSearchPage(false)
+        when (page) {
+            "playlists" -> showOnlinePlaylists()
+            "charts" -> showBoards()
+            "my-lists" -> openMyLists()
+            "local" -> openLocalPage(false)
+        }
+    }
+
+    private fun rememberHomePage() {
+        if (!homePageMemoryReady || suppressPageNavigation) return
+        val page = when (navigation?.currentDestination?.id) {
+            R.id.playlist_browser -> "playlists"
+            R.id.charts_page -> "charts"
+            R.id.music_page, R.id.playlist_songs -> when {
+                boardMode -> "charts"
+                onlinePlaylistMode -> "playlists"
+                onlineMode -> "search"
+                activePlaylist != null -> "my-lists"
+                else -> "local"
+            }
+            else -> return
+        }
+        if (preferences.string("home.lastPage", "") != page) preferences.set("home.lastPage", page)
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -1452,6 +1483,7 @@ class MainActivity : FragmentActivity() {
                 restorePage(saved, restartLoads = reload)
             }
             updateDestinationChrome()
+            rememberHomePage()
         }
         onBackPressedDispatcher.addCallback(this, playlistDrawerBack)
         updateDestinationChrome()
@@ -1636,6 +1668,7 @@ class MainActivity : FragmentActivity() {
     }
     private fun updateListAction() {
         updateNavigationSelection()
+        rememberHomePage()
         if (::searchRow.isInitialized && ::emptyHint.isInitialized && ::status.isInitialized) updateSearchChrome()
         val menu = boardMode || onlinePlaylistMode
         listActionButton.text = (if (menu) 59667 else 59660).toChar().toString()
@@ -2053,7 +2086,7 @@ class MainActivity : FragmentActivity() {
         loadMore.visibility = View.GONE
         heading.text = "›   ${playlist.displayName}"
         search.text.clear()
-        if (switching) filterSongs()
+        if (switching) { setSearchVisible(false); filterSongs() }
         loadJob = scope.launch {
             try { allSongs = playlists.songs(playlist.id); filterSongs() }
             catch (e: CancellationException) { throw e }

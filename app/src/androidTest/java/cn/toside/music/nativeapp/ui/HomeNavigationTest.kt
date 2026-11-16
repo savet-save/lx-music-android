@@ -20,9 +20,12 @@ class HomeNavigationTest {
         val keys = listOf("common.homePageScroll", "search.isShowHotSearch")
         val saved = keys.associateWith { preferences.all[it] }
         preferences.edit().putBoolean("common.homePageScroll", false).putBoolean("search.isShowHotSearch", false).commit()
-        val activity = instrumentation.startActivitySync(Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
+        val activity = ForegroundTestActivities.start(Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
         try {
             instrumentation.waitForIdleSync()
+            instrumentation.runOnMainSync {
+                MainActivity::class.java.getDeclaredMethod("openLocalPage", Boolean::class.javaPrimitiveType).apply { isAccessible = true }.invoke(activity, false)
+            }
             val root = activity.window.decorView.findViewWithTag<HomeNavigationLayout>("home-content")
             val online = MainActivity::class.java.getDeclaredField("onlineMode").apply { isAccessible = true }
             fun gesture(right: Boolean, vertical: Boolean = false) { instrumentation.runOnMainSync {

@@ -5,6 +5,10 @@ import androidx.test.runner.AndroidJUnitRunner
 
 /** Ordinary feature tests start after onboarding; PactTest exercises first use explicitly. */
 class NativeTestRunner : AndroidJUnitRunner() {
+    override fun onCreate(arguments: Bundle) {
+        arguments.putString("listener", listOfNotNull(arguments.getString("listener"), HomePageTestListener::class.java.name).joinToString(","))
+        super.onCreate(arguments)
+    }
     private var originalAgreement: Boolean? = null
     private var prepared = false
     private var originalAutoCheck: Boolean? = null

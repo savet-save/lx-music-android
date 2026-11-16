@@ -66,7 +66,7 @@ class SearchPageTest {
         init {
             preferences.edit().putBoolean("search.isShowHotSearch", false).putBoolean("search.isShowHistorySearch", false).putBoolean("theme.dynamicBg", false)
                 .apply { overrides.forEach { (key, value) -> putString(key, value) } }.commit()
-            activity = instrumentation.startActivitySync(Intent(instrumentation.targetContext, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
+            activity = ForegroundTestActivities.start(Intent(instrumentation.targetContext, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
             instrumentation.waitForIdleSync()
             instrumentation.runOnMainSync { set(activity, "searchCatalog", catalog); open(activity) }
         }

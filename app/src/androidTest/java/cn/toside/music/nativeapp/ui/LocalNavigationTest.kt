@@ -93,7 +93,7 @@ class LocalNavigationTest {
         val second = first.copy(id = first.id + 1, title = "晴天", artist = "另一位歌手")
         lists.add(id, first); lists.add(id, second)
         val playlist = lists.list().single { it.id == id }
-        val activity = instrumentation.startActivitySync(Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
+        val activity = ForegroundTestActivities.start(Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
         try {
             await { activity.settingsPlayer() != null && activity.hasWindowFocus() }
             for (layout in listOf(AdaptiveLayout(360, 800), AdaptiveLayout(1024, 768))) {
@@ -152,10 +152,13 @@ class LocalNavigationTest {
             instrumentation.uiAutomation.grantRuntimePermission(context.packageName, permission)
         }
         val favorites = Playlists(context).use { lists -> lists.list().first { it.syncId == "love" } }
-        var activity = instrumentation.startActivitySync(Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
+        var activity = ForegroundTestActivities.start(Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
         try {
             await { activity.settingsPlayer() != null && activity.hasWindowFocus() }
-            main { assertSelection(activity, local = true) }
+            main {
+                MainActivity::class.java.getDeclaredMethod("openLocalPage", Boolean::class.javaPrimitiveType).apply { isAccessible = true }.invoke(activity, false)
+                assertSelection(activity, local = true)
+            }
             for (layout in listOf(AdaptiveLayout(360, 800), AdaptiveLayout(1024, 768))) {
                 main {
                     val density = activity.resources.displayMetrics.density
@@ -216,7 +219,7 @@ class LocalNavigationTest {
         val lists = Playlists(context)
         val favorites = lists.list().first { it.syncId == "love" }
         val customId = lists.create("Last opened ${System.nanoTime()}")
-        fun launch() = instrumentation.startActivitySync(Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
+        fun launch() = ForegroundTestActivities.start(Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
         var activity = launch()
         fun clickMyLists() = main {
             if (field(activity, "navigationDrawer") != null) invoke(activity, "showNavigation")
