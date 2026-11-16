@@ -614,3 +614,7 @@ M2007J17C（API 31）独立测试包中 18 项下载回归通过，包含 6 项�
 第二轮完整回归中 Android 28 已通过，Android 35 仅剩预测返回的手势中 Fragment 标签查询断言失败。对照 AndroidX 官方 FragmentAnimatorTest 的动画与取消用例，改为手势中检查原视图仍附着且动画随进度变化，取消后等待同一 Fragment 恢复 RESUMED，并检查回退栈、主导航 Fragment 和播放服务仍保持；提交手势仍要求播放器关闭而 Activity 与服务保留。该调整验证实际可见行为与取消恢复状态，不依赖过渡期间的标签索引。
 
 第三轮 Android 28 继续通过，Android 35 的手势中视图与动画断言通过，但取消恢复等待仍失败。将取消后的视图检查改为 Fragment 当前视图，允许框架重建视图，同时增加失败时的 Fragment、生命周期、当前视图附着和回退栈诊断，以进一步区分视图重建与恢复异常。
+
+详细诊断确认 Android 35 取消手势后，同一播放器已恢复 RESUMED、当前视图仍附着、回退栈为 1，但 alpha 停留在 0.27300477，属于实际界面恢复缺陷。PlayerDetailFragment.onResume 现在显式将透明度、横纵缩放还原为 1；回归同时验证左右两侧取消后的透明度、缩放、同一 Fragment、主导航与服务，以及完成手势后的退出行为。Android 15 验收继续以远程 API 35 结果为准。
+
+补丁后的 5 项手机播放器回归、52 项 JVM 测试、正式三架构构建与 Debug/Release Lint 均通过；手机测试覆盖返回只关闭播放器、设置返回歌词页、系统栏布局、AAC 码率与独立 MP3 菜单，记录为 build/native-v0.9.18-player-final-phone-tests.txt。20:20:26 保留数据覆盖手机正式版，最终 ARM64 APK 与手机安装包 SHA-256 一致：24308f12b942db32e0f746ee823b7512912325b98c1d7398f23d96e71deb9791；正式签名保持不变，三个 APK 的 16 KB zipalign 通过。

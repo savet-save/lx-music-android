@@ -12,6 +12,12 @@ class PlayerDetailFragment : Fragment() {
         (requireActivity() as MainActivity).createPlayerDetailView(
             savedInstanceState?.takeIf { it.containsKey(LYRICS) }?.getBoolean(LYRICS))
 
+    override fun onResume() {
+        super.onResume()
+        // A cancelled predictive pop can leave the restored view at its last seeked transform.
+        view?.apply { alpha = 1f; scaleX = 1f; scaleY = 1f }
+    }
+
     override fun onSaveInstanceState(outState: Bundle) {
         outState.putBoolean(LYRICS, (requireActivity() as MainActivity).playerLyricsVisible())
         super.onSaveInstanceState(outState)

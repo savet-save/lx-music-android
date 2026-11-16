@@ -36,7 +36,7 @@ class PlayerFragmentTest {
         fail("Timed out waiting for $label${detail.takeIf(String::isNotEmpty)?.let { ": $it" }.orEmpty()}")
     }
     private fun withPlayer(block: (MainActivity) -> Unit) {
-        val activity = instrumentation.startActivitySync(Intent(instrumentation.targetContext, MainActivity::class.java)
+        val activity = ForegroundTestActivities.start(Intent(instrumentation.targetContext, MainActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
         try {
             waitFor("service") { activity.settingsPlayer() != null }
@@ -149,6 +149,8 @@ class PlayerFragmentTest {
                     assertEquals(1, activity.supportFragmentManager.backStackEntryCount)
                     assertSame(fragment, activity.supportFragmentManager.primaryNavigationFragment)
                     assertSame(service, activity.settingsPlayer())
+                    assertEquals(1f, fragment.requireView().scaleX, 0f)
+                    assertEquals(1f, fragment.requireView().scaleY, 0f)
                 }
             }
             main { activity.onBackPressedDispatcher.dispatchOnBackStarted(BackEventCompat(0f, 300f, 0f, BackEventCompat.EDGE_LEFT)) }
