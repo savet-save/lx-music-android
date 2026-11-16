@@ -73,6 +73,9 @@ internal class PlayerDetailContent(
     val mode = icon(59649, R.string.player_play_mode, 24f, actions.mode).apply { tag = "player-mode" }
     val collect = icon(59670, R.string.ui_cc143006b20d, 25f, actions.collect).apply { tag = "player-collect" }
     val comments = icon(59672, R.string.ui_07f73642e525, 24f, actions.comments).apply { tag = "player-comments" }
+    val more = icon(59680, R.string.ui_38844b135cf7, 24f) {}.apply {
+        tag = "player-more"; setOnClickListener { actions.more(this) }
+    }
     val elapsed = label(16f, palette.muted).apply { tag = "player-elapsed" }
     val duration = label(16f, palette.muted).apply { tag = "player-duration"; gravity = Gravity.END or Gravity.CENTER_VERTICAL }
     val time = label(12f, palette.foreground).apply { tag = "player-time"; gravity = Gravity.END or Gravity.CENTER_VERTICAL }
@@ -145,11 +148,11 @@ internal class PlayerDetailContent(
             icon(59680, R.string.ui_f01b6815d826, 17f, actions.queue),
             comments,
             icon(59687, R.string.ui_8c38525734c0, 18f, actions.settings),
-            icon(59674, R.string.song_source_details, 17f) {}.apply { setOnClickListener { actions.more(this) } },
+            more,
             icon(59685, R.string.ui_dc0e25979181, 18f, actions.settings),
             icon(59648, R.string.ui_7afda7dc6745, 18f, actions.sleep),
             mode, collect,
-        ) else listOf(pageToggle, collect, mode, comments)
+        ) else listOf(pageToggle, collect, mode, comments, more)
         toolViews.forEach { view ->
             if (adaptive.splitPlayer) view.textSize = 17f
             view.setTextColor(palette.muted)

@@ -574,3 +574,17 @@ B站登录、播放详情和设置统一使用 LxStyles.backButton：相同字�
 手机 M2007J17C（ARM64 / API 31）6 项、盒子 YYA-H618（ARMv7 / API 31）6 项回归全部通过。覆盖三处主题色、设置页返回与标题的垂直中心、播放页 48 dp 触控区域及顶栏居中、360/600/1024 dp 等布局、平板及短横屏、深色、英文和 1.3 倍字号。未新增纯样式测试类，检查加入既有的播放布局、设置布局和登录页回归。Debug/正式签名 Release 构建、两种 Lint 及最终 16 KB 原生库/APK 对齐检查通过。
 
 预览已检查：登录页与深色播放页为包含系统栏的设备截图；360 dp 设置页和播放页为原生 View 测量绘制，使用设备当前歌曲文本，封面未加载时显示占位图。本轮未重新验证真实 B站账户登录或音频下载。手机测试包及测试组件按要求覆盖更新并保留，盒子独立测试包已清理，两端正式应用未覆盖，版本仍为 0.9.17，改动未提交或推送。记录位于 build/back-button-validation/；phone-main-tests.txt / phone-login-tests.txt / box-tests.txt 为测试日志，phone-screens/ / box-screens/ 为预览，build.txt 为构建和 Lint，native-alignment.txt 为对齐检查。
+
+## B站原始 AAC 下载、码率选择及手动 MP3 转换（2026-11-16）
+
+B站下载弹窗按实际返回的 AAC 音轨列出码率，使用稳定音轨 ID 解析所选音频，直接保存 M4A，不再自动转码。已有完整缓存时先显示离线选项，点击「查看其他可用码率」才查询其他音轨。下载仍先检查完整缓存，再补充第 1 P 信息及解析链接；播放缓存记录音轨 ID、码率和时长，相同音轨的原始播放缓存可用于指定码率下载，不跨音轨误用缓存。旧缓存没有码率元数据时显示近似平均码率。
+
+手机及平板播放页提供「更多 → 转换为 MP3」。转换使用本地下载文件或完整缓存导出的 M4A，另建持久化转换任务，生成 MP3 后保留原文件及缓存；移除转换任务仅移除新输出，失败可独立重试。转码时按输入文件的实际时长校验输出，避免视频标题或旧元数据时长导致误判。旧版本已经排队的自动 MP3 任务保留兼容处理。音源脚本原文及其指纹未修改，设置页单独更新原生 B站音源说明。
+
+手机 M2007J17C（9dd0fd82 / ARM64 / API 31）新增 AAC 数据用例 5 项、码率浮窗及播放更多入口 2 项均通过：真实 AAC/M4A 样本由设备编码器生成；验证离线缓存导出无需视频信息或音频请求、MediaPlayer 直接播放、低码率只使用对应缓存、显式音轨复用同一原始播放缓存、系统直接下载 M4A、不自动转码、转换输入持久化、失败重试及原文件字节不变。B站解析 10 项、旧 MP3 2 项、普通下载浮窗及播放布局复测通过；普通缓存下载、下载管理和音源管理回归也有通过记录。两项旧界面测试改用项目已有 ForegroundTestActivities，以适配 MIUI 前台启动限制。
+
+仍有 1 项未通过：MultiSourceDownloadsTest.interruptedTransferUsesNextSourceAfterHistoryReloadAndKeepsQuality 在该手机上多次等待 90 秒超时，最后启用 runDownloadJobs=true 后仍复现；未把它计为通过，原因尚未确定。日志保留在 build/aac-conversion-phone-regression.txt、build/aac-conversion-phone-final.txt、build/aac-conversion-phone-complete.txt。新增功能专项均通过，但本轮没有验证真实 B站账号及联网歌曲，未将模拟的码率列表或本地 AAC 样本描述为真实 B站端到端验收。
+
+48 项 JVM 单元测试通过，Debug、测试包和正式签名 Release 构建通过；Debug Lint 为 0 errors / 262 warnings，Release Lint Vital 通过，apksigner 验签及 zipalign 16 KB 对齐检查通过。构建记录为 build/aac-conversion-final.txt，码率浮窗预览为 build/aac-bitrate-options.png。正式 APK 为 app/build/outputs/apk/release/lx-music-native-v0.9.17-all.apk；版本保持 0.9.17 / 9017。只覆盖更新手机上的独立 .playercheck 测试包，正式应用未覆盖，未提交或推送。
+
+用户随后要求覆盖手机正式版：2026-11-16 18:06:27（Asia/Shanghai）通过 adb install -r 将上述 release 安装到手机 9dd0fd82 的 cn.toside.music.nativeapp，保留应用数据。安装返回 Success，版本仍为 0.9.17 / 9017，primaryCpuAbi=arm64-v8a；正式 MainActivity 冷启动返回 Status: ok，进程存活。已安装 base.apk 与构建产物 SHA-256 一致（86e16d00689970acfdf527439907022703153c291c365bda28b5d5be677f24f0）。记录为 build/aac-release-phone-update.txt；本次没有更新盒子。

@@ -33,7 +33,7 @@ class DownloadQualityDialogTest {
 
     @Test fun eachQualityShowsThemedProgressAndResultsAndDismissCancelsPendingWork() = runBlocking {
         val context = instrumentation.targetContext
-        val activity = instrumentation.startActivitySync(Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
+        val activity = ForegroundTestActivities.start(Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
         val song = Song(-140, Uri.EMPTY, "下载可用性检测", "测试歌手", 1000, "kg", """{"types":[{"type":"128k"},{"type":"320k"},{"type":"flac"}]}""")
         var dialog: Dialog? = null

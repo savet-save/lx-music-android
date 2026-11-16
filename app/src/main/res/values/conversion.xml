@@ -1,0 +1,15 @@
+<resources>
+    <string name="mp3_convert">转换为 MP3</string>
+    <string name="mp3_conversion_queued">已加入 MP3 转换任务，原文件会保留</string>
+    <string name="mp3_conversion_pending">该音频已有转换任务</string>
+    <string name="mp3_download_first">请先下载或完整缓存原始音频，再转换为 MP3</string>
+    <string name="mp3_already_mp3">该文件已经是 MP3</string>
+    <string name="download_quality_original">原始音频 %1$s</string>
+    <string name="download_original_bitrate">AAC / M4A · %1$s</string>
+    <string name="download_original_cached">AAC / M4A · %1$s · 使用完整缓存</string>
+    <string name="download_bitrate_unknown">码率未知</string>
+    <string name="download_bitrate_loading">正在读取可用的 AAC 码率…</string>
+    <string name="download_other_bitrates">查看其他可用码率</string>
+    <string name="download_bitrate_retry">重新读取码率</string>
+    <string name="bili_source_description">播放和下载视频原始 AAC 音频，下载时可选择可用码率。播放页“更多”可转换为 MP3，并保留原文件。</string>
+</resources>

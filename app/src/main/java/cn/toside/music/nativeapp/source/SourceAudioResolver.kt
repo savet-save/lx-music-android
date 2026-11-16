@@ -9,7 +9,7 @@ import kotlinx.coroutines.ensureActive
 import org.json.JSONObject
 
 internal data class SourceAudio(val url: String, val quality: String, val sourceId: String? = null,
-    val attemptedSources: List<String> = emptyList(), val sourceName: String? = null)
+    val attemptedSources: List<String> = emptyList(), val sourceName: String? = null, val bitrate: Long? = null, val trackId: Long? = null)
 
 internal class SourceResolutionException(val attemptedSources: List<String>, message: String, cause: Throwable? = null) :
     IllegalStateException(message, cause)
@@ -20,7 +20,7 @@ internal class SourceAudioResolver(private val sources: UserSources,
     suspend fun resolve(song: Song, quality: String, excluded: Set<String> = emptySet(),
         validate: suspend (String) -> Unit = {}): SourceAudio {
         val enabled = sources.catalog().enabledEntries
-        val requestedQuality = if (song.source == "bili") "original" else quality
+        val requestedQuality = if (song.source == "bili" && !quality.startsWith("aac-")) "original" else quality
         check(song.source != "bili" || sources.bilibiliEnabled()) { "请在设置 → 自定义音源中启用 B站音源" }
         check(enabled.isNotEmpty()) { "请至少启用一个音源" }
         val attempted = excluded.toMutableSet()
@@ -38,11 +38,12 @@ internal class SourceAudioResolver(private val sources: UserSources,
                     runtimeReady = true
                     if (!supported) return null
                     val info = JSONObject(candidate.sourceInfo ?: error("歌曲缺少音源信息"))
-                    val url = sources.musicUrlFrom(entry.id, candidate.source, info, requestedQuality)
+                    val audio = sources.audioFrom(entry.id, candidate.source, info, requestedQuality)
+                    val url = audio.url
                     val uri = Uri.parse(url)
                     require(uri.scheme in setOf("http", "https") && !uri.host.isNullOrBlank()) { "音源返回了无效的音频地址" }
                     validate(url)
-                    return SourceAudio(url, requestedQuality, entry.id, attempted.toList(), entry.name)
+                    return audio.copy(sourceId = entry.id, attemptedSources = attempted.toList(), sourceName = entry.name)
                 } catch (e: TimeoutCancellationException) {
                     currentCoroutineContext().ensureActive(); last = e
                 } catch (e: CancellationException) { throw e }

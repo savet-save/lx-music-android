@@ -411,7 +411,8 @@ internal class SettingsPage(
                 setOnCheckedChangeListener { _, checked -> change { service.setSourceEnabled(entry.id, checked) } }
             }
             row.addView(toggle, LinearLayout.LayoutParams(dp(52), dp(48)))
-            if (entry.description.isNotBlank()) list.addView(noteView(entry.description))
+            val description = if (UserSourceLibrary(activity).isBilibili(entry.id)) text(R.string.bili_source_description) else entry.description
+            if (description.isNotBlank()) list.addView(noteView(description))
         }
         heading(activity.getString(R.string.sources_enabled_count, catalog.enabled.size), "sources-enabled-heading")
         if (catalog.enabled.isEmpty()) list.addView(noteView(text(R.string.sources_none_enabled)))

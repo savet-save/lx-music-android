@@ -25,10 +25,16 @@ internal object Mp3Encoder {
 /** Decode with Android's codec, then encode actual MPEG Layer III frames through LAME. */
 internal object Mp3Transcoder {
     fun durationMs(context:Context,uri:Uri):Long {
+        return audioDurationMs(context, uri, "audio/mpeg")
+    }
+    fun sourceDurationMs(context: Context, uri: Uri): Long = audioDurationMs(context, uri, null)
+    private fun audioDurationMs(context: Context, uri: Uri, mime: String?): Long {
         val extractor=MediaExtractor()
         return try {
             extractor.setDataSource(context,uri,null)
-            val format=(0 until extractor.trackCount).map { extractor.getTrackFormat(it) }.first { it.getString(MediaFormat.KEY_MIME)=="audio/mpeg" }
+            val format=(0 until extractor.trackCount).map { extractor.getTrackFormat(it) }.first {
+                if (mime == null) it.getString(MediaFormat.KEY_MIME)?.startsWith("audio/") == true else it.getString(MediaFormat.KEY_MIME) == mime
+            }
             format.getLong(MediaFormat.KEY_DURATION)/1000
         } finally { extractor.release() }
     }

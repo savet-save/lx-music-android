@@ -51,6 +51,17 @@ class BilibiliTest {
         try { BilibiliApi.audioUrl(JSONObject("""{"dash":{"video":[]}}"""));fail("No audio") } catch(_:IllegalStateException) { }
         try { BilibiliApi.checked(JSONObject("""{"code":0,"data":{"v_voucher":"redacted"}}"""));fail("Verification required") } catch(_:IllegalStateException) { }
     }
+    @Test fun downloadChoicesPreserveActualAacBitratesAndTrackIds() {
+        val data = JSONObject("""{"dash":{"audio":[
+            {"id":30216,"codecs":"mp4a.40.2","mimeType":"audio/mp4","bandwidth":64000,"baseUrl":"https://a.example/low.m4a"},
+            {"id":30280,"codecs":"mp4a.40.2","mimeType":"audio/mp4","bandwidth":192000,"baseUrl":"https://a.example/high.m4a"},
+            {"id":30251,"codecs":"fLaC","mimeType":"audio/flac","bandwidth":1000000,"baseUrl":"https://a.example/lossless.flac"}
+        ]}}""")
+        val choices = BilibiliApi.parseAudioStreams(data)
+        assertEquals(listOf(192000L, 64000L), choices.map { it.bitrate })
+        assertEquals(listOf("original", "aac-30216"), choices.map { it.quality })
+        assertEquals("https://a.example/low.m4a", choices.single { it.quality == "aac-30216" }.url)
+    }
     @Test fun lyricsMatchAnotherPlatformOnlyForTheSameRecordingDurationAndVersion() = runBlocking {
         val song=Song(42,Uri.EMPTY,"茶花开了","王睿卓",270000,"local")
         val wrongDuration=song.copy(id=43,duration=240000,source="kw")

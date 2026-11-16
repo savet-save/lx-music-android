@@ -27,6 +27,7 @@ internal class BilibiliCredentials(context: Context) {
 }
 
 internal data class BilibiliAccount(val name: String, val vipActive: Boolean = false, val vipLabel: String = "")
+internal data class BilibiliAudio(val url: String, val bitrate: Long?, val quality: String = "original", val trackId: Long? = null)
 
 /** Web endpoints documented by bilibili-plugins/bilibili-api-collect. No account data goes to CDNs. */
 internal class BilibiliApi(private val context: Context? = null, private val session: String? = null) {
@@ -67,12 +68,16 @@ internal class BilibiliApi(private val context: Context? = null, private val ses
         }
         return parseSearch(json("/x/web-interface/wbi/search/type", mapOf("search_type" to "video", "keyword" to query, "page" to "$page", "page_size" to "20"), true))
     }
-    suspend fun audio(info: JSONObject): String {
+    suspend fun audio(info: JSONObject): String = audioStream(info).url
+    suspend fun audioStream(info: JSONObject, quality: String = "original"): BilibiliAudio =
+        audioStreams(info).firstOrNull { it.quality == quality || quality == "aac-${it.trackId}" }?.copy(quality = quality)
+            ?: error("该视频没有所选码率的 AAC 音频流")
+    suspend fun audioStreams(info: JSONObject): List<BilibiliAudio> {
         val bvid = info.getString("bvid")
         require(bvid.matches(Regex("BV[0-9A-Za-z]{10}"))) { "B站视频编号无效" }
-        val view = json("/x/web-interface/view", mapOf("bvid" to bvid))
-        val cid = view.getJSONArray("pages").getJSONObject(0).getLong("cid")
-        return audioUrl(json("/x/player/wbi/playurl", mapOf("bvid" to bvid, "cid" to "$cid", "fnval" to "16", "fnver" to "0", "fourk" to "0"), true))
+        val cid = info.optLong("cid").takeIf { it > 0 }
+            ?: json("/x/web-interface/view", mapOf("bvid" to bvid)).getJSONArray("pages").getJSONObject(0).getLong("cid")
+        return parseAudioStreams(json("/x/player/wbi/playurl", mapOf("bvid" to bvid, "cid" to "$cid", "fnval" to "16", "fnver" to "0", "fourk" to "0"), true))
     }
     suspend fun firstPart(song: Song): Song {
         val info=JSONObject(requireNotNull(song.sourceInfo))
@@ -132,13 +137,20 @@ internal class BilibiliApi(private val context: Context? = null, private val ses
                 add(Song(item.optLong("aid", bvid.hashCode().toLong()), Uri.EMPTY, title, "UP · ${item.optString("author")}", duration, "bili", info.toString()))
             }
         }
-        internal fun audioUrl(data: JSONObject): String {
+        internal fun audioUrl(data: JSONObject): String = parseAudio(data).url
+        internal fun parseAudio(data: JSONObject): BilibiliAudio = parseAudioStreams(data).first()
+        internal fun parseAudioStreams(data: JSONObject): List<BilibiliAudio> {
             val audio = data.optJSONObject("dash")?.optJSONArray("audio") ?: error("该视频没有可用的独立音频流，可能需要登录")
-            return (0 until audio.length()).mapNotNull { audio.optJSONObject(it) }.filter {
+            val tracks = (0 until audio.length()).mapNotNull { audio.optJSONObject(it) }.filter {
                 it.optString("codecs").startsWith("mp4a") && it.optString("mimeType", it.optString("mime_type")).startsWith("audio/")
-            }.maxByOrNull { it.optLong("bandwidth") }?.let { it.optString("baseUrl", it.optString("base_url")) }
-                ?.takeIf { Uri.parse(it).scheme == "https" && !Uri.parse(it).host.isNullOrBlank() }
-                ?: error("没有可用的 AAC 音频流")
+            }.sortedByDescending { it.optLong("bandwidth") }.mapNotNull { selected ->
+                val url = selected.optString("baseUrl", selected.optString("base_url"))
+                    .takeIf { Uri.parse(it).scheme == "https" && !Uri.parse(it).host.isNullOrBlank() } ?: return@mapNotNull null
+                BilibiliAudio(url, selected.optLong("bandwidth").takeIf { it > 0 },
+                    "aac-${selected.optLong("id").takeIf { it > 0 } ?: selected.optLong("bandwidth")}", selected.optLong("id").takeIf { it > 0 })
+            }.distinctBy { it.quality }
+            check(tracks.isNotEmpty()) { "没有可用的 AAC 音频流" }
+            return tracks.mapIndexed { index, track -> if (index == 0) track.copy(quality = "original") else track }
         }
     }
 }

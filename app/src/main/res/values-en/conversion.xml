@@ -1,0 +1,15 @@
+<resources>
+    <string name="mp3_convert">Convert to MP3</string>
+    <string name="mp3_conversion_queued">MP3 conversion queued. The original file will be kept.</string>
+    <string name="mp3_conversion_pending">This audio already has a conversion task.</string>
+    <string name="mp3_download_first">Download or fully cache the original audio before converting to MP3.</string>
+    <string name="mp3_already_mp3">This file is already MP3.</string>
+    <string name="download_quality_original">Original audio %1$s</string>
+    <string name="download_original_bitrate">AAC / M4A · %1$s</string>
+    <string name="download_original_cached">AAC / M4A · %1$s · Complete cache</string>
+    <string name="download_bitrate_unknown">Unknown bitrate</string>
+    <string name="download_bitrate_loading">Loading available AAC bitrates…</string>
+    <string name="download_other_bitrates">Show other available bitrates</string>
+    <string name="download_bitrate_retry">Reload bitrates</string>
+    <string name="bili_source_description">Play and download original AAC audio with a choice of available bitrates. Convert to MP3 from the player’s More menu while keeping the original file.</string>
+</resources>

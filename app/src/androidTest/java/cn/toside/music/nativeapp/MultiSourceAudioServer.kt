@@ -10,13 +10,13 @@ import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
 
 /** Silent audio and terminal/partial HTTP failures for real player and system-download fallback. */
-internal class MultiSourceAudioServer : AutoCloseable {
+internal class MultiSourceAudioServer(payload: ByteArray? = null) : AutoCloseable {
     private val server = ServerSocket(0, 16, InetAddress.getByName("127.0.0.1"))
     private val sockets = ConcurrentHashMap.newKeySet<Socket>()
     val requests = CopyOnWriteArrayList<String>()
     val requestHeaders = CopyOnWriteArrayList<Map<String,String>>()
     private val broken = AtomicInteger()
-    val bytes = ByteBuffer.allocate(44 + 16000 * 12 * 2).order(ByteOrder.LITTLE_ENDIAN).apply {
+    val bytes = payload ?: ByteBuffer.allocate(44 + 16000 * 12 * 2).order(ByteOrder.LITTLE_ENDIAN).apply {
         put("RIFF".toByteArray()).putInt(capacity() - 8).put("WAVEfmt ".toByteArray()).putInt(16)
         putShort(1).putShort(1).putInt(16000).putInt(32000).putShort(2).putShort(16)
         put("data".toByteArray()).putInt(capacity() - 44)

@@ -94,11 +94,20 @@ internal class UserSources(private val context: Context) {
         check(id in catalog().enabled) { "音源未启用" }
         return withContext(Dispatchers.IO) { library.isBilibili(id) }
     }
-    suspend fun musicUrlFrom(id: String, source: String, info: JSONObject, quality: String): String =
-        if (nativeBilibili(id)) cn.toside.music.nativeapp.online.BilibiliApi(context).audio(info)
-        else runtime(id).musicUrl(source, info, quality, exactQuality = true)
+    suspend fun audioFrom(id: String, source: String, info: JSONObject, quality: String): SourceAudio =
+        if (nativeBilibili(id)) cn.toside.music.nativeapp.online.BilibiliApi(context).audioStream(info, quality).let {
+            SourceAudio(it.url, quality, bitrate = it.bitrate, trackId = it.trackId)
+        } else SourceAudio(runtime(id).musicUrl(source, info, quality, exactQuality = true), quality)
     suspend fun supportsFrom(id: String, source: String, action: String) = if (nativeBilibili(id)) source == "bili" && action == "musicUrl" else runtime(id).supports(source, action)
-    suspend fun hasQualityFrom(id: String, quality: String) = if (nativeBilibili(id)) quality == "original" else runtime(id).hasQuality(quality)
+    suspend fun hasQualityFrom(id: String, quality: String) = if (nativeBilibili(id)) quality == "original" || quality.matches(Regex("aac-[0-9]+")) else runtime(id).hasQuality(quality)
+    suspend fun bilibiliAudioOptions(info: JSONObject): List<SourceAudio> {
+        val entry = catalog().enabledEntries.firstOrNull { library.isBilibili(it.id) }
+            ?: error("请在设置 → 自定义音源中启用 B站音源")
+        return cn.toside.music.nativeapp.online.BilibiliApi(context).audioStreams(info).map {
+            val quality = it.trackId?.let { id -> "aac-$id" } ?: it.quality
+            SourceAudio(it.url, quality, entry.id, listOf(entry.id), entry.name, it.bitrate, it.trackId)
+        }
+    }
     suspend fun supports(source: String, action: String): Boolean {
         for (entry in catalog().enabledEntries) {
             try { if (supportsFrom(entry.id, source, action)) return true }

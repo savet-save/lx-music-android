@@ -274,6 +274,8 @@ class PlaybackService : Service() {
     internal suspend fun moveSource(id: String, delta: Int) = sourceMutex.withLock { userSource.move(id, delta) }
     internal suspend fun setEnabledSources(ids: List<String>) = sourceMutex.withLock { userSource.setEnabledOrder(ids) }
     internal suspend fun bilibiliEnabled() = userSource.bilibiliEnabled()
+    internal suspend fun bilibiliDownloadOptions(song: Song): List<SourceAudio> =
+        sourceMutex.withLock { userSource.bilibiliAudioOptions(JSONObject(requireNotNull(song.sourceInfo))) }
     internal suspend fun removeSource(id: String) = sourceMutex.withLock { userSource.remove(id) }
     internal suspend fun allowSourceUpdates(id: String, allowed: Boolean) = sourceMutex.withLock { userSource.allowUpdates(id, allowed) }
     internal suspend fun otherSources(song: Song): List<Song> = matcher.find(song)
@@ -429,7 +431,7 @@ class PlaybackService : Service() {
             sleepJob = null
         }
     }
-    private data class ResolvedAudio(val url: String, val quality: String)
+    private data class ResolvedAudio(val url: String, val quality: String, val bitrate: Long? = null, val trackId: Long? = null)
     private val playbackSourceAttempts = mutableMapOf<String, MutableSet<String>>()
     private fun preferredQuality() = getSharedPreferences("player", MODE_PRIVATE).getString("quality", "128k") ?: "128k"
     private fun audioResolver() = SourceAudioResolver(userSource, matcher::find, preferences.bool("player.autoSwitchSource", true))
@@ -450,7 +452,7 @@ class PlaybackService : Service() {
             try {
                 val audio = sourceMutex.withLock { audioResolver().resolve(song, candidate, attempts?.get(candidate).orEmpty()) }
                 attempts?.getOrPut(candidate) { mutableSetOf() }?.addAll(audio.attemptedSources)
-                return ResolvedAudio(audio.url, audio.quality)
+                return ResolvedAudio(audio.url, audio.quality, audio.bitrate, audio.trackId)
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) {
                 if (e is SourceResolutionException) attempts?.getOrPut(candidate) { mutableSetOf() }?.addAll(e.attemptedSources)
@@ -517,7 +519,7 @@ class PlaybackService : Service() {
         val resolved = cached ?: resolveAudio(song, preferred, playbackSourceAttempts)
         val key = AudioStreamCache.key(song, resolved.quality)
         val uri = Uri.parse(resolved.url)
-        withContext(Dispatchers.IO) { cache.remember(key, uri) }
+        withContext(Dispatchers.IO) { cache.remember(key, uri, resolved.bitrate, if (cached == null) song.duration else null, resolved.trackId) }
         prepareNativePlayer(song, uri, position, cache, key, resolved.quality)
     }
 

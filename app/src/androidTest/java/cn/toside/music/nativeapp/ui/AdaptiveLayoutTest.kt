@@ -25,7 +25,7 @@ import java.io.File
 class AdaptiveLayoutTest {
     private val instrumentation get() = InstrumentationRegistry.getInstrumentation()
     private fun start(): MainActivity {
-        var activity = instrumentation.startActivitySync(Intent(instrumentation.targetContext, MainActivity::class.java)
+        var activity = ForegroundTestActivities.start(Intent(instrumentation.targetContext, MainActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
         repeat(100) {
             instrumentation.waitForIdleSync()

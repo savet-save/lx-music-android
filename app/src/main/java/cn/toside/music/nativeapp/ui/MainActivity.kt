@@ -44,6 +44,7 @@ import cn.toside.music.nativeapp.player.PlayerSettings
 import cn.toside.music.nativeapp.player.PlayerState
 import cn.toside.music.nativeapp.source.UserSourceEntry
 import cn.toside.music.nativeapp.source.UserSourceLibrary
+import cn.toside.music.nativeapp.source.SourceAudio
 import cn.toside.music.nativeapp.sync.BackgroundSyncSettings
 import cn.toside.music.nativeapp.sync.BackgroundSyncState
 import cn.toside.music.nativeapp.sync.SyncService
@@ -191,7 +192,8 @@ class MainActivity : FragmentActivity() {
     private var onlinePlaylistPage = 0
     private var selectedBoard: Board? = null
     private var boardPage = 0
-    private data class DownloadRequest(val song: Song, val quality: String, val retryKey: String? = null)
+    private data class DownloadRequest(val song: Song, val quality: String, val retryKey: String? = null,
+        val conversion: Boolean = false, val address: SourceAudio? = null)
     private var pendingDownload: DownloadRequest? = null
     private var waitingForDownloadSettings = false
     private var waitingForServiceDownload: DownloadRequest? = null
@@ -1807,7 +1809,7 @@ class MainActivity : FragmentActivity() {
             settings = ::showPlaybackSettings,
             collect = { service?.state?.value?.song?.let(::choosePlaylistForSong) },
             comments = { service?.state?.value?.song?.takeIf { it.source != "local" }?.let { showComments(this, scope, it) } },
-            more = { anchor -> service?.state?.value?.song?.let { song -> showSongActionsFor(anchor, song, null, ::togglePlayback) } },
+            more = { anchor -> service?.state?.value?.song?.let { song -> showSongActionsFor(anchor, song, null, allowConversion = true, play = ::togglePlayback) } },
         ))
         detailContent = content
         detailTitle = content.title; detailTime = content.time; detailSeek = content.seek
@@ -2264,7 +2266,7 @@ class MainActivity : FragmentActivity() {
     private fun showSongActions(anchor: View, song: Song) =
         showSongActionsFor(anchor, song, activePlaylist) { playListedSong(song) }
 
-    private fun showSongActionsFor(anchor: View, song: Song, selected: Playlist?, play: () -> Unit) {
+    private fun showSongActionsFor(anchor: View, song: Song, selected: Playlist?, allowConversion: Boolean = false, play: () -> Unit) {
         val actions = buildList {
             add(R.string.ui_c3396195e91c)
             add(R.string.ui_94ca0a7bf933)
@@ -2276,6 +2278,7 @@ class MainActivity : FragmentActivity() {
             add(R.string.ui_732807e9a807)
             add(R.string.ui_804151aa3e97)
             add(R.string.song_source_details)
+            if (allowConversion) add(R.string.mp3_convert)
             if (song.source == "local") add(R.string.metadata_edit) else {
                 add(R.string.song_clear_cache)
                 add(R.string.ui_9be60bb7ddeb)
@@ -2300,6 +2303,7 @@ class MainActivity : FragmentActivity() {
 
     private fun runSongAction(action: Int, song: Song, selected: Playlist?, play: () -> Unit) {
         when (action) {
+            R.string.mp3_convert -> requestDownload(DownloadRequest(song, "mp3", conversion = true))
             R.string.lyrics_download -> startActivityForResult(LyricsDownloadActivity.intent(this,song),REQUEST_LYRICS_DOWNLOAD)
             R.string.ui_c3396195e91c -> play()
             R.string.metadata_edit -> startActivityForResult(MetadataActivity.intentFor(this, song), REQUEST_METADATA)
@@ -2389,12 +2393,38 @@ class MainActivity : FragmentActivity() {
         }
     }
     private fun chooseDownloadQuality(song: Song) {
-        if(song.source == "bili") {
-            AlertDialog.Builder(this).setTitle(getString(R.string.bili_mp3_download)).setMessage(getString(R.string.bili_mp3_hint))
-                .setNegativeButton(android.R.string.cancel,null).setPositiveButton(android.R.string.ok) { _,_ -> requestDownload(DownloadRequest(song,"mp3")) }.show()
+        if (downloadQualityDialog?.isShowing == true) return
+        if (song.source == "bili") {
+            var target = song
+            var prepared = emptyMap<String, SourceAudio>()
+            downloadQualityDialog = showBilibiliDownloadQuality(this, song, palette, lx, scope,
+                cached = {
+                    withContext(Dispatchers.IO) {
+                        val cache = AudioStreamCache.get(applicationContext)
+                        cache.completeAudios(song).map { (quality, audio) ->
+                            val duration = audio.durationMs ?: song.duration
+                            val rate = audio.bitrate?.let { "${(it + 500) / 1000} kbps" }
+                                ?: if (duration > 0) "≈${audio.length * 8 / duration} kbps" else getString(R.string.download_bitrate_unknown)
+                            BilibiliDownloadOption(quality, getString(R.string.download_original_cached, rate))
+                        }
+                    }
+                },
+                remote = {
+                    val player = service ?: error(getString(R.string.ui_7ca47a28e695))
+                    check(player.bilibiliEnabled()) { "请在设置 → 自定义音源中启用 B站音源" }
+                    target = if (org.json.JSONObject(song.sourceInfo ?: "{}").optLong("cid") <= 0)
+                        cn.toside.music.nativeapp.online.BilibiliApi(applicationContext).firstPart(song) else song
+                    val choices = player.bilibiliDownloadOptions(target)
+                    prepared = choices.associateBy { it.quality }
+                    choices.map { audio ->
+                        val rate = audio.bitrate?.let { "${(it + 500) / 1000} kbps" } ?: getString(R.string.download_bitrate_unknown)
+                        BilibiliDownloadOption(audio.quality, getString(R.string.download_original_bitrate, rate))
+                    }
+                },
+                dismissed = { if (downloadQualityDialog === it) downloadQualityDialog = null }
+            ) { quality -> requestDownload(DownloadRequest(target, quality, address = prepared[quality])) }
             return
         }
-        if (downloadQualityDialog?.isShowing == true) return
         downloadQualityDialog = showDownloadQuality(this, song, palette, lx, scope,
             probe = { quality, progress ->
                 val cached = withContext(Dispatchers.IO) { AudioStreamCache.get(applicationContext).completeAudio(song, quality) != null }
@@ -2409,7 +2439,7 @@ class MainActivity : FragmentActivity() {
     }
     internal fun retryDownload(task: DownloadTask) {
         val quality = task.quality ?: return
-        requestDownload(DownloadRequest(task.song, quality, task.key))
+        requestDownload(DownloadRequest(task.song, quality, task.key, conversion = task.isConversion))
     }
     private fun requestDownload(request: DownloadRequest) {
         val permission = PermissionPolicy.downloadWrite(Build.VERSION.SDK_INT)
@@ -2434,16 +2464,29 @@ class MainActivity : FragmentActivity() {
     }
     private fun downloadRequestToBundle(request: DownloadRequest) = songToBundle(request.song).apply {
         putString("download-quality", request.quality); putString("download-retry", request.retryKey)
+        putBoolean("download-conversion", request.conversion)
     }
     private fun downloadRequestFromBundle(bundle: Bundle) = DownloadRequest(songFromBundle(bundle),
-        bundle.getString("download-quality") ?: "128k", bundle.getString("download-retry"))
+        bundle.getString("download-quality") ?: "128k", bundle.getString("download-retry"), bundle.getBoolean("download-conversion"))
 
     private fun downloadSong(request: DownloadRequest) {
+        if (request.conversion) {
+            scope.launch {
+                try {
+                    val downloads = Downloads(applicationContext)
+                    val queued = request.retryKey?.let { downloads.retryMp3Conversion(it) } ?: downloads.startMp3Conversion(request.song)
+                    toast(getString(if (queued) R.string.mp3_conversion_queued else R.string.mp3_conversion_pending))
+                } catch (e: CancellationException) { throw e }
+                catch (e: Exception) { toast(e.localizedMessage.orEmpty()) }
+            }
+            return
+        }
         val player = service ?: run { waitingForServiceDownload = request; return }
         scope.launch {
             try {
-                check(request.song.source != "bili" || player.bilibiliEnabled()) { "请在设置 → 自定义音源中启用 B站音源" }
-                if (Downloads(applicationContext).startWithSources(request.song, request.quality, request.retryKey, player::resolveDownloadAddress)) {
+                if (Downloads(applicationContext).startWithSources(request.song, request.quality, request.retryKey) { song, quality, excluded ->
+                        request.address?.takeIf { excluded.isEmpty() } ?: player.resolveDownloadAddress(song, quality, excluded)
+                    }) {
                     toast(getString(R.string.ui_6b7ce36f8aa9))
                 }
             } catch (e: CancellationException) { throw e }
