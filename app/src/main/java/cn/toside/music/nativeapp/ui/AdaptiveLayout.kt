@@ -22,13 +22,29 @@ internal data class AdaptiveLayout(val widthDp: Int, val heightDp: Int) {
 }
 
 /** Fit the square artwork during measurement, including the first frame after resizing. */
-internal class AlbumCoverLayout(context: Context) : FrameLayout(context) {
+internal class AlbumCoverLayout(context: Context, private val expanded: Boolean = false) : FrameLayout(context) {
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val density = resources.displayMetrics.density
-        val size = minOf(MeasureSpec.getSize(widthMeasureSpec) - (40 * density).toInt(),
-            MeasureSpec.getSize(heightMeasureSpec) - (24 * density).toInt(), (340 * density).toInt()).coerceAtLeast(0)
+        val availableWidth = MeasureSpec.getSize(widthMeasureSpec)
+        val availableHeight = MeasureSpec.getSize(heightMeasureSpec)
+        val metadata = getChildAt(1)?.takeIf { it.visibility != GONE }
+        val maxWidth = (availableWidth * if (expanded) .72f else .80f).toInt()
+        metadata?.measure(MeasureSpec.makeMeasureSpec(maxWidth, MeasureSpec.EXACTLY), MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED))
+        val reserve = if (expanded) (48 * density).toInt() + (metadata?.measuredHeight ?: 0) else (24 * density).toInt()
+        val size = minOf(maxWidth, availableHeight - reserve, ((if (expanded) 340 else 420) * density).toInt()).coerceAtLeast(0)
         getChildAt(0)?.layoutParams?.apply { width = size; height = size }
+        metadata?.layoutParams?.width = size
         super.onMeasure(widthMeasureSpec, heightMeasureSpec)
+    }
+    override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
+        val album = getChildAt(0) ?: return
+        val x = (width - album.measuredWidth) / 2
+        val y = if (expanded) (32 * resources.displayMetrics.density).toInt() else (height - album.measuredHeight) / 2
+        album.layout(x, y, x + album.measuredWidth, y + album.measuredHeight)
+        getChildAt(1)?.takeIf { it.visibility != GONE }?.let {
+            val next = y + album.measuredHeight + (12 * resources.displayMetrics.density).toInt()
+            it.layout(x, next, x + album.measuredWidth, next + it.measuredHeight)
+        }
     }
 }
 

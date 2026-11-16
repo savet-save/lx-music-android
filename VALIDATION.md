@@ -492,3 +492,15 @@ adb shell am instrument -w -e class cn.toside.music.nativeapp.player.BuiltinKuwo
 ```
 
 本轮使用与正式包相同证书的 Release 测试包，没有卸载目标应用。播放/下载测试会实际播放示例歌曲、插入队列并保留完成的下载；成功后保留酷我音源、320k 和关闭自动降质的设置并暂停播放。设备生成的报告位于应用外部文件目录 `verification-320.json`；本地独立核验报告及下载页截图分别为 `build/source-diagnostics/box-320-verification.json`、`build/source-diagnostics/box-download-complete.png`。结果仅覆盖该歌曲和本次接口状态。
+
+## 播放页手机和平板参考样式（2026-11-13）
+
+按提供的两张参考图调整播放详情：手机为歌名/歌手分行、大封面、进度两端时间、大播放按钮及歌词/收藏/模式/评论图标；平板为左侧封面和三行歌曲信息、右侧居中渐隐歌词，进度、工具栏和右侧播放控制固定在整页底部。移除分栏分隔线和播放按钮圆形底色，使用已有 LX 字体图标。保留主题、歌词拖动定位、收藏、评论、队列、定时、模式和播放设置入口；歌词默认居中，显式设置的左/右对齐仍保留。重建页面或从设置返回时保留歌词显示状态。
+
+修复检查中发现的歌词绘制越过内容区域问题，保证不覆盖底部工具栏；首次布局和尺寸改变时立即将当前歌词居中，再对正常播放中的换行平滑滚动。进度条使用主题色及浅色细轨道。手机采用独立的当前时间与总时长，平板保留底部合并时间。
+
+Release/设备测试 APK 构建、48 项 JVM 单元测试、Release Lint 通过。Android 12 / API 31（YYA-H618）13 项设备检查全部通过：`PlayerDetailLayoutTest`、`AdaptiveLayoutTest`、`PlayerDetailTest`、`ScreenInsetsTest`、`PlayerSettingsTest`，以及 `PlaybackSettingsTest` 的设置/歌词校准和英文/繁体切换检查。验证 360×780、360×640、600×800、1024×700、844×390 dp 的控件边界和遮挡，另含深色、1.3 倍字体及页面重建。
+
+已保留数据覆盖安装盒子上的本地验证包，实际打开播放页检查平板效果；未更改版本号、创建提交或推送远程。手机尺寸图片是在盒子上测量并绘制真实 Android View 的预览，不是手机硬件窗口、状态栏或输入法实测。
+
+验证日志为 `build/player-style-validation/final-device-tests.txt`；手机封面页为 `build/player-style-validation/final-rendered/360x800-cover.png`，平板渲染图为 `build/player-style-validation/final-rendered/1024x700-cover.png`，实际盒子截图为 `build/player-style-validation/box-player-final.png`。其他尺寸和歌词页预览在同一 `final-rendered/` 目录中。

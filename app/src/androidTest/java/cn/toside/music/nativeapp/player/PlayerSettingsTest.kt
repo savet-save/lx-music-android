@@ -40,7 +40,7 @@ class PlayerSettingsTest {
                 .putInt("lyric-font-vertical", 500).putInt("lyric-align", 123).commit()
             val settings = PlayerSettings(context, name)
             assertEquals(1f, settings.playbackRate); assertEquals(1f, settings.volume)
-            assertEquals(LyricAppearance(21, LyricAlignment.LEFT), settings.appearance(false))
+            assertEquals(LyricAppearance(21, LyricAlignment.CENTER), settings.appearance(false))
             settings.setPlaybackRate(1.5f); settings.setVolume(0.4f)
             for (bad in listOf(Float.NaN, Float.POSITIVE_INFINITY, 0f, 2.1f)) {
                 try { settings.setPlaybackRate(bad); fail("invalid rate must fail") } catch (_: IllegalArgumentException) { }

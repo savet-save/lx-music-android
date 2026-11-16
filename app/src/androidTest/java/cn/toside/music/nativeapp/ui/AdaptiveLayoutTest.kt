@@ -162,7 +162,7 @@ class AdaptiveLayoutTest {
             instrumentation.runOnMainSync { invoke(current, "showPlayerDetails") }
             instrumentation.waitForIdleSync()
             val dialog = field(current, "playerDialog") as Dialog
-            val buttons = descendants(dialog.window!!.decorView).filterIsInstance<TextView>().filter { it.text.toString() in listOf("Sleep timer", "Play queue") }
+            val buttons = descendants(dialog.window!!.decorView).filterIsInstance<TextView>().filter { it.contentDescription?.toString() in listOf("Sleep timer", "Play queue") }
             assertTrue(buttons.isNotEmpty()); assertTrue(buttons.all { it.width > 0 })
             assertTrue(buttons.all { it.lineCount == 1 })
             capture(if (current.resources.configuration.screenWidthDp >= 600) "tablet-dark-player" else "phone-dark-player", current)

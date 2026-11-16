@@ -40,7 +40,7 @@ internal class PlayerSettings(private val context: Context, name: String = "play
         val font = number(fontKey(landscape), if (landscape) 22f else 21f)
             .takeIf { it.isFinite() && it in 10f..30f }?.toInt() ?: if (landscape) 22 else 21
         val savedAlignment = preferences.all[ALIGN] as? String
-        val alignment = LyricAlignment.entries.firstOrNull { it.name == savedAlignment } ?: LyricAlignment.LEFT
+        val alignment = LyricAlignment.entries.firstOrNull { it.name == savedAlignment } ?: LyricAlignment.CENTER
         return LyricAppearance(font, alignment)
     }
     fun setFontSize(value: Int, landscape: Boolean) {

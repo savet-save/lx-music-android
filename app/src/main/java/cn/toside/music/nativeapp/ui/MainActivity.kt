@@ -247,6 +247,7 @@ class MainActivity : FragmentActivity() {
     private lateinit var lyric: TextView
     private lateinit var loadMore: TextView
     private var playerDialog: Dialog? = null
+    private var detailContent: PlayerDetailContent? = null
     private var detailTitle: TextView? = null
     private var detailTime: TextView? = null
     private var detailSeek: SeekBar? = null
@@ -1428,7 +1429,7 @@ class MainActivity : FragmentActivity() {
                 val lyrics = restoreDetailLyrics
                 window.decorView.post {
                     showPlayerDetails()
-                    if (lyrics && !uiLayout.splitPlayer) toggleDetailPage()
+                    if (lyrics != detailShowingLyrics) toggleDetailPage()
                 }
             }
             if (destination.id != R.id.music_page) playlistDrawer?.close(false)
@@ -1709,36 +1710,8 @@ class MainActivity : FragmentActivity() {
     private fun showPlayerDetails() {
         val state = service?.state?.value ?: return
         if (playerDialog?.isShowing == true) return
-        val primary = palette.primary
-        val dialog = Dialog(this)
+        val dialog = Dialog(this).apply { requestWindowFeature(android.view.Window.FEATURE_NO_TITLE) }
         playerDialog = dialog
-        val content = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL; setBackgroundColor(palette.surface); fitsSystemWindows = true
-            tag = if (uiLayout.splitPlayer) "player-expanded" else "player-compact"
-        }
-        val header = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
-        header.addView(TextView(this).apply {
-            text = "‹"; textSize = 32f; gravity = Gravity.CENTER; setTextColor(palette.foreground); contentDescription = getString(R.string.ui_572cf45ba436)
-            setOnClickListener { dialog.dismiss() }
-        }, LinearLayout.LayoutParams(dp(48), dp(48)))
-        detailTitle = TextView(this).apply { textSize = 17f; setTextColor(palette.foreground); maxLines = 1; gravity = Gravity.CENTER_VERTICAL }
-        header.addView(detailTitle, LinearLayout.LayoutParams(0, dp(48), 1f))
-        detailPageToggle = TextView(this).apply {
-            text = getString(R.string.ui_9dbfa9b42bb3); textSize = 14f; gravity = Gravity.CENTER; setTextColor(primary)
-            visibility = if (uiLayout.splitPlayer) View.GONE else View.VISIBLE; background = lx.touch()
-            setOnClickListener { toggleDetailPage() }
-        }
-        header.addView(detailPageToggle, LinearLayout.LayoutParams(dp(56), dp(48)))
-        header.addView(lx.icon(59655, getString(R.string.ui_8c38525734c0)) { showPlaybackSettings() }, LinearLayout.LayoutParams(dp(48), dp(48)))
-        content.addView(header)
-        val splitBody = if (uiLayout.splitPlayer) LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL } else null
-        val playerArea = if (splitBody != null) LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL; setPadding(dp(16), 0, dp(16), dp(16))
-        } else content
-        if (splitBody != null) {
-            content.addView(splitBody, LinearLayout.LayoutParams(-1, 0, 1f))
-            splitBody.addView(playerArea, LinearLayout.LayoutParams(0, -1, .45f))
-        }
         val scroll = PlayerLyricScroll(this, lx.selected, {
             service?.state?.value?.let(::renderDetailTime)
         }, { index ->
@@ -1750,73 +1723,36 @@ class MainActivity : FragmentActivity() {
             } else detailScroll?.follow(detailActiveLine.coerceAtLeast(0))
         }).apply {
             lines.setPadding(dp(24), 0, dp(24), 0)
-            if (splitBody == null) {
+            if (!uiLayout.splitPlayer) {
                 contentDescription = getString(R.string.ui_ccbb5ee62b1a)
                 setOnClickListener { toggleDetailPage() }
             }
         }
-        detailScroll = scroll
-        val page = FrameLayout(this)
-        detailCover = AlbumCoverLayout(this).apply { setOnClickListener { if (!uiLayout.splitPlayer) toggleDetailPage() } }
-        val coverSize = dp(240)
-        val album = FrameLayout(this).apply {
-            background = lx.shape(palette.placeholder, 10); clipToOutline = true
-        }
-        album.addView(TextView(this).apply { text = "LX"; textSize = 58f; gravity = Gravity.CENTER; setTextColor(primary) }, FrameLayout.LayoutParams(-1, -1))
-        detailCoverImage = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER_CROP; visibility = View.GONE }
-        album.addView(detailCoverImage, FrameLayout.LayoutParams(-1, -1))
-        detailCover?.addView(album, FrameLayout.LayoutParams(coverSize, coverSize, Gravity.CENTER))
-        page.addView(detailCover, FrameLayout.LayoutParams(-1, -1))
-        if (splitBody == null) page.addView(scroll, FrameLayout.LayoutParams(-1, -1))
-        else {
-            splitBody.addView(View(this).apply { setBackgroundColor(palette.divider) }, LinearLayout.LayoutParams(dp(1), -1).apply { setMargins(0, dp(24), 0, dp(24)) })
-            splitBody.addView(scroll, LinearLayout.LayoutParams(0, -1, .55f))
-        }
-        detailShowingLyrics = uiLayout.splitPlayer; scroll.visibility = if (uiLayout.splitPlayer) View.VISIBLE else View.GONE
-        playerArea.addView(page, LinearLayout.LayoutParams(-1, 0, 1f))
-        detailTime = TextView(this).apply { textSize = 12f; gravity = Gravity.CENTER; setTextColor(palette.muted) }
-        playerArea.addView(detailTime)
-        detailSeek = SeekBar(this).apply {
-            progressTintList = ColorStateList.valueOf(primary); thumbTintList = ColorStateList.valueOf(primary)
-            contentDescription = getString(R.string.ui_fc16e2a0fca6)
-            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(bar: SeekBar?, progress: Int, fromUser: Boolean) = Unit
-                override fun onStartTrackingTouch(bar: SeekBar?) { detailSeeking = true }
-                override fun onStopTrackingTouch(bar: SeekBar?) { detailSeeking = false; service?.seekTo(bar?.progress ?: 0) }
-            })
-        }
-        playerArea.addView(detailSeek, LinearLayout.LayoutParams(-1, dp(if (uiLayout.compactPlayer) 32 else 40)).apply { setMargins(dp(12), 0, dp(12), 0) })
-        val controls = LinearLayout(this).apply { gravity = Gravity.CENTER; orientation = LinearLayout.HORIZONTAL }
-        fun button(code: Int, label: String, click: () -> Unit) = TextView(this).apply {
-            text = code.toChar().toString(); typeface = iconFont; textSize = 28f; gravity = Gravity.CENTER
-            setTextColor(primary); contentDescription = label; background = lx.touch(); isFocusable = true; setOnClickListener { click() }
-        }
-        controls.addView(button(59668, getString(R.string.ui_8c747908bf69)) { service?.previous() }, LinearLayout.LayoutParams(dp(72), dp(64)))
-        detailToggle = button(59653, getString(R.string.ui_c3396195e91c)) { togglePlayback() }
-        detailToggle?.background = lx.touch(lx.selected, 32)
-        controls.addView(detailToggle, LinearLayout.LayoutParams(dp(72), dp(64)))
-        controls.addView(button(59654, getString(R.string.ui_486e42475adb)) { service?.next() }, LinearLayout.LayoutParams(dp(72), dp(64)))
-        playerArea.addView(controls)
-        val options = LinearLayout(this).apply { gravity = Gravity.CENTER; orientation = LinearLayout.HORIZONTAL }
-        detailMode = lx.label("", 13f, palette.muted).apply {
-            gravity = Gravity.CENTER; background = lx.touch()
-            setOnClickListener { service?.cycleMode() }
-        }
-        options.addView(detailMode, LinearLayout.LayoutParams(0, dp(48), 1f))
-        options.addView(lx.label(getString(R.string.ui_7afda7dc6745), 13f, palette.muted).apply {
-            gravity = Gravity.CENTER; background = lx.touch()
-            setOnClickListener { showSleepTimer() }
-        }, LinearLayout.LayoutParams(0, dp(48), 1f))
-        options.addView(lx.label(getString(R.string.ui_f01b6815d826), 13f, palette.muted).apply {
-            gravity = Gravity.CENTER; background = lx.touch()
-            setOnClickListener { showPlaybackQueue() }
-        }, LinearLayout.LayoutParams(0, dp(48), 1f))
-        playerArea.addView(options)
+        val content = PlayerDetailContent(this, uiLayout, palette, iconFont, scroll, PlayerDetailActions(
+            close = { dialog.dismiss() }, lyrics = ::toggleDetailPage,
+            previous = { service?.previous() }, play = ::togglePlayback, next = { service?.next() },
+            mode = { service?.cycleMode() }, queue = ::showPlaybackQueue, sleep = ::showSleepTimer,
+            settings = ::showPlaybackSettings,
+            collect = { service?.state?.value?.song?.let(::choosePlaylistForSong) },
+            comments = { service?.state?.value?.song?.takeIf { it.source != "local" }?.let { showComments(this, scope, it) } },
+            more = { anchor -> service?.state?.value?.song?.let { song -> showSongActionsFor(anchor, song, null, ::togglePlayback) } },
+        ))
+        detailContent = content
+        detailTitle = content.title; detailTime = content.time; detailSeek = content.seek
+        detailToggle = content.toggle; detailMode = content.mode; detailScroll = scroll
+        detailCover = content.cover; detailCoverImage = content.coverImage; detailPageToggle = content.pageToggle
+        detailShowingLyrics = uiLayout.splitPlayer
+        content.showLyrics(detailShowingLyrics)
+        detailSeek?.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(bar: SeekBar?, progress: Int, fromUser: Boolean) = Unit
+            override fun onStartTrackingTouch(bar: SeekBar?) { detailSeeking = true }
+            override fun onStopTrackingTouch(bar: SeekBar?) { detailSeeking = false; service?.seekTo(bar?.progress ?: 0) }
+        })
         palette.background(content); palette.textStyle(content)
         dialog.setContentView(content)
         dialog.window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(palette.surface))
         dialog.setOnDismissListener {
-            playerDialog = null; detailTitle = null; detailTime = null; detailSeek = null; detailToggle = null; detailMode = null
+            playerDialog = null; detailContent = null; detailTitle = null; detailTime = null; detailSeek = null; detailToggle = null; detailMode = null
             detailScroll = null; detailCover = null; detailCoverImage = null; detailPageToggle = null
             detailRenderedLines = null; detailActiveLine = -1; detailSeeking = false
         }
@@ -1827,12 +1763,9 @@ class MainActivity : FragmentActivity() {
         renderDetails(state)
     }
     private fun toggleDetailPage() {
-        if (uiLayout.splitPlayer) return
         detailShowingLyrics = !detailShowingLyrics
         detailScroll?.cancelPreview()
-        detailCover?.visibility = if (detailShowingLyrics) View.GONE else View.VISIBLE
-        detailScroll?.visibility = if (detailShowingLyrics) View.VISIBLE else View.GONE
-        detailPageToggle?.text = if (detailShowingLyrics) getString(R.string.ui_ccbb5ee62b1a) else getString(R.string.ui_9dbfa9b42bb3)
+        detailContent?.showLyrics(detailShowingLyrics)
         detailActiveLine = -1
         service?.state?.value?.let { renderDetails(it) }
     }
@@ -1859,11 +1792,17 @@ class MainActivity : FragmentActivity() {
         val preview = detailScroll?.previewIndex?.let(lyricLines::getOrNull)
         val position = preview?.let { LyricTiming.seekPosition(it.timeMs, lyricDelayMs, state.duration) } ?: state.position
         detailTime?.text = "${formatTime(position)} / ${formatTime(state.duration)}"
+        detailContent?.elapsed?.text = formatTime(position)
+        detailContent?.duration?.text = formatTime(state.duration)
     }
 
     private fun renderDetails(state: PlayerState) {
         if (playerDialog?.isShowing != true) return
-        detailTitle?.text = state.song?.let { "${it.title}  ·  ${it.artist}" } ?: getString(R.string.ui_f518674b61f6)
+        detailContent?.renderSong(state.song)
+        detailContent?.status?.apply {
+            text = state.error.orEmpty()
+            visibility = if (state.error.isNullOrBlank()) View.GONE else View.VISIBLE
+        }
         renderDetailTime(state)
         detailSeek?.apply { max = state.duration.coerceAtLeast(0); if (!detailSeeking) progress = state.position }
         detailToggle?.apply {
@@ -1871,7 +1810,15 @@ class MainActivity : FragmentActivity() {
             contentDescription = if (state.playing) getString(R.string.ui_8d12fc0d4eb2) else getString(R.string.ui_c3396195e91c)
             isEnabled = state.song != null && !state.preparing
         }
-        detailMode?.text = state.mode.localized(this)
+        detailMode?.apply {
+            text = when (state.mode) {
+                cn.toside.music.nativeapp.player.PlayMode.LIST_LOOP -> 59649
+                cn.toside.music.nativeapp.player.PlayMode.ORDER -> 59651
+                cn.toside.music.nativeapp.player.PlayMode.SINGLE -> 59652
+                cn.toside.music.nativeapp.player.PlayMode.SHUFFLE -> 59650
+            }.toChar().toString()
+            contentDescription = state.mode.localized(this@MainActivity)
+        }
         val scroll = detailScroll ?: return
         val container = scroll.lines
         val newLyrics = detailRenderedLines !== lyricLines
@@ -2779,7 +2726,7 @@ class MainActivity : FragmentActivity() {
         renderDetails(state)
         if (playerRestorePending) {
             playerRestorePending = false; showPlayerDetails()
-            if (restoreDetailLyrics && !uiLayout.splitPlayer) toggleDetailPage()
+            if (restoreDetailLyrics != detailShowingLyrics) toggleDetailPage()
         }
         if (startupPlayerPending && song != null) { startupPlayerPending = false; showPlayerDetails() }
     }

@@ -884,7 +884,7 @@ class PlaybackSettingsTest {
                 main { restored.findViewWithTag<View>("playback-reset").performClick() }
                 assertEquals(1f, fixture.player.state.value.playbackRate, 0.01f)
                 assertEquals(1f, fixture.player.state.value.volume, 0.01f)
-                assertEquals(LyricAlignment.LEFT, settings.appearance(landscape).alignment)
+                assertEquals(LyricAlignment.CENTER, settings.appearance(landscape).alignment)
                 assertEquals(0, LyricOffsets(context).get(fixture.song))
             } finally { lrc.delete() }
         }
@@ -978,7 +978,7 @@ class PlaybackSettingsTest {
                     val notification = PlaybackService::class.java.getDeclaredMethod("notification").apply { isAccessible = true }.invoke(fixture.player) as android.app.Notification
                     assertEquals(if (language == "en") "Next song" else "下一首", notification.actions[2].title.toString())
                     invoke(fixture.activity, "showPlayerDetails")
-                    assertEquals(if (language == "en") "Repeat playlist" else "列表循環", (field(fixture.activity, "detailMode") as TextView).text.toString())
+                    assertEquals(if (language == "en") "Repeat playlist" else "列表循環", (field(fixture.activity, "detailMode") as TextView).contentDescription.toString())
                     screenshot("player-$language")
                     main { (field(fixture.activity, "playerDialog") as Dialog).dismiss() }
                 } finally { instrumentation.removeMonitor(monitor) }

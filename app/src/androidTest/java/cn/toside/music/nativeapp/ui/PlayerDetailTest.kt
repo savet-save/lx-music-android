@@ -38,7 +38,9 @@ class PlayerDetailTest {
             val toggle = toggleField.get(activity) as View
             instrumentation.runOnMainSync { toggle.performClick() }
             val scrollField = MainActivity::class.java.getDeclaredField("detailScroll").apply { isAccessible = true }
-            assertEquals(View.VISIBLE, (scrollField.get(activity) as View).visibility)
+            val split = activity.resources.configuration.let { it.screenWidthDp >= 600 && it.screenHeightDp >= 480 }
+            assertEquals(if (split) View.GONE else View.VISIBLE, (scrollField.get(activity) as View).visibility)
+            if (split) instrumentation.runOnMainSync { toggle.performClick() }
             instrumentation.runOnMainSync { dialog?.dismiss() }
             val openSync = MainActivity::class.java.getDeclaredMethod("showSyncSettings").apply { isAccessible = true }
             instrumentation.runOnMainSync { openSync.invoke(activity) }
