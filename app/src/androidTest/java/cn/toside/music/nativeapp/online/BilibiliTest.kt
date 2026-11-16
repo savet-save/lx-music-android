@@ -62,6 +62,13 @@ class BilibiliTest {
         assertEquals(listOf("original", "aac-30216"), choices.map { it.quality })
         assertEquals("https://a.example/low.m4a", choices.single { it.quality == "aac-30216" }.url)
     }
+    @Test fun audioKeepsDistinctHttpsBackupCdnsForPlaybackRecovery() {
+        val data = JSONObject("""{"dash":{"audio":[{"id":30280,"codecs":"mp4a.40.2","mimeType":"audio/mp4","bandwidth":192000,
+          "baseUrl":"https://primary.example/audio.m4a","backup_url":["https://backup.example/audio.m4a","https://backup.example/audio.m4a","http://insecure.example/audio.m4a","file:///private"]}]}}""")
+        val audio = BilibiliApi.parseAudio(data)
+        assertEquals(listOf("https://backup.example/audio.m4a"), audio.backupUrls)
+        assertEquals("https://primary.example/audio.m4a", audio.url)
+    }
     @Test fun lyricsMatchAnotherPlatformOnlyForTheSameRecordingDurationAndVersion() = runBlocking {
         val song=Song(42,Uri.EMPTY,"茶花开了","王睿卓",270000,"local")
         val wrongDuration=song.copy(id=43,duration=240000,source="kw")

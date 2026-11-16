@@ -35,11 +35,12 @@ internal class AudioStreamCache(private val context: Context, directory: File = 
     private val evictor = AdjustableLruEvictor(AppPreferences(context).audioCacheBytes)
     private val database = StandaloneDatabaseProvider(context)
     internal val cache = SimpleCache(directory, evictor, database)
-    private val upstream = DefaultDataSource.Factory(context, OkHttpDataSource.Factory(OkHttpClient.Builder()
+    private val httpClient = OkHttpClient.Builder()
         .connectTimeout(13, java.util.concurrent.TimeUnit.SECONDS).readTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
-        .retryOnConnectionFailure(false).build()))
+        .retryOnConnectionFailure(false).build()
+    private val upstream = DefaultDataSource.Factory(context, OkHttpDataSource.Factory(httpClient))
     fun dataSource(headers: Map<String, String> = emptyMap()): CacheDataSource.Factory = CacheDataSource.Factory().setCache(cache).setUpstreamDataSourceFactory(
-        if(headers.isEmpty()) upstream else DefaultDataSource.Factory(context, OkHttpDataSource.Factory(OkHttpClient()).setDefaultRequestProperties(headers)))
+        if(headers.isEmpty()) upstream else DefaultDataSource.Factory(context, OkHttpDataSource.Factory(httpClient).setDefaultRequestProperties(headers)))
         .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
     fun updateLimit(bytes: Long) = synchronized(cache) { evictor.update(cache, bytes) }
     fun clear() { cache.keys.toList().forEach { cache.removeResource(it) } }
@@ -63,7 +64,10 @@ internal class AudioStreamCache(private val context: Context, directory: File = 
         return cache.getContentMetadata(key).get("native_uri", "")?.takeIf { it.isNotBlank() }?.let(Uri::parse)
     }
     fun remember(key: String, uri: Uri, bitrate: Long? = null, durationMs: Long? = null, trackId: Long? = null) {
+        val previous = cache.getContentMetadata(key)
+        if (trackId != null && previous.get("native_audio_track", trackId) != trackId) remove(key)
         val metadata = ContentMetadataMutations().set("native_uri", uri.toString())
+        if (previous.get("native_uri", "") != uri.toString()) ContentMetadataMutations.setRedirectedUri(metadata, null)
         bitrate?.takeIf { it > 0 }?.let { metadata.set("native_bitrate", it) }
         durationMs?.takeIf { it > 0 }?.let { metadata.set("native_duration", it) }
         trackId?.takeIf { it > 0 }?.let { metadata.set("native_audio_track", it) }

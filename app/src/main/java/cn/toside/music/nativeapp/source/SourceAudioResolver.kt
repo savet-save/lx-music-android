@@ -9,7 +9,8 @@ import kotlinx.coroutines.ensureActive
 import org.json.JSONObject
 
 internal data class SourceAudio(val url: String, val quality: String, val sourceId: String? = null,
-    val attemptedSources: List<String> = emptyList(), val sourceName: String? = null, val bitrate: Long? = null, val trackId: Long? = null)
+    val attemptedSources: List<String> = emptyList(), val sourceName: String? = null, val bitrate: Long? = null, val trackId: Long? = null,
+    val backupUrls: List<String> = emptyList())
 
 internal class SourceResolutionException(val attemptedSources: List<String>, message: String, cause: Throwable? = null) :
     IllegalStateException(message, cause)

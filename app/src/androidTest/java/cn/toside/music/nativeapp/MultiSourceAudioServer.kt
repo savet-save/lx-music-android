@@ -42,6 +42,7 @@ internal class MultiSourceAudioServer(payload: ByteArray? = null) : AutoCloseabl
                         requestHeaders.add(headers)
                         val output = it.getOutputStream()
                         when {
+                            path.startsWith("/forbidden") -> output.write("HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray())
                             path.startsWith("/bad") -> output.write("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray())
                             path.startsWith("/broken") && broken.incrementAndGet() > 1 -> output.write("HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray())
                             else -> {

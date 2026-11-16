@@ -19,6 +19,7 @@ import cn.toside.music.nativeapp.ui.MainActivity
 import cn.toside.music.nativeapp.ui.PlayerLyricScroll
 import cn.toside.music.nativeapp.ui.UiPalette
 import cn.toside.music.nativeapp.ui.SettingsFragment
+import cn.toside.music.nativeapp.ui.ForegroundTestActivities
 import cn.toside.music.nativeapp.online.PlaylistBrowserRepository
 import cn.toside.music.nativeapp.online.PlaylistBrowseQuery
 import cn.toside.music.nativeapp.online.OnlinePlaylist
@@ -27,6 +28,10 @@ import cn.toside.music.nativeapp.online.Board
 import cn.toside.music.nativeapp.online.ChartsRepository
 import cn.toside.music.nativeapp.online.NativeChartsRepository
 import cn.toside.music.nativeapp.utils.PermissionPolicy
+import cn.toside.music.nativeapp.MultiSourceAudioServer
+import cn.toside.music.nativeapp.source.UserSources
+import cn.toside.music.nativeapp.online.BilibiliAudio
+import cn.toside.music.nativeapp.online.BilibiliAudioProvider
 
 import android.content.Context
 import android.content.ContextWrapper
@@ -65,6 +70,10 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.collect
 import org.junit.Assert.*
 import org.junit.Assume.assumeFalse
 import org.junit.Test
@@ -107,7 +116,7 @@ class PlaybackSettingsTest {
         var activity = open()
         lateinit var player: PlaybackService
         val song = Song(id, Uri.fromFile(file), "settings test", "test artist", 30_000)
-        private fun open() = instrumentation.startActivitySync(Intent(context, MainActivity::class.java)
+        private fun open() = ForegroundTestActivities.start(Intent(context, MainActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
         suspend fun bind() {
             waitFor { !activity.isFinishing && activity.hasWindowFocus() && field(activity, "service") != null }
@@ -456,6 +465,92 @@ class PlaybackSettingsTest {
                 assertTrue(cache.copyComplete(cache.completeAudio(song, "128k")!!, exported))
                 assertArrayEquals(bytes, exported.toByteArray())
             }
+        }
+    }
+
+    private suspend fun bilibiliRetryFixture(failures: Int, urlFailures: Int = 0, backups: Boolean = false,
+        check: suspend (Fixture, Song, MultiSourceAudioServer) -> Unit) {
+        withQualityPlayback { fixture, reference ->
+            MultiSourceAudioServer().use { server ->
+                val song = reference.copy(source = "bili", sourceInfo = org.json.JSONObject(reference.sourceInfo!!)
+                    .put("cid", 1).put("bvid", "offline-fixture").toString())
+                val original = field(fixture.player, "userSource") as UserSources
+                val provider = object : BilibiliAudioProvider {
+                    var attempt = 0
+                    override suspend fun audioStreams(info: org.json.JSONObject): List<BilibiliAudio> {
+                        attempt++
+                        if (attempt <= urlFailures) throw java.io.IOException("Temporary playback URL failure")
+                        val url = server.url(if (attempt <= failures) "forbidden" else "good") + "?attempt=$attempt"
+                        return listOf(BilibiliAudio(url, 192000, "original", 30280, if (backups) listOf(server.url("good")) else emptyList()))
+                    }
+                }
+                val sources = UserSources(context, provider)
+                val sourceField = PlaybackService::class.java.getDeclaredField("userSource").apply { isAccessible = true }
+                sourceField.set(fixture.player, sources)
+                val native = fixture.player.sourceCatalog().entries.single { it.name == "B站音源" }
+                fixture.player.setEnabledSources(listOf(native.id))
+                Lyrics(context).cache(song, listOf(LyricLine(0, "retry fixture")))
+                try { check(fixture, song, server) }
+                finally {
+                    main { fixture.player.clearQueue(); sourceField.set(fixture.player, original) }
+                    sources.close(); AudioStreamCache.existing()?.remove(AudioStreamCache.key(song, "original"))
+                }
+            }
+        }
+    }
+
+    @Test fun bilibili403RefreshesTheSameSourceThreeTimesWithoutAnEarlyErrorAndThenPlays() = runBlocking {
+        bilibiliRetryFixture(3) { fixture, song, server ->
+            val states = java.util.concurrent.ConcurrentLinkedQueue<PlayerState>()
+            val observation = CoroutineScope(currentCoroutineContext()).launch(Dispatchers.Unconfined) { fixture.player.state.collect { states.add(it) } }
+            try {
+                main { fixture.player.play(listOf(song), 0) }
+                waitFor { fixture.player.state.value.playing || fixture.player.state.value.error != null }
+                assertTrue(fixture.player.state.value.playing); assertNull(fixture.player.state.value.error)
+                assertTrue(states.none { it.error != null })
+                assertEquals(4, server.requests.size)
+                assertEquals(4, server.requests.distinct().size)
+                assertTrue(server.requests.last().startsWith("/good"))
+                assertTrue(server.requestHeaders.all { "cookie" !in it && it["referer"] == "https://www.bilibili.com/" })
+            } finally { observation.cancel() }
+        }
+    }
+
+    @Test fun bilibili403ReportsOneFinalErrorOnlyAfterAllThreeAutomaticRetriesFail() = runBlocking {
+        bilibiliRetryFixture(Int.MAX_VALUE) { fixture, song, server ->
+            val observations = java.util.concurrent.ConcurrentLinkedQueue<Pair<Int, PlayerState>>()
+            val observation = CoroutineScope(currentCoroutineContext()).launch(Dispatchers.Unconfined) {
+                fixture.player.state.collect { observations.add(server.requests.size to it) }
+            }
+            try {
+                main { fixture.player.play(listOf(song), 0) }
+                waitFor { fixture.player.state.value.error != null }
+                assertEquals(4, server.requests.size)
+                assertTrue(observations.filter { it.first < 4 }.none { it.second.error != null })
+                assertTrue(fixture.player.state.value.error!!.contains("HTTP 403"))
+                assertTrue(fixture.player.state.value.error!!.contains("3"))
+                assertFalse(fixture.player.state.value.preparing)
+                delay(500); assertEquals(4, server.requests.size)
+            } finally { observation.cancel() }
+        }
+    }
+
+    @Test fun transientPlaybackUrlFailuresAreRetriedBeforeAnErrorIsPublished() = runBlocking {
+        bilibiliRetryFixture(0, urlFailures = 3) { fixture, song, server ->
+            main { fixture.player.play(listOf(song), 0) }
+            waitFor { fixture.player.state.value.playing || fixture.player.state.value.error != null }
+            assertTrue(fixture.player.state.value.error, fixture.player.state.value.playing)
+            assertEquals(1, server.requests.size)
+        }
+    }
+
+    @Test fun bilibiliUsesTheBackupCdnAfterA403InsteadOfRepeatingTheRejectedPrimary() = runBlocking {
+        bilibiliRetryFixture(Int.MAX_VALUE, backups = true) { fixture, song, server ->
+            main { fixture.player.play(listOf(song), 0) }
+            waitFor { fixture.player.state.value.playing || fixture.player.state.value.error != null }
+            assertTrue(fixture.player.state.value.error, fixture.player.state.value.playing)
+            assertEquals(2, server.requests.size)
+            assertTrue(server.requests.first().startsWith("/forbidden")); assertTrue(server.requests.last().startsWith("/good"))
         }
     }
 

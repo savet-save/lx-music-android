@@ -13,13 +13,19 @@ import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionParameters.AudioOffloadPreferences
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.datasource.HttpDataSource
 
 /** Native Media3 path for cached streaming and optional hardware audio offload. */
 internal class NativeAudioPlayer(context: Context, cache: AudioStreamCache?, offload: Boolean,
     private val changed: (NativeAudioPlayer) -> Unit, private val completed: (NativeAudioPlayer) -> Unit,
-    private val failed: (NativeAudioPlayer, String) -> Unit, headers: Map<String,String> = emptyMap()) {
-    private val retryPolicy = StreamingRetryPolicy()
+    private val failed: (NativeAudioPlayer, String) -> Unit, headers: Map<String,String> = emptyMap(),
+    retryBudget: PlaybackRetryBudget = PlaybackRetryBudget()) {
+    private val retryPolicy = StreamingRetryPolicy(retryBudget)
     internal val streamRetriesExhausted get() = retryPolicy.exhausted
+    internal var failedHttpStatus: Int? = null
+        private set
+    internal var contentError = false
+        private set
     internal val engine = ExoPlayer.Builder(context).setMediaSourceFactory(if (cache == null) DefaultMediaSourceFactory(context)
         else DefaultMediaSourceFactory(cache.dataSource(headers)).setLoadErrorHandlingPolicy(retryPolicy)).build()
     var recorded = false
@@ -32,7 +38,12 @@ internal class NativeAudioPlayer(context: Context, cache: AudioStreamCache?, off
         engine.addListener(object : Player.Listener {
             override fun onPlaybackStateChanged(state: Int) { if (state == Player.STATE_ENDED) completed(this@NativeAudioPlayer) else changed(this@NativeAudioPlayer) }
             override fun onIsPlayingChanged(isPlaying: Boolean) { changed(this@NativeAudioPlayer) }
-            override fun onPlayerError(error: PlaybackException) { failed(this@NativeAudioPlayer, error.errorCodeName) }
+            override fun onPlayerError(error: PlaybackException) {
+                failedHttpStatus = generateSequence<Throwable>(error) { it.cause }
+                    .filterIsInstance<HttpDataSource.InvalidResponseCodeException>().firstOrNull()?.responseCode
+                contentError = error.errorCode in 3000..4999
+                failed(this@NativeAudioPlayer, error.errorCodeName)
+            }
         })
     }
     fun prepare(uri: Uri, key: String?, position: Int, rate: Float, volume: Float, play: Boolean) {

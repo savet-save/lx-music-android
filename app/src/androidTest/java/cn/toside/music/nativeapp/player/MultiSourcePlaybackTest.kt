@@ -10,6 +10,7 @@ import cn.toside.music.nativeapp.MultiSourceAudioServer
 import cn.toside.music.nativeapp.data.Song
 import cn.toside.music.nativeapp.source.UserSourceLibrary
 import cn.toside.music.nativeapp.ui.MainActivity
+import cn.toside.music.nativeapp.ui.ForegroundTestActivities
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -46,7 +47,7 @@ class MultiSourcePlaybackTest {
         val settings = context.getSharedPreferences("app-settings", Context.MODE_PRIVATE)
         val oldQuality = quality.getString("quality", null)
         val old = listOf("player.autoLowerQuality", "player.autoSwitchSource").associateWith { settings.all[it] as? Boolean }
-        val activity = instrumentation.startActivitySync(Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
+        val activity = ForegroundTestActivities.start(Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
         waitFor { field(activity, "service") != null }
         val player = field(activity, "service") as PlaybackService
         val busy = player.state.value.playing || player.state.value.preparing

@@ -588,3 +588,13 @@ B站下载弹窗按实际返回的 AAC 音轨列出码率，使用稳定音轨 I
 48 项 JVM 单元测试通过，Debug、测试包和正式签名 Release 构建通过；Debug Lint 为 0 errors / 262 warnings，Release Lint Vital 通过，apksigner 验签及 zipalign 16 KB 对齐检查通过。构建记录为 build/aac-conversion-final.txt，码率浮窗预览为 build/aac-bitrate-options.png。正式 APK 为 app/build/outputs/apk/release/lx-music-native-v0.9.17-all.apk；版本保持 0.9.17 / 9017。只覆盖更新手机上的独立 .playercheck 测试包，正式应用未覆盖，未提交或推送。
 
 用户随后要求覆盖手机正式版：2026-11-16 18:06:27（Asia/Shanghai）通过 adb install -r 将上述 release 安装到手机 9dd0fd82 的 cn.toside.music.nativeapp，保留应用数据。安装返回 Success，版本仍为 0.9.17 / 9017，primaryCpuAbi=arm64-v8a；正式 MainActivity 冷启动返回 Status: ok，进程存活。已安装 base.apk 与构建产物 SHA-256 一致（86e16d00689970acfdf527439907022703153c291c365bda28b5d5be677f24f0）。记录为 build/aac-release-phone-update.txt；本次没有更新盒子。
+
+## B站真实音频 403 与统一三次自动重试（2026-11-16）
+
+用户反馈正式版「【Hi-Res】绅士-薛之谦」无法播放。手机日志确认音频 CDN 返回 HTTP 403。对同一公开视频 BV1VaWu61E1g / CID 43468915745 的新取链结果进行手机端对照：三个主/备用地址均在 Android 浏览器 UA 下返回 403；桌面浏览器 UA 的普通 GET 返回 200，Range 请求返回 206。新地址的有效期仍约两小时，调整 Range 或视频 Referer 无法修复 Android UA 的 403。BilibiliApi 统一改用网页音频兼容的桌面 UA，仍发送 B站 Referer，不向 CDN 发送账户 Cookie。
+
+播放请求的取链、地址刷新和 HTTP 续传共用首次尝试后最多三次重试，避免重建播放器后重复获得额度。401/403/404/410 转由服务刷新链接，解析主/备用 CDN 并避开已拒绝的地址；B站允许在有限额度内重新使用同一原生音源。重试期间保持准备状态、error=null，全部失败才显示一次最终提示。刷新地址清除 Media3 旧跳转元数据，相同 B站音轨保留有效分片；不同音轨或脚本编码不混用。B站原生音频适配器提取接口，专项通过注入实际原生适配路径的测试替身验证，不依赖不支持 original 音质的自定义脚本模拟。
+
+52 项 JVM 测试、28 项手机专项全部通过。覆盖三次 403 后第四次成功、四次均失败后才提示、取链前三次失败后成功、拒绝主 CDN 后播放备用地址、续传共享额度、失败缓存定向清理、旧重定向失效、音轨变更、原有换源及 AAC 下载/转换；包含公开音轨 CDN 请求对照。早期模拟脚本的三项失败日志保留在 build/bili-playback-retry-phone-tests.txt，不计为通过；最终记录为 build/bili-playback-retry-phone-complete.txt 和 build/bili-cdn-probe-final.json。Debug/测试包/正式签名 Release 构建、Debug Lint（0 errors / 263 warnings）、Release Lint Vital、apksigner 及 16 KB zipalign 检查通过。前一轮系统下载中断换源超时用例本轮未重跑，不视为已修复。
+
+2026-11-16 18:42:07（Asia/Shanghai）保留数据覆盖手机正式版，仍为 0.9.17 / 9017。直接播放用户原来失败的同一歌曲：正式进程 AudioTrack 于 18:42:32 开始输出，播放状态为 PLAYING，18:44:47 验证后暂停，实际播放位置为 135156 ms，界面显示 02:15 / 04:50，无播放错误。该结果仅代表这条公开视频的真实验收。已安装 APK 与本次 release 的 SHA-256 一致：705057cc44fc83ee56e3ec93fafe55c64c91e51b5700251455e5dcd81c0434f2。构建、安装、播放状态和汇总分别见 build/bili-playback-retry-final-build.txt、build/bili-playback-retry-release-install-final.txt、build/bili-playback-retry-real-song-paused.txt、build/bili-playback-retry-verification.json。诊断不保存账号 Cookie、完整签名 URL 或音频内容；未更新盒子，改动尚未提交或推送。

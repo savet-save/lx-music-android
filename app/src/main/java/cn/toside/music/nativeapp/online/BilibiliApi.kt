@@ -27,10 +27,18 @@ internal class BilibiliCredentials(context: Context) {
 }
 
 internal data class BilibiliAccount(val name: String, val vipActive: Boolean = false, val vipLabel: String = "")
-internal data class BilibiliAudio(val url: String, val bitrate: Long?, val quality: String = "original", val trackId: Long? = null)
+internal data class BilibiliAudio(val url: String, val bitrate: Long?, val quality: String = "original", val trackId: Long? = null,
+    val backupUrls: List<String> = emptyList())
+
+internal interface BilibiliAudioProvider {
+    suspend fun audioStreams(info: JSONObject): List<BilibiliAudio>
+    suspend fun audioStream(info: JSONObject, quality: String = "original"): BilibiliAudio =
+        audioStreams(info).firstOrNull { it.quality == quality || quality == "aac-${it.trackId}" }?.copy(quality = quality)
+            ?: error("该视频没有所选码率的 AAC 音频流")
+}
 
 /** Web endpoints documented by bilibili-plugins/bilibili-api-collect. No account data goes to CDNs. */
-internal class BilibiliApi(private val context: Context? = null, private val session: String? = null) {
+internal class BilibiliApi(private val context: Context? = null, private val session: String? = null) : BilibiliAudioProvider {
     private suspend fun json(path: String, parameters: Map<String, String> = emptyMap(), signed: Boolean = false): JSONObject = withContext(Dispatchers.IO) {
         val query = if (signed) {
             val nav = request("https://api.bilibili.com/x/web-interface/nav")
@@ -69,15 +77,12 @@ internal class BilibiliApi(private val context: Context? = null, private val ses
         return parseSearch(json("/x/web-interface/wbi/search/type", mapOf("search_type" to "video", "keyword" to query, "page" to "$page", "page_size" to "20"), true))
     }
     suspend fun audio(info: JSONObject): String = audioStream(info).url
-    suspend fun audioStream(info: JSONObject, quality: String = "original"): BilibiliAudio =
-        audioStreams(info).firstOrNull { it.quality == quality || quality == "aac-${it.trackId}" }?.copy(quality = quality)
-            ?: error("该视频没有所选码率的 AAC 音频流")
-    suspend fun audioStreams(info: JSONObject): List<BilibiliAudio> {
+    override suspend fun audioStreams(info: JSONObject): List<BilibiliAudio> {
         val bvid = info.getString("bvid")
         require(bvid.matches(Regex("BV[0-9A-Za-z]{10}"))) { "B站视频编号无效" }
         val cid = info.optLong("cid").takeIf { it > 0 }
             ?: json("/x/web-interface/view", mapOf("bvid" to bvid)).getJSONArray("pages").getJSONObject(0).getLong("cid")
-        return parseAudioStreams(json("/x/player/wbi/playurl", mapOf("bvid" to bvid, "cid" to "$cid", "fnval" to "16", "fnver" to "0", "fourk" to "0"), true))
+        return parseAudioStreams(json("/x/player/wbi/playurl", mapOf("bvid" to bvid, "cid" to "$cid", "fnval" to "16", "fnver" to "0", "fourk" to "0", "force_host" to "2"), true))
     }
     suspend fun firstPart(song: Song): Song {
         val info=JSONObject(requireNotNull(song.sourceInfo))
@@ -89,7 +94,8 @@ internal class BilibiliApi(private val context: Context? = null, private val ses
         return song.copy(duration=first.getLong("duration")*1000,sourceInfo=info.toString())
     }
     companion object {
-        val audioHeaders = mapOf("User-Agent" to "Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36", "Referer" to "https://www.bilibili.com/")
+        // These are web playback URLs. Some CDNs reject an Android browser UA with HTTP 403.
+        val audioHeaders = mapOf("User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36", "Referer" to "https://www.bilibili.com/")
         private val cookies = mutableListOf<Cookie>()
         private val jar = object : CookieJar {
             override fun saveFromResponse(url: HttpUrl, values: List<Cookie>) = synchronized(cookies) {
@@ -146,8 +152,12 @@ internal class BilibiliApi(private val context: Context? = null, private val ses
             }.sortedByDescending { it.optLong("bandwidth") }.mapNotNull { selected ->
                 val url = selected.optString("baseUrl", selected.optString("base_url"))
                     .takeIf { Uri.parse(it).scheme == "https" && !Uri.parse(it).host.isNullOrBlank() } ?: return@mapNotNull null
+                val backups = selected.optJSONArray("backupUrl") ?: selected.optJSONArray("backup_url") ?: JSONArray()
+                val urls = (0 until backups.length()).map { backups.optString(it) }.filter {
+                    val uri = Uri.parse(it); uri.scheme == "https" && !uri.host.isNullOrBlank() && it != url
+                }.distinct()
                 BilibiliAudio(url, selected.optLong("bandwidth").takeIf { it > 0 },
-                    "aac-${selected.optLong("id").takeIf { it > 0 } ?: selected.optLong("bandwidth")}", selected.optLong("id").takeIf { it > 0 })
+                    "aac-${selected.optLong("id").takeIf { it > 0 } ?: selected.optLong("bandwidth")}", selected.optLong("id").takeIf { it > 0 }, urls)
             }.distinctBy { it.quality }
             check(tracks.isNotEmpty()) { "没有可用的 AAC 音频流" }
             return tracks.mapIndexed { index, track -> if (index == 0) track.copy(quality = "original") else track }
