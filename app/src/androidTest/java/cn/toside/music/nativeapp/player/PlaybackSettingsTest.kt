@@ -285,7 +285,7 @@ class PlaybackSettingsTest {
         val saved = if (catalog.baseFile.isFile) catalog.readFully() else null
         try {
             withPlayback { fixture ->
-                fixture.player.importSource("""/** @name source fallback test */
+                fixture.player.importExclusiveTestSource("""/** @name source fallback test */
                     lx.on(lx.EVENT_NAMES.request, ({source}) => source === 'kw' ? Promise.reject(new Error('unavailable')) : Promise.resolve('http://127.0.0.1/matched.mp3'));
                     lx.send(lx.EVENT_NAMES.inited, {sources: {
                       kw: {type: 'music', actions: ['musicUrl'], qualitys: ['128k']},
@@ -323,6 +323,10 @@ class PlaybackSettingsTest {
         } finally {
             catalog.delete(); if (saved != null) { val stream = catalog.startWrite(); stream.write(saved); catalog.finishWrite(stream) }
         }
+    }
+    private suspend fun PlaybackService.importExclusiveTestSource(script: String) {
+        importSource(script)
+        setEnabledSources(listOf(cn.toside.music.nativeapp.source.UserSourceLibrary.metadata(script).id))
     }
     private fun qualityScript(body: String) = """/** @name bitrate fallback fixture */
         let attempts = [];
@@ -492,7 +496,7 @@ class PlaybackSettingsTest {
     @Test fun failedMusicUrlLowersQualityByDefaultButDisabledAndDownloadsKeepTheirQuality() = runBlocking {
         withQualityPlayback { fixture, song ->
             assertTrue(AppPreferences(context).autoLowerQuality)
-            fixture.player.importSource(qualityScript("if (info.type !== '128k') throw new Error('unavailable ' + info.type); return Promise.resolve('http://127.0.0.1/' + attempts.join(','));"))
+            fixture.player.importExclusiveTestSource(qualityScript("if (info.type !== '128k') throw new Error('unavailable ' + info.type); return Promise.resolve('http://127.0.0.1/' + attempts.join(','));"))
             assertEquals("http://127.0.0.1/flac24bit,flac,320k,128k", fixture.player.resolveUrl(song))
             assertEquals("flac24bit", context.getSharedPreferences("player", 0).getString("quality", null))
             AppPreferences(context).set("player.autoLowerQuality", false)
@@ -547,7 +551,7 @@ class PlaybackSettingsTest {
     @Test fun httpAndDecoderFailuresLowerBitrateUseSeparateCachesAndStopWhenExhaustedOrDisabled() = runBlocking {
         withQualityPlayback { fixture, song ->
             QualityAudioServer(fixture.file.readBytes()).use { server ->
-                fixture.player.importSource(qualityScript("return Promise.resolve('${server.address}/' + info.type);"))
+                fixture.player.importExclusiveTestSource(qualityScript("return Promise.resolve('${server.address}/' + info.type);"))
                 main { fixture.player.play(listOf(song), 0) }
                 waitFor { fixture.player.state.value.playing }
                 assertEquals(listOf("flac24bit", "flac", "320k"), server.requests.distinct())
@@ -583,7 +587,7 @@ class PlaybackSettingsTest {
         withQualityPlayback { fixture, song ->
             QualityAudioServer(fixture.file.readBytes()).use { server ->
                 server.holdAudio = true
-                fixture.player.importSource(qualityScript("return Promise.resolve('${server.address}/' + info.type);"))
+                fixture.player.importExclusiveTestSource(qualityScript("return Promise.resolve('${server.address}/' + info.type);"))
                 main { fixture.player.play(listOf(song), 0) }
                 assertTrue(server.audioStarted.await(10, TimeUnit.SECONDS))
                 main { fixture.player.pause(); fixture.player.setPlaybackRate(1.25f); fixture.player.setVolume(.3f) }
@@ -615,7 +619,7 @@ class PlaybackSettingsTest {
                 main { fixture.player.clearQueue() }
                 cn.toside.music.nativeapp.source.PLAYBACK_QUALITIES.forEach { AudioStreamCache.existing()?.remove(AudioStreamCache.key(song, it)) }
                 server.holdAudio = true
-                fixture.player.importSource(qualityScript("return Promise.resolve('${server.address}/' + info.type);"))
+                fixture.player.importExclusiveTestSource(qualityScript("return Promise.resolve('${server.address}/' + info.type);"))
                 main { fixture.player.play(listOf(song), 0) }
                 assertTrue(server.audioStarted.await(10, TimeUnit.SECONDS))
                 main { fixture.player.play(listOf(fixture.song), 0) }
@@ -629,7 +633,7 @@ class PlaybackSettingsTest {
     }
     @Test fun sourceTimeoutLowersBitrateWhileCallerCancellationStopsTheRequest() = runBlocking {
         withQualityPlayback { fixture, song ->
-            fixture.player.importSource(qualityScript("if (info.type === 'flac24bit') return new Promise(() => {}); return Promise.resolve('http://127.0.0.1/' + attempts.join(','));"))
+            fixture.player.importExclusiveTestSource(qualityScript("if (info.type === 'flac24bit') return new Promise(() => {}); return Promise.resolve('http://127.0.0.1/' + attempts.join(','));"))
             assertEquals("http://127.0.0.1/flac24bit,flac", withTimeout(26_000) { fixture.player.resolveUrl(song) })
             val cancelled = kotlinx.coroutines.withTimeoutOrNull(150) { fixture.player.resolveUrl(song) }
             assertNull(cancelled)
@@ -706,7 +710,7 @@ class PlaybackSettingsTest {
             withPlayback { fixture ->
                 audioBytes.set(fixture.file.readBytes())
                 val base = "http://127.0.0.1:${server.localPort}"
-                fixture.player.importSource("""/** @name cover test */
+                fixture.player.importExclusiveTestSource("""/** @name cover test */
                     lx.on(lx.EVENT_NAMES.request, () => Promise.resolve('$base/audio'));
                     lx.send(lx.EVENT_NAMES.inited, {sources: {kw: {type: 'music', actions: ['musicUrl'], qualitys: ['128k']}}});
                 """.trimIndent())

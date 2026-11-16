@@ -1,0 +1,15 @@
+<resources>
+    <string name="sources_enabled">已啟用</string>
+    <string name="sources_disabled">未啟用</string>
+    <string name="sources_enabled_count">已啟用（%1$d/3）</string>
+    <string name="sources_priority">優先順序 %1$d</string>
+    <string name="sources_limit">最多啟用 3 個音源，請先停用一個再啟用其他音源。</string>
+    <string name="sources_enable">啟用</string>
+    <string name="sources_disable">停用</string>
+    <string name="sources_move_up">上移</string>
+    <string name="sources_move_down">下移</string>
+    <string name="sources_none_enabled">尚未啟用音源，請從下方啟用。播放和下載依上方順序嘗試，全部失敗後停止。</string>
+    <string name="sources_none_disabled">沒有未啟用的音源</string>
+    <string name="sources_import_disabled">音源已匯入，未啟用（已啟用數量達到上限）。</string>
+    <string name="sources_fallback_hint">最多同時啟用 3 個音源。上方優先，失敗後依序嘗試下方已啟用音源；未啟用音源不參與播放或下載。</string>
+</resources>

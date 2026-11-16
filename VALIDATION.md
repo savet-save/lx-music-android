@@ -504,3 +504,15 @@ Release/设备测试 APK 构建、48 项 JVM 单元测试、Release Lint 通过�
 已保留数据覆盖安装盒子上的本地验证包，实际打开播放页检查平板效果；未更改版本号、创建提交或推送远程。手机尺寸图片是在盒子上测量并绘制真实 Android View 的预览，不是手机硬件窗口、状态栏或输入法实测。
 
 验证日志为 `build/player-style-validation/final-device-tests.txt`；手机封面页为 `build/player-style-validation/final-rendered/360x800-cover.png`，平板渲染图为 `build/player-style-validation/final-rendered/1024x700-cover.png`，实际盒子截图为 `build/player-style-validation/box-player-final.png`。其他尺寸和歌词页预览在同一 `final-rendered/` 目录中。
+
+## 最多三个音源与顺序接续（2026-11-16）
+
+自定义音源页将已启用和未启用分区，最多同时启用 3 个；已启用区支持上移、下移和停用，顺序持久保存。达到上限时新导入脚本保存在未启用区。音源库升级到 v4，从旧版仅迁移原先选中的音源为启用，保留脚本、删除记录及更新提示偏好。
+
+每个启用脚本使用独立 QuickJS 运行时，按顺序解析所选音质。取链失败、无效地址、HTTP/解码播放失败时尝试后续启用脚本；播放只有在自动降低音质开启时，才在该音质全部音源失败后尝试较低音质。下载保持原音质，系统下载失败或中断后由 DownloadCompleteReceiver 和 DownloadFallbackJob 自动接续，保存已尝试音源及任务记录；应用重启后可继续，全部失败则停止，手动重试重新开始。删除任务后不会被切换过程重新创建。
+
+验证使用 YYA-H618 / Android 12 / API 31 上的独立 `.multisourcecheck` 包，正式应用及歌单数据未覆盖。最终专项报告 `device-final.txt` 为 14 项全部通过，包含 13 项新增测试及修正后的在线导入回归；结合受影响功能回归，去重后 50 项设备测试通过，2 项第三方联网检查按默认设置跳过，无剩余失败。覆盖三源上限、排序和重启、旧版迁移、独立脚本状态、取消、320k 请求不降为 128k、无效链接、播放器实际失败、真实系统下载失败/中断、自动后台接续、全部失败和删除防恢复，以及缓存下载、音质回退、设置页面布局和导入。
+
+48 项 JVM 单元测试通过；Debug/正式签名 Release APK 构建和两种配置 Lint 均无错误。手机 360×800 dp 和平板 1024×768 dp 使用真实 Android View 在盒子上测量并绘制，未作为手机硬件窗口实测。本轮音频为本地 HTTP 静音 PCM 样本，未重新验证第三方歌曲的真实码率或服务可用性。
+
+记录位于忽略目录 `build/multi-source-validation/`：`verification.json` 汇总去重结果，`device-first.txt`、`device-regression.txt` 和 `device-final.txt` 保留原始日志（中间回归中的旧单选断言已修正并通过最终复测）；`build-final.txt` 记录构建和 Lint。最终分区截图为 `screenshots/multi-source-validation/360-sources.png` 和 `1024-sources.png`。测试包验证后移除，本轮版本号仍为 0.9.17，代码修改保留在工作区。

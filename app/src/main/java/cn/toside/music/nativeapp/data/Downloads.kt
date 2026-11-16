@@ -11,6 +11,8 @@ import cn.toside.music.nativeapp.lyrics.exportLrc
 import cn.toside.music.nativeapp.online.OnlineLyrics
 import cn.toside.music.nativeapp.player.AudioStreamCache
 import cn.toside.music.nativeapp.source.PLAYBACK_QUALITIES
+import cn.toside.music.nativeapp.source.SourceAudio
+import cn.toside.music.nativeapp.source.SourceResolutionException
 import cn.toside.music.nativeapp.utils.readBounded
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -22,6 +24,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.json.JSONObject
+import org.json.JSONArray
 import java.io.File
 import java.util.UUID
 
@@ -34,13 +37,15 @@ internal data class DownloadTask(
     val reason: Int = 0, val fileName: String? = null,
     val localUri: Uri? = null, val lyricStatus: DownloadLyricStatus? = null, val lyricUri: Uri? = null,
     val directory: String = DownloadFiles.RELATIVE_PATH,
+    val sourceName: String? = null, val sourceAttempts: Int = 0, val error: String? = null,
 ) {
     val failed get() = status in setOf(DownloadStatus.LINK_FAILED, DownloadStatus.FAILED, DownloadStatus.INTERRUPTED)
     val percent get() = if (status == DownloadStatus.COMPLETE) 100 else if (total > 0)
         (100.0 * bytes / total).toInt().coerceIn(0, 100) else 0
 }
 
-class Downloads(private val context: Context, private val scheduleLyrics: (Context) -> Unit = DownloadLyricsJob::schedule) {
+class Downloads(private val context: Context, private val scheduleLyrics: (Context) -> Unit = DownloadLyricsJob::schedule,
+    private val scheduleFallback: (Context) -> Unit = DownloadFallbackJob::schedule) {
     private val manager = requireNotNull(context.getSystemService(DownloadManager::class.java))
     private val history = context.getSharedPreferences("music-downloads", Context.MODE_PRIVATE)
     private val files = DownloadFiles(context)
@@ -50,6 +55,8 @@ class Downloads(private val context: Context, private val scheduleLyrics: (Conte
         val systemId: Long? = null, val fileName: String? = null, val failure: DownloadStatus? = null,
         val localUri: Uri? = null, val localBytes: Long = 0,
         val lyricStatus: DownloadLyricStatus? = DownloadLyricStatus.PENDING, val lyricUri: Uri? = null, val lyricAttempts: Int = 0,
+        val ordered: Boolean = false, val exhausted: Boolean = false, val attemptedSources: List<String> = emptyList(),
+        val sourceId: String? = null, val sourceName: String? = null, val error: String? = null,
     )
     private data class Transfer(
         val id: Long, val title: String, val artist: String, val fileName: String?, val updated: Long,
@@ -60,11 +67,20 @@ class Downloads(private val context: Context, private val scheduleLyrics: (Conte
     fun enqueue(song: Song, uri: Uri): Long = enqueueFile(song, uri, fileName(song, uri))
 
     internal suspend fun start(song: Song, quality: String, retryKey: String? = null,
-        resolve: suspend (Song, String) -> String): Boolean {
+        resolve: suspend (Song, String) -> String): Boolean =
+        startInternal(song, quality, retryKey, false, false) { candidate, type, _ -> SourceAudio(resolve(candidate, type), type) }
+
+    internal suspend fun startWithSources(song: Song, quality: String, retryKey: String? = null,
+        resolve: suspend (Song, String, Set<String>) -> SourceAudio): Boolean =
+        startInternal(song, quality, retryKey, true, false, resolve)
+
+    private suspend fun startInternal(song: Song, quality: String, retryKey: String?, ordered: Boolean, continued: Boolean,
+        resolve: suspend (Song, String, Set<String>) -> SourceAudio): Boolean {
         val record = withContext(NonCancellable + Dispatchers.IO) {
             synchronized(lock) {
-                val next = if (retryKey == null) Record(UUID.randomUUID().toString(), song, quality, System.currentTimeMillis()) else {
+                val next = if (retryKey == null) Record(UUID.randomUUID().toString(), song, quality, System.currentTimeMillis(), ordered = ordered) else {
                     val old = read(retryKey) ?: return@synchronized null
+                    if (continued && old.exhausted) return@synchronized null
                     if (old.key in resolving) return@synchronized null
                     if (old.localUri != null && old.localBytes > 0) return@synchronized null
                     val transfer = if (old.systemId != null || old.fileName != null) find(old, transfers(setOfNotNull(old.systemId))) else null
@@ -72,7 +88,9 @@ class Downloads(private val context: Context, private val scheduleLyrics: (Conte
                     transfer?.let { manager.remove(it.id) }
                     old.localUri?.let(files::delete); old.lyricUri?.let(files::delete)
                     old.copy(systemId = null, fileName = null, failure = null, localUri = null, localBytes = 0,
-                        lyricStatus = DownloadLyricStatus.PENDING, lyricUri = null, lyricAttempts = 0)
+                        lyricStatus = DownloadLyricStatus.PENDING, lyricUri = null, lyricAttempts = 0,
+                        ordered = ordered, exhausted = false, error = null,
+                        attemptedSources = if (continued) old.attemptedSources else emptyList(), sourceId = null, sourceName = null)
                 }
                 write(next)
                 resolving.add(next.key)
@@ -87,19 +105,20 @@ class Downloads(private val context: Context, private val scheduleLyrics: (Conte
                 return true
             }
             failure = DownloadStatus.LINK_FAILED
-            val address = try { resolve(record.song, record.quality) }
+            val address = try { resolve(record.song, record.quality, record.attemptedSources.toSet()) }
             catch (e: TimeoutCancellationException) {
                 currentCoroutineContext().ensureActive()
                 throw IllegalStateException(e.message, e)
             }
-            val uri = Uri.parse(address)
+            val uri = Uri.parse(address.url)
             validate(uri)
             failure = DownloadStatus.FAILED
             val started = withContext(Dispatchers.IO) {
                 synchronized(lock) {
                     val current = read(record.key) ?: return@synchronized false
                     // Match the destination on restart if the process stops after enqueue but before saving the system ID.
-                    val prepared = current.copy(fileName = fileName(current.song, uri, current.quality))
+                    val prepared = current.copy(fileName = fileName(current.song, uri, current.quality),
+                        attemptedSources = address.attemptedSources, sourceId = address.sourceId, sourceName = address.sourceName)
                     write(prepared)
                     val id = enqueueFile(prepared.song, uri, requireNotNull(prepared.fileName))
                     try { write(prepared.copy(systemId = id)) }
@@ -112,12 +131,31 @@ class Downloads(private val context: Context, private val scheduleLyrics: (Conte
         } catch (e: CancellationException) { throw e }
         catch (e: Exception) {
             withContext(Dispatchers.IO) {
-                synchronized(lock) { read(record.key)?.let { write(it.copy(failure = failure)) } }
+                synchronized(lock) { read(record.key)?.let {
+                    write(it.copy(failure = failure, exhausted = ordered, error = e.localizedMessage?.take(1000),
+                        attemptedSources = (e as? SourceResolutionException)?.attemptedSources ?: it.attemptedSources))
+                } }
             }
             throw e
         } finally {
             withContext(NonCancellable + Dispatchers.IO) { synchronized(lock) { resolving.remove(record.key) } }
+            if (ordered) scheduleFallback(context)
         }
+    }
+
+    internal suspend fun pendingSourceRetries(): List<String> = withContext(Dispatchers.IO) {
+        synchronized(lock) {
+            val records = history.all.keys.mapNotNull(::read).filter { it.ordered && !it.exhausted && it.key !in resolving && it.localBytes == 0L }
+            val transfers = transfers(records.mapNotNull { it.systemId }.toSet())
+            records.filter { record ->
+                val transfer = find(record, transfers)
+                transfer?.status == DownloadStatus.FAILED || transfer == null && record.systemId == null && record.failure == null
+            }.map { it.key }
+        }
+    }
+    internal suspend fun retryNextSource(key: String, resolve: suspend (Song, String, Set<String>) -> SourceAudio): Boolean {
+        val record = withContext(Dispatchers.IO) { synchronized(lock) { read(key) } } ?: return false
+        return startInternal(record.song, record.quality, key, true, true, resolve)
     }
 
     private suspend fun exportCached(record: Record): Boolean = withContext(Dispatchers.IO) {
@@ -162,13 +200,13 @@ class Downloads(private val context: Context, private val scheduleLyrics: (Conte
                 val status = when {
                     record.localUri != null && record.localBytes > 0 -> DownloadStatus.COMPLETE
                     transfer != null -> transfer.status
-                    record.key in resolving -> DownloadStatus.RESOLVING
+                    record.key in resolving || record.ordered && !record.exhausted && record.systemId == null && record.failure == null -> DownloadStatus.RESOLVING
                     else -> record.failure ?: DownloadStatus.INTERRUPTED
                 }
                 record.created to DownloadTask(record.key, record.song, record.quality, status, transfer?.id,
                     transfer?.bytes ?: record.localBytes, transfer?.total ?: record.localBytes.takeIf { it > 0 } ?: -1,
                     transfer?.reason ?: 0, transfer?.fileName ?: record.fileName, record.localUri, record.lyricStatus,
-                    record.lyricUri, transfer?.directory ?: DownloadFiles.RELATIVE_PATH)
+                    record.lyricUri, transfer?.directory ?: DownloadFiles.RELATIVE_PATH, record.sourceName, record.attemptedSources.size, record.error)
             }
             val older = transfers.filter { it.id !in claimed && it.fileName != null }.map { transfer ->
                 val song = Song(-transfer.id, Uri.EMPTY, transfer.title, transfer.artist, 0)
@@ -320,6 +358,8 @@ class Downloads(private val context: Context, private val scheduleLyrics: (Conte
             .put("fileName", record.fileName).put("failure", record.failure?.name)
             .put("localUri", record.localUri?.toString()).put("localBytes", record.localBytes)
             .put("lyricStatus", record.lyricStatus?.name).put("lyricUri", record.lyricUri?.toString()).put("lyricAttempts", record.lyricAttempts)
+            .put("ordered", record.ordered).put("exhausted", record.exhausted).put("attemptedSources", JSONArray(record.attemptedSources))
+            .put("sourceId", record.sourceId).put("sourceName", record.sourceName).put("error", record.error)
         check(history.edit().putString(record.key, value.toString()).commit()) { "无法保存下载任务" }
     }
 
@@ -333,7 +373,9 @@ class Downloads(private val context: Context, private val scheduleLyrics: (Conte
                 optional("fileName"), optional("failure")?.let(DownloadStatus::valueOf))
                 .copy(localUri = optional("localUri")?.let(Uri::parse), localBytes = json.optLong("localBytes"),
                     lyricStatus = optional("lyricStatus")?.let(DownloadLyricStatus::valueOf), lyricUri = optional("lyricUri")?.let(Uri::parse),
-                    lyricAttempts = json.optInt("lyricAttempts"))
+                    lyricAttempts = json.optInt("lyricAttempts"), ordered = json.optBoolean("ordered"), exhausted = json.optBoolean("exhausted"),
+                    attemptedSources = json.optJSONArray("attemptedSources")?.let { ids -> (0 until ids.length()).map { ids.optString(it) }.distinct() }.orEmpty(),
+                    sourceId = optional("sourceId"), sourceName = optional("sourceName"), error = optional("error"))
         }.getOrNull()
     }
 

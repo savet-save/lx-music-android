@@ -76,6 +76,11 @@
             android:exported="false"
             android:permission="android.permission.BIND_JOB_SERVICE"/>
 
+        <service
+            android:name=".data.DownloadFallbackJob"
+            android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE"/>
+
         <receiver android:name=".data.DownloadCompleteReceiver" android:exported="true">
             <intent-filter><action android:name="android.intent.action.DOWNLOAD_COMPLETE"/></intent-filter>
         </receiver>

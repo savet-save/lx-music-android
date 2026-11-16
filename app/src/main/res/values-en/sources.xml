@@ -1,0 +1,15 @@
+<resources>
+    <string name="sources_enabled">Enabled</string>
+    <string name="sources_disabled">Not enabled</string>
+    <string name="sources_enabled_count">Enabled (%1$d/3)</string>
+    <string name="sources_priority">Priority %1$d</string>
+    <string name="sources_limit">Up to 3 sources can be enabled. Disable one before enabling another.</string>
+    <string name="sources_enable">Enable</string>
+    <string name="sources_disable">Disable</string>
+    <string name="sources_move_up">Move up</string>
+    <string name="sources_move_down">Move down</string>
+    <string name="sources_none_enabled">Enable a source below. Playback and downloads try enabled sources in order and stop when all fail.</string>
+    <string name="sources_none_disabled">No disabled sources</string>
+    <string name="sources_import_disabled">Source imported without enabling it: 3 sources are already enabled.</string>
+    <string name="sources_fallback_hint">Enable up to 3 sources. Sources at the top take priority; on failure, the next enabled source is tried. Disabled sources are skipped.</string>
+</resources>

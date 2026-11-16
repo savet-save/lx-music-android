@@ -548,7 +548,8 @@ class MainActivity : FragmentActivity() {
         scope.launch {
             try {
                 val script = withContext(Dispatchers.IO) { contentResolver.openInputStream(uri)?.use { it.readBounded(2 * 1024 * 1024).toString(Charsets.UTF_8) } ?: error(getString(R.string.ui_5903b3b5a9ca)) }
-                (service ?: error(getString(R.string.ui_7ca47a28e695))).importSource(script); toast(getString(R.string.ui_18710cc58894))
+                val imported = (service ?: error(getString(R.string.ui_7ca47a28e695))).importSource(script)
+                toast(getString(if (imported.optBoolean("enabled")) R.string.ui_18710cc58894 else R.string.sources_import_disabled))
                 settingsFragment()?.refreshSources()
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) { toast(getString(R.string.ui_0874f11320ab, java.lang.String.valueOf(e.localizedMessage))) }
@@ -1579,34 +1580,48 @@ class MainActivity : FragmentActivity() {
         dialog.show(); list.setSelection(snapshot.index)
     }
     private fun showSourceActions(anchor: View, entry: UserSourceEntry, changed: () -> Unit = {}) {
-        val actions = arrayOf(getString(R.string.ui_f4f0ead1116b), getString(R.string.ui_0fd5cd79a1b5), getString(R.string.ui_ba9a8defba4e, java.lang.String.valueOf(if (entry.allowUpdateAlert) getString(R.string.ui_3fd47edce45b) else getString(R.string.ui_8da97ddda990))), getString(R.string.ui_2f9daa828907))
-        choicesPopup.show(anchor, actions.indices.map(Int::toString), actions.toList(), "", palette) { id ->
-            val index = id.toInt()
-            when (index) {
-                0 -> scope.launch {
-                    try { service?.selectSource(entry.id); changed(); toast(getString(R.string.ui_032d025aff70)) }
-                    catch (e: CancellationException) { throw e }
-                    catch (e: Exception) { toast(getString(R.string.ui_ced3fddd61e0, java.lang.String.valueOf(e.localizedMessage))) }
+        scope.launch {
+            val player = service ?: return@launch
+            val catalog = player.sourceCatalog()
+            val index = catalog.enabled.indexOf(entry.id)
+            val ids = mutableListOf("toggle")
+            val labels = mutableListOf(getString(if (index >= 0) R.string.sources_disable else R.string.sources_enable))
+            if (index > 0) { ids.add("up"); labels.add(getString(R.string.sources_move_up)) }
+            if (index >= 0 && index < catalog.enabled.lastIndex) { ids.add("down"); labels.add(getString(R.string.sources_move_down)) }
+            ids.addAll(listOf("export", "updates", "delete"))
+            labels.addAll(listOf(getString(R.string.ui_0fd5cd79a1b5),
+                getString(R.string.ui_ba9a8defba4e, getString(if (entry.allowUpdateAlert) R.string.ui_3fd47edce45b else R.string.ui_8da97ddda990)),
+                getString(R.string.ui_2f9daa828907)))
+            choicesPopup.show(anchor, ids, labels, "", palette) { action ->
+                when (action) {
+                    "toggle", "up", "down", "updates" -> scope.launch {
+                        try {
+                            when (action) {
+                                "toggle" -> player.setSourceEnabled(entry.id, index < 0)
+                                "up" -> player.moveSource(entry.id, -1)
+                                "down" -> player.moveSource(entry.id, 1)
+                                else -> player.allowSourceUpdates(entry.id, !entry.allowUpdateAlert)
+                            }
+                            changed()
+                        } catch (e: CancellationException) { throw e }
+                        catch (e: Exception) { toast(e.localizedMessage.orEmpty()) }
+                    }
+                    "export" -> {
+                        pendingSourceExportId = entry.id
+                        @Suppress("DEPRECATION")
+                        startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                            addCategory(Intent.CATEGORY_OPENABLE); type = "application/javascript"
+                            putExtra(Intent.EXTRA_TITLE, entry.name.replace(Regex("[\\\\/:*?\"<>|]"), "_").take(80) + ".js")
+                        }, REQUEST_SOURCE_EXPORT)
+                    }
+                    "delete" -> AlertDialog.Builder(this@MainActivity).setMessage(getString(R.string.ui_852174674832, entry.name))
+                        .setNegativeButton(getString(R.string.ui_2cd0f3be8738), null)
+                        .setPositiveButton(getString(R.string.ui_2f9daa828907)) { _, _ -> scope.launch {
+                            try { player.removeSource(entry.id); changed() }
+                            catch (e: CancellationException) { throw e }
+                            catch (e: Exception) { toast(e.localizedMessage.orEmpty()) }
+                        } }.show()
                 }
-                1 -> {
-                    pendingSourceExportId = entry.id
-                    @Suppress("DEPRECATION")
-                    startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
-                        addCategory(Intent.CATEGORY_OPENABLE); type = "application/javascript"
-                        putExtra(Intent.EXTRA_TITLE, entry.name.replace(Regex("[\\\\/:*?\"<>|]"), "_").take(80) + ".js")
-                    }, REQUEST_SOURCE_EXPORT)
-                }
-                2 -> scope.launch {
-                    try { service?.allowSourceUpdates(entry.id, !entry.allowUpdateAlert); changed(); toast(getString(R.string.ui_5c73d0fff5e2)) }
-                    catch (e: CancellationException) { throw e }
-                    catch (e: Exception) { toast(getString(R.string.ui_749d84b5fa76, java.lang.String.valueOf(e.localizedMessage))) }
-                }
-                3 -> AlertDialog.Builder(this).setMessage(getString(R.string.ui_852174674832, java.lang.String.valueOf(entry.name))).setNegativeButton(getString(R.string.ui_2cd0f3be8738), null)
-                    .setPositiveButton(getString(R.string.ui_2f9daa828907)) { _, _ -> scope.launch {
-                        try { service?.removeSource(entry.id); changed(); toast(getString(R.string.ui_a1bfd178ab34)) }
-                        catch (e: CancellationException) { throw e }
-                        catch (e: Exception) { toast(getString(R.string.ui_57deb333c04b, java.lang.String.valueOf(e.localizedMessage))) }
-                    } }.show()
             }
         }
     }
@@ -2319,7 +2334,7 @@ class MainActivity : FragmentActivity() {
                 if (cached) progress(DownloadProbe.MAX_BYTES)
                 else {
                     val player = service ?: error(getString(R.string.ui_7ca47a28e695))
-                    DownloadProbe().check(player.resolveDownloadUrl(song, quality), progress)
+                    player.probeDownload(song, quality, progress)
                 }
             },
             dismissed = { if (downloadQualityDialog === it) downloadQualityDialog = null }
@@ -2360,7 +2375,7 @@ class MainActivity : FragmentActivity() {
         val player = service ?: run { waitingForServiceDownload = request; return }
         scope.launch {
             try {
-                if (Downloads(applicationContext).start(request.song, request.quality, request.retryKey, player::resolveDownloadUrl)) {
+                if (Downloads(applicationContext).startWithSources(request.song, request.quality, request.retryKey, player::resolveDownloadAddress)) {
                     toast(getString(R.string.ui_6b7ce36f8aa9))
                 }
             } catch (e: CancellationException) { throw e }
@@ -2445,8 +2460,8 @@ class MainActivity : FragmentActivity() {
                             ?: error(getString(R.string.ui_2dcda639f980))
                     }
                     val player = service ?: error(getString(R.string.ui_7ca47a28e695))
-                    player.importSource(script)
-                    toast(getString(R.string.ui_18710cc58894))
+                    val imported = player.importSource(script)
+                    toast(getString(if (imported.optBoolean("enabled")) R.string.ui_18710cc58894 else R.string.sources_import_disabled))
                 } catch (e: CancellationException) { throw e }
                 catch (e: Exception) { toast(getString(R.string.ui_0874f11320ab, java.lang.String.valueOf(e.localizedMessage))) }
             }

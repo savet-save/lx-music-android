@@ -215,7 +215,7 @@ class DownloadsFragment : Fragment() {
             DownloadLyricStatus.FAILED -> R.string.download_lyric_failed
         }) }
         val text = listOfNotNull(task.song.artist.takeIf { it.isNotBlank() }, status(task), task.quality?.let(::downloadQualityLabel),
-            size, task.fileName?.let { "${task.directory}$it" }, lyric,
+            size, task.sourceName, task.error, task.fileName?.let { "${task.directory}$it" }, lyric,
             task.lyricUri?.let { "${task.directory}${task.fileName?.substringBeforeLast('.')}.lrc" }).joinToString("\n")
         AlertDialog.Builder(requireContext()).setTitle(task.song.title).setMessage(text)
             .setNeutralButton(R.string.download_search_song) { _, _ -> host.searchDownloadedSong(task.song) }

@@ -116,7 +116,7 @@ internal fun showDownloadQuality(activity: Activity, song: Song, palette: UiPale
         work.launch {
             val usable = try {
                 permits.withPermit {
-                    withTimeout(20_000) {
+                    withTimeout(120_000) {
                         probe(code) { bytes -> work.launch { progress.isIndeterminate = false; progress.progress = bytes } }
                     }
                 }

@@ -49,6 +49,9 @@ class DownloadCompleteReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != DownloadManager.ACTION_DOWNLOAD_COMPLETE) return
         val id = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1)
-        if (id >= 0 && Downloads(context).ownsSystemId(id)) DownloadLyricsJob.schedule(context)
+        if (id >= 0 && Downloads(context).ownsSystemId(id)) {
+            DownloadLyricsJob.schedule(context)
+            DownloadFallbackJob.schedule(context)
+        }
     }
 }

@@ -11,7 +11,12 @@ import java.security.MessageDigest
 
 data class UserSourceEntry(val id: String, val name: String, val description: String, val version: String,
     val author: String, val homepage: String, val script: String, val allowUpdateAlert: Boolean = true)
-internal data class UserSourceCatalog(val selected: String?, val entries: List<UserSourceEntry>)
+internal data class UserSourceCatalog(val selected: String?, val entries: List<UserSourceEntry>,
+    val enabled: List<String> = listOfNotNull(selected)) {
+    val enabledEntries get() = enabled.mapNotNull { id -> entries.firstOrNull { it.id == id } }
+    val disabledEntries get() = entries.filter { it.id !in enabled }
+    fun withEnabled(ids: List<String>) = copy(selected = ids.firstOrNull(), enabled = ids)
+}
 
 /** The selected ID and scripts are written atomically; importing one script never discards the others. */
 internal class UserSourceLibrary(private val context: Context) {
@@ -29,7 +34,13 @@ internal class UserSourceLibrary(private val context: Context) {
             val entry = values.getJSONObject(index)
             metadata(entry.getString("script")).copy(allowUpdateAlert = entry.optBoolean("allowUpdateAlert", true))
         }.distinctBy { it.id }
-        val catalog = UserSourceCatalog(data.optString("selected").takeIf { id -> entries.any { it.id == id } }, entries)
+        val selected = data.optString("selected").takeIf { id -> entries.any { it.id == id } }
+        val enabled = if (data.optInt("version", 1) < 4) listOfNotNull(selected) else {
+            val ids = data.optJSONArray("enabled") ?: JSONArray()
+            (0 until ids.length()).map { ids.optString(it) }.distinct()
+                .filter { id -> entries.any { it.id == id } }.take(MAX_ENABLED)
+        }
+        val catalog = UserSourceCatalog(enabled.firstOrNull(), entries, enabled)
         // Add each newly packaged source once, preserving selection, disabled state and earlier removals.
         val version = data.optInt("version", 1)
         if (version < CATALOG_VERSION) {
@@ -42,19 +53,48 @@ internal class UserSourceLibrary(private val context: Context) {
         catalog
     }
     fun selected(): UserSourceEntry? = read().let { data -> data.entries.firstOrNull { it.id == data.selected } }
-    fun addValidated(script: String): UserSourceEntry = synchronized(lock) {
-        val entry = metadata(script); val current = read()
-        write(UserSourceCatalog(entry.id, current.entries.filterNot { it.id == entry.id } + entry))
+    fun addValidated(script: String, enableWithOthers: Boolean = false): UserSourceEntry = synchronized(lock) {
+        val current = read()
+        val parsed = metadata(script)
+        val entry = current.entries.firstOrNull { it.id == parsed.id } ?: parsed
+        val entries = if (current.entries.any { it.id == entry.id }) current.entries else current.entries + entry
+        val enabled = when {
+            !enableWithOthers -> listOf(entry.id)
+            entry.id in current.enabled -> current.enabled
+            current.enabled.size < MAX_ENABLED -> listOf(entry.id) + current.enabled
+            else -> current.enabled
+        }
+        write(UserSourceCatalog(enabled.firstOrNull(), entries, enabled))
         entry
     }
     fun select(id: String?) = synchronized(lock) {
         val current = read()
         require(id == null || current.entries.any { it.id == id }) { "音源不存在" }
-        write(current.copy(selected = id))
+        write(current.withEnabled(listOfNotNull(id)))
+    }
+    fun setEnabled(id: String, enabled: Boolean) = synchronized(lock) {
+        val current = read()
+        require(current.entries.any { it.id == id }) { "音源不存在" }
+        val next = if (enabled) (current.enabled + id).distinct() else current.enabled - id
+        require(next.size <= MAX_ENABLED) { "最多同时启用 $MAX_ENABLED 个音源，请先停用一个音源" }
+        write(current.withEnabled(next))
+    }
+    fun move(id: String, delta: Int) = synchronized(lock) {
+        val current = read()
+        val from = current.enabled.indexOf(id)
+        require(from >= 0) { "请先启用音源" }
+        val next = current.enabled.toMutableList()
+        val to = (from + delta).coerceIn(0, next.lastIndex)
+        if (to != from) { next.removeAt(from); next.add(to, id); write(current.withEnabled(next)) }
+    }
+    fun setEnabledOrder(ids: List<String>) = synchronized(lock) {
+        val current = read()
+        require(ids.distinct().size == ids.size && ids.size <= MAX_ENABLED && ids.all { id -> current.entries.any { it.id == id } }) { "无效的音源顺序" }
+        write(current.withEnabled(ids))
     }
     fun remove(id: String) = synchronized(lock) {
         val current = read()
-        write(UserSourceCatalog(current.selected.takeUnless { it == id }, current.entries.filterNot { it.id == id }))
+        write(current.copy(entries = current.entries.filterNot { it.id == id }).withEnabled(current.enabled - id))
     }
     fun allowUpdates(id: String, enabled: Boolean) = synchronized(lock) {
         val current = read()
@@ -65,6 +105,7 @@ internal class UserSourceLibrary(private val context: Context) {
     })
     private fun write(data: UserSourceCatalog) {
         val raw = JSONObject().put("version", CATALOG_VERSION).put("selected", data.selected ?: JSONObject.NULL)
+            .put("enabled", JSONArray(data.enabled))
             .put("sources", JSONArray().apply { data.entries.forEach { put(JSONObject().put("script", it.script).put("allowUpdateAlert", it.allowUpdateAlert)) } })
             .toString().toByteArray(Charsets.UTF_8)
         require(raw.size <= 32 * 1024 * 1024) { "音源库超过 32 MB" }
@@ -75,7 +116,8 @@ internal class UserSourceLibrary(private val context: Context) {
     companion object {
         const val BUNDLED_ASSET = "script/flower.js"
         const val BUNDLED_KUWO_ASSET = "script/oiapi-kuwo.js"
-        private const val CATALOG_VERSION = 3
+        const val MAX_ENABLED = 3
+        private const val CATALOG_VERSION = 4
         private val lock = Any()
         fun metadata(script: String): UserSourceEntry {
             require(script.toByteArray(Charsets.UTF_8).size <= 2 * 1024 * 1024) { "音源文件超过 2 MB" }

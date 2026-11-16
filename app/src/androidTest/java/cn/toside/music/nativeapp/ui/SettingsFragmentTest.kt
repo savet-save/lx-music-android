@@ -305,6 +305,7 @@ class SettingsFragmentTest {
         val player = field(activity, "service") as PlaybackService
         val before = player.sourceCatalog()
         try {
+            player.setEnabledSources(before.enabled.take(2))
             SourceHttpFixture().use { server ->
                 instrumentation.runOnMainSync { invoke(activity, "showSources") }
                 val fragment = settings(activity)
@@ -327,14 +328,14 @@ class SettingsFragmentTest {
                 val after = player.sourceCatalog()
                 assertEquals("Settings import fixture", after.entries.first { it.id == after.selected }.name)
                 instrumentation.runOnMainSync {
-                    assertEquals(1, descendants(root).filterIsInstance<TextView>().count { it.text.startsWith(activity.getString(R.string.settings_selected)) })
+                    assertEquals(after.enabled.size, descendants(root).filterIsInstance<Switch>().count { it.tag.toString().startsWith("source-enabled-") && it.isChecked })
                     assertEquals("", (descendants(root).first { it.tag == "settings-source-url" } as EditText).text.toString())
                     activity.closeSettings()
                 }
             }
         } finally {
             player.sourceCatalog().entries.filter { entry -> before.entries.none { it.id == entry.id } }.forEach { player.removeSource(it.id) }
-            player.selectSource(before.selected)
+            player.setEnabledSources(before.enabled)
             instrumentation.runOnMainSync { activity.finish() }
         }
     }
