@@ -540,3 +540,15 @@ MP3 编码使用两个独立共享库 libmp3lame.so 与 liblxmp3.so。JNI 在 JN
 在独立 .bilicheck 包中安装 ARM64 APK，系统确认 primaryCpuAbi=arm64-v8a。BilibiliMp3Test 的系统下载到 MP3 转码与同名 LRC、流播放请求两项，以及 UserSourceTest 的 QuickJS 初始化和异步请求一项全部通过（OK (3 tests)）。音频使用本地 HTTP 静音 PCM，转码检查实际 MP3、320 kbps 帧头及输出时长；没有进行真实 B站登录或联网歌曲验收。
 
 本轮重新检查 ARM64 Debug 与正式签名 Release APK：liblxmp3.so、libmp3lame.so、libquickjs-android-wrapper.so 均通过 16 KB ELF LOAD 段与 APK 存储对齐检查，Debug 包另经 zipalign -c -P 16 -v 4 验证通过。静态对齐与 4 KB 手机上的 ARM64 功能检查均通过，真正 16 KB 页运行仍待 PAGE_SIZE=16384 的设备或模拟器验证。测试后仅移除本轮新建的两个独立测试包，原有正式应用及数据未覆盖；记录位于 build/page-size-validation-9dd0fd82/。
+
+## 播放详情全屏 Fragment 与系统栏（2026-11-16）
+
+播放详情从原生 Dialog 迁移为 PlayerDetailFragment，由 MainActivity 的独立 FragmentContainerView 覆盖整个浏览区域及迷你播放栏，加入 Activity 的 Fragment 返回栈并设为主导航 Fragment。关闭只弹出播放页，保留原浏览目的地和播放服务；手机歌词/封面状态由 Fragment 保存，重建及从播放设置返回时恢复。View 销毁时释放歌词和封面引用。根 FrameLayout 统一处理状态栏、导航栏、刘海及键盘 Insets，不在播放内容重复加留白；系统栏透明且图标明暗随主题，取消系统对比度遮罩。透明主题图片下补充不透明底色，避免下层列表透出。
+
+MainActivity 显式启用 OnBackInvokedCallback，播放 Fragment 的进入、返回采用 Animator 属性动画，交由 AndroidX FragmentManager 处理手势进度、取消和提交，未添加抢占返回的播放页回调。[Android 官方文档](https://developer.android.com/guide/fragments/animate#predictive-back) 要求预测返回 Fragment 动画运行于 Android 14 及以上；本地手机和盒子都是 Android 12，因此新增的左右边缘取消/提交测试按系统版本跳过，尚无 Android 14+ 真机或模拟器的跟手动画验收。
+
+独立 .playercheck 包在 M2007J17C（9dd0fd82，ARM64 / API 31）去重后 14 项通过、2 项跳过；YYA-H618（ARMv7 / API 31）15 项通过、1 项跳过，无剩余失败。共同跳过预测返回动画，手机另跳过仅横屏适用的状态栏预留测试。覆盖播放页与 Activity 共用窗口、Insets 只应用一次、重复打开不叠加、返回不弹出下层下载页、设置往返保留歌词页、重建恢复、真实播放与歌词拖动，以及 360/600/1024 dp 等布局、深色背景、英文和 1.3 倍字体。背景不透明修复后，手机和盒子各复测主题、Insets 和开关三项，均通过；真实手机和盒子截图已检查，状态栏和底部控制显示完整，背景不再透出列表。
+
+48 项 JVM 单元测试通过；最终 Debug/正式签名 Release APK 构建、Debug/Release Lint 均无错误，ARM64 与通用包的 16 KB 原生库检查通过。手机首次安装需要手动确认；MIUI 拦截测试器从后台启动 Activity，回归时通过 ADB 显式将测试应用切到前台完成验证，未修改系统权限。最初超时记录保留在 phone-initial-tests.txt，不计入最终结果。
+
+按用户要求保留手机上的 cn.toside.music.nativeapp.playercheck 和 .playercheck.test，后续使用相同包名覆盖更新；盒子独立测试包已清理，两端正式应用及数据均未覆盖。版本仍为 0.9.17，本轮修改未提交或推送。日志、verification.json 和最终构建记录位于 build/player-fragment-validation/；phone-regression.txt、phone-final-tests.txt、box-tests.txt、box-final-tests.txt 为最终回归记录，phone-final-screens/ 和 box-screens/ 包含系统栏的真实设备截图。

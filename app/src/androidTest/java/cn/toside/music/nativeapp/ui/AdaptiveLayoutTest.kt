@@ -1,6 +1,5 @@
 package cn.toside.music.nativeapp.ui
 
-import android.app.Dialog
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Canvas
@@ -53,9 +52,13 @@ class AdaptiveLayoutTest {
     private fun capture(name: String, activity: MainActivity) {
         if (InstrumentationRegistry.getArguments().getString("adaptiveScreenshots") != "true") return
         SystemClock.sleep(300)
+        instrumentation.uiAutomation.takeScreenshot()?.let { screenshot ->
+            val directory = File(instrumentation.targetContext.getExternalFilesDir(null), "adaptive-validation").apply { mkdirs() }
+            File(directory, "$name-screen.png").outputStream().use { screenshot.compress(Bitmap.CompressFormat.PNG, 100, it) }
+            screenshot.recycle()
+        }
         instrumentation.runOnMainSync {
-            val dialog = (field(activity, "playerDialog") as? Dialog)?.takeIf { it.isShowing }
-            writeSnapshot(name, dialog?.window?.decorView ?: activity.window.decorView)
+            writeSnapshot(name, activity.window.decorView)
         }
     }
     @Test fun navigationAndSongColumnsFitCurrentWindow() {
@@ -116,10 +119,10 @@ class AdaptiveLayoutTest {
             instrumentation.removeMonitor(monitor)
             repeat(50) {
                 instrumentation.waitForIdleSync()
-                if ((field(activity, "playerDialog") as? Dialog)?.isShowing == true) return@repeat
+                if (activity.playerFragment()?.view?.isShown == true) return@repeat
                 SystemClock.sleep(100)
             }
-            assertTrue((field(activity, "playerDialog") as? Dialog)?.isShowing == true)
+            assertTrue(activity.playerFragment()?.view?.isShown == true)
             assertEquals(View.VISIBLE, (field(activity, "detailScroll") as View).visibility)
         } finally { instrumentation.runOnMainSync { activity.finish() } }
     }
@@ -161,8 +164,17 @@ class AdaptiveLayoutTest {
             }
             instrumentation.runOnMainSync { invoke(current, "showPlayerDetails") }
             instrumentation.waitForIdleSync()
-            val dialog = field(current, "playerDialog") as Dialog
-            val buttons = descendants(dialog.window!!.decorView).filterIsInstance<TextView>().filter { it.contentDescription?.toString() in listOf("Sleep timer", "Play queue") }
+            instrumentation.runOnMainSync {
+                val background = current.playerFragment()!!.requireView().background
+                val bounds = android.graphics.Rect(background.bounds)
+                val bitmap = Bitmap.createBitmap(8, 8, Bitmap.Config.ARGB_8888)
+                try {
+                    background.setBounds(0, 0, 8, 8); background.draw(Canvas(bitmap))
+                    for (x in 0..7) for (y in 0..7) assertEquals("Theme must cover the underlying page", 255,
+                        android.graphics.Color.alpha(bitmap.getPixel(x, y)))
+                } finally { background.bounds = bounds; bitmap.recycle() }
+            }
+            val buttons = descendants(current.playerFragment()!!.requireView()).filterIsInstance<TextView>().filter { it.contentDescription?.toString() in listOf("Sleep timer", "Play queue") }
             assertTrue(buttons.isNotEmpty()); assertTrue(buttons.all { it.width > 0 })
             assertTrue(buttons.all { it.lineCount == 1 })
             capture(if (current.resources.configuration.screenWidthDp >= 600) "tablet-dark-player" else "phone-dark-player", current)
@@ -202,8 +214,7 @@ class AdaptiveLayoutTest {
                     assertNotNull(list.getChildAt(0))
                     writeSnapshot("measured-${layout.widthDp}-list", root)
                     invoke(activity, "showPlayerDetails")
-                    val dialog = field(activity, "playerDialog") as Dialog
-                    val content = dialog.findViewById<ViewGroup>(android.R.id.content).getChildAt(0)
+                    val content = activity.playerFragment()!!.requireView()
                     measure(content)
                     val cover = field(activity, "detailCover") as ViewGroup
                     val album = cover.getChildAt(0)
@@ -211,7 +222,7 @@ class AdaptiveLayoutTest {
                     assertTrue(album.width <= cover.width); assertTrue(album.height <= cover.height)
                     assertEquals(if (layout.splitPlayer) View.VISIBLE else View.GONE, (field(activity, "detailScroll") as View).visibility)
                     writeSnapshot("measured-${layout.widthDp}-player", content)
-                    dialog.dismiss()
+                    activity.closePlayerDetails()
                 }
             }
         } finally { instrumentation.runOnMainSync { activity.finish() } }

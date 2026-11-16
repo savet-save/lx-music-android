@@ -1,6 +1,5 @@
 package cn.toside.music.nativeapp.ui
 
-import android.app.Dialog
 import android.content.Intent
 import android.net.Uri
 import android.os.SystemClock
@@ -137,7 +136,8 @@ class SongInteractionsTest {
                 player.seekTo(12000)
                 invoke(activity, "showPlayerDetails")
                 if (resizeForPhoneLayout) {
-                    (field("playerDialog").get(activity) as Dialog).window?.setLayout((390 * density).toInt(), (740 * density).toInt())
+                    activity.findViewById<View>(cn.toside.music.nativeapp.R.id.player_host).layoutParams =
+                        android.widget.FrameLayout.LayoutParams((390 * density).toInt(), (740 * density).toInt())
                 }
             }
             val cover = field("detailCover").get(activity) as View

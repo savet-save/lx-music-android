@@ -23,7 +23,7 @@ class HomeNavigationTest {
         val activity = instrumentation.startActivitySync(Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
         try {
             instrumentation.waitForIdleSync()
-            val root = activity.findViewById<ViewGroup>(android.R.id.content).getChildAt(0) as HomeNavigationLayout
+            val root = activity.window.decorView.findViewWithTag<HomeNavigationLayout>("home-content")
             val online = MainActivity::class.java.getDeclaredField("onlineMode").apply { isAccessible = true }
             fun gesture(right: Boolean, vertical: Boolean = false) { instrumentation.runOnMainSync {
                 val density = activity.resources.displayMetrics.density

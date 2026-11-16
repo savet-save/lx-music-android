@@ -1,6 +1,5 @@
 package cn.toside.music.nativeapp.ui
 
-import android.app.Dialog
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Canvas
@@ -49,7 +48,6 @@ class PlayerDetailLayoutTest {
                 instrumentation.runOnMainSync {
                     adaptiveField.set(activity, layout)
                     invoke(activity, "showPlayerDetails")
-                    val dialog = field(activity, "playerDialog") as Dialog
                     val content = field(activity, "detailContent") as PlayerDetailContent
                     val density = content.resources.displayMetrics.density
                     val width = (layout.widthDp * density).toInt(); val height = (layout.heightDp * density).toInt()
@@ -104,12 +102,13 @@ class PlayerDetailLayoutTest {
                         content.layout(0, 0, width, height)
                         snapshot("${layout.widthDp}x${layout.heightDp}-lyrics", content)
                     }
-                    dialog.dismiss()
+                    activity.closePlayerDetails()
+                    activity.supportFragmentManager.executePendingTransactions()
                 }
             }
         } finally {
             instrumentation.runOnMainSync {
-                (field(activity, "playerDialog") as? Dialog)?.dismiss()
+                activity.closePlayerDetails()
                 adaptiveField.set(activity, original)
                 activity.finish()
             }

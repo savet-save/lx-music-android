@@ -71,7 +71,6 @@ import android.os.Bundle
 import android.os.Parcelable
 import android.os.IBinder
 import android.app.AlertDialog
-import android.app.Dialog
 import android.net.Uri
 import android.text.Editable
 import android.text.TextWatcher
@@ -97,6 +96,7 @@ import android.widget.TextView
 import cn.toside.music.nativeapp.utils.ToastUtils
 import androidx.activity.OnBackPressedCallback
 import androidx.fragment.app.FragmentActivity
+import android.app.Dialog
 import androidx.fragment.app.FragmentContainerView
 import androidx.navigation.NavController
 import androidx.navigation.NavOptions
@@ -169,7 +169,7 @@ class MainActivity : FragmentActivity() {
     }
     private var restoreNavigation = false
     private var tableHeader: FrameLayout? = null
-    private var playerRestorePending = false
+    private var pendingPlayerOpen = false
     private var returnToPlayerFromSettings = false
     private var restoreDetailLyrics = false
     private var highlightedSong: String? = null
@@ -246,7 +246,6 @@ class MainActivity : FragmentActivity() {
     private lateinit var pageTitle: TextView
     private lateinit var lyric: TextView
     private lateinit var loadMore: TextView
-    private var playerDialog: Dialog? = null
     private var detailContent: PlayerDetailContent? = null
     private var detailTitle: TextView? = null
     private var detailTime: TextView? = null
@@ -335,7 +334,6 @@ class MainActivity : FragmentActivity() {
         startupPlayerPending = savedInstanceState == null && preferences.startupPlayer
         iconFont = Typeface.createFromAsset(assets, "fonts/icomoon.ttf")
         lx = LxStyles(this, palette, iconFont)
-        playerRestorePending = savedInstanceState?.getBoolean("player-open") == true
         returnToPlayerFromSettings = savedInstanceState?.getBoolean("settings-return-player") == true
         restoreDetailLyrics = savedInstanceState?.getBoolean("player-lyrics") == true
         pendingLyricSongId = savedInstanceState?.let { if (it.containsKey("lyricSongId")) it.getLong("lyricSongId") else null }
@@ -406,8 +404,9 @@ class MainActivity : FragmentActivity() {
     override fun onPostResume() {
         super.onPostResume()
         pendingSettingsState?.let { saved -> pendingSettingsState = null; openSettings(state = saved) }
+        if (pendingPlayerOpen) { pendingPlayerOpen = false; showPlayerDetails() }
     }
-    override fun onDestroy() { pactDialog?.dismiss(); playerDialog?.dismiss(); downloadQualityDialog?.dismiss(); scope.cancel(); super.onDestroy() }
+    override fun onDestroy() { pactDialog?.dismiss(); downloadQualityDialog?.dismiss(); scope.cancel(); super.onDestroy() }
     override fun onSaveInstanceState(outState: Bundle) {
         val page = pageSnapshot()
         retainedPageState.page = page
@@ -416,7 +415,6 @@ class MainActivity : FragmentActivity() {
         saveMusicPage(page, outState)
         outState.putBundle("music-before-playlist", retainedPageState.beforePlaylist?.let { Bundle().apply { saveMusicPage(it, this) } } ?: beforePlaylistSaved)
         outState.putBoolean("incoming-handled", incomingHandled)
-        outState.putBoolean("player-open", playerDialog?.isShowing == true || playerRestorePending)
         outState.putBoolean("settings-return-player", returnToPlayerFromSettings)
         outState.putBoolean("player-lyrics", detailShowingLyrics)
         pendingLyricSongId?.let { outState.putLong("lyricSongId", it) }
@@ -650,6 +648,9 @@ class MainActivity : FragmentActivity() {
         val navContainer = findViewById<FragmentContainerView>(R.id.main_nav_host)
             ?: FragmentContainerView(this).apply { id = R.id.main_nav_host }
         (navContainer.parent as? ViewGroup)?.removeView(navContainer)
+        val playerContainer = findViewById<FragmentContainerView>(R.id.player_host)
+            ?: FragmentContainerView(this).apply { id = R.id.player_host }
+        (playerContainer.parent as? ViewGroup)?.removeView(playerContainer)
         navigationDrawer?.close(false)
         navigationDrawer = null
         playlistDrawer?.close(false)
@@ -659,7 +660,7 @@ class MainActivity : FragmentActivity() {
         val foreground = palette.foreground
         val root = HomeNavigationLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            tag = if (uiLayout.expanded) "home-expanded" else "home-compact"
+            tag = "home-content"
             setBackgroundColor(palette.surface); fitsSystemWindows = true
             eligible = { y ->
                 val searchBounds = android.graphics.Rect()
@@ -894,11 +895,18 @@ class MainActivity : FragmentActivity() {
         }
         root.addView(seek, LinearLayout.LayoutParams(-1, dp(18)))
         palette.background(root); palette.textStyle(root)
-        installHomeContent(root)
+        val screen = FrameLayout(this).apply {
+            tag = if (uiLayout.expanded) "home-expanded" else "home-compact"
+            setBackgroundColor(palette.surface)
+            addView(root, FrameLayout.LayoutParams(-1, -1))
+            addView(playerContainer, FrameLayout.LayoutParams(-1, -1))
+        }
+        installHomeContent(screen)
         activeMusicFragment()?.refreshContent()
         updateNavigationSelection()
         updateSearchChrome()
-        ScreenInsets.install(window, root)
+        ScreenInsets.install(window, screen)
+        ScreenInsets.styleSystemBars(window, palette.theme.dark)
         if (restoreNavigation) { root.post { navigationDrawer?.open(false) }; restoreNavigation = false }
         search.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
@@ -1337,8 +1345,8 @@ class MainActivity : FragmentActivity() {
     }
     private fun showPlaybackQuality() = openSettings("playback")
     private fun showPlaybackSettings() {
-        if (playerDialog?.isShowing == true) {
-            returnToPlayerFromSettings = true; restoreDetailLyrics = detailShowingLyrics; playerDialog?.dismiss()
+        if (playerFragment() != null) {
+            returnToPlayerFromSettings = true; restoreDetailLyrics = detailShowingLyrics; closePlayerDetails()
         }
         openSettings("playback")
     }
@@ -1541,7 +1549,7 @@ class MainActivity : FragmentActivity() {
         status.text = previousStatus; loadMore.visibility = moreVisibility; updateSearchChrome()
         service?.state?.value?.let(::renderPlayer); updateArtwork()
         settingsFragment()?.applyTheme()
-        window.statusBarColor = palette.surface; window.navigationBarColor = palette.surface
+        ScreenInsets.styleSystemBars(window, theme.dark)
         if (Build.VERSION.SDK_INT >= 30) {
             val light = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
             window.insetsController?.setSystemBarsAppearance(if (theme.dark) 0 else light, light)
@@ -1725,10 +1733,24 @@ class MainActivity : FragmentActivity() {
         }
     }
     private fun showPlayerDetails() {
-        val state = service?.state?.value ?: return
-        if (playerDialog?.isShowing == true) return
-        val dialog = Dialog(this).apply { requestWindowFeature(android.view.Window.FEATURE_NO_TITLE) }
-        playerDialog = dialog
+        if (service == null || playerFragment()?.isAdded == true) return
+        if (supportFragmentManager.isStateSaved) { pendingPlayerOpen = true; return }
+        hidePageKeyboard(); playlistDrawer?.close(false)
+        val fragment = PlayerDetailFragment()
+        supportFragmentManager.beginTransaction().setReorderingAllowed(true)
+            .setCustomAnimations(R.animator.player_enter, R.animator.player_exit, R.animator.player_enter, R.animator.player_exit)
+            .add(R.id.player_host, fragment, PlayerDetailFragment.TAG)
+            .setPrimaryNavigationFragment(fragment)
+            .addToBackStack(PlayerDetailFragment.TAG).commit()
+        supportFragmentManager.executePendingTransactions()
+    }
+    internal fun playerFragment() = supportFragmentManager.findFragmentByTag(PlayerDetailFragment.TAG) as? PlayerDetailFragment
+    internal fun closePlayerDetails() {
+        if (!supportFragmentManager.isStateSaved) supportFragmentManager.popBackStackImmediate(PlayerDetailFragment.TAG,
+            androidx.fragment.app.FragmentManager.POP_BACK_STACK_INCLUSIVE)
+    }
+    internal fun playerLyricsVisible() = detailShowingLyrics
+    internal fun createPlayerDetailView(showLyrics: Boolean?): View {
         val scroll = PlayerLyricScroll(this, lx.selected, {
             service?.state?.value?.let(::renderDetailTime)
         }, { index ->
@@ -1746,7 +1768,7 @@ class MainActivity : FragmentActivity() {
             }
         }
         val content = PlayerDetailContent(this, uiLayout, palette, iconFont, scroll, PlayerDetailActions(
-            close = { dialog.dismiss() }, lyrics = ::toggleDetailPage,
+            close = ::closePlayerDetails, lyrics = ::toggleDetailPage,
             previous = { service?.previous() }, play = ::togglePlayback, next = { service?.next() },
             mode = { service?.cycleMode() }, queue = ::showPlaybackQueue, sleep = ::showSleepTimer,
             settings = ::showPlaybackSettings,
@@ -1758,7 +1780,7 @@ class MainActivity : FragmentActivity() {
         detailTitle = content.title; detailTime = content.time; detailSeek = content.seek
         detailToggle = content.toggle; detailMode = content.mode; detailScroll = scroll
         detailCover = content.cover; detailCoverImage = content.coverImage; detailPageToggle = content.pageToggle
-        detailShowingLyrics = uiLayout.splitPlayer
+        detailShowingLyrics = showLyrics ?: uiLayout.splitPlayer
         content.showLyrics(detailShowingLyrics)
         detailSeek?.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(bar: SeekBar?, progress: Int, fromUser: Boolean) = Unit
@@ -1766,18 +1788,21 @@ class MainActivity : FragmentActivity() {
             override fun onStopTrackingTouch(bar: SeekBar?) { detailSeeking = false; service?.seekTo(bar?.progress ?: 0) }
         })
         palette.background(content); palette.textStyle(content)
-        dialog.setContentView(content)
-        dialog.window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(palette.surface))
-        dialog.setOnDismissListener {
-            playerDialog = null; detailContent = null; detailTitle = null; detailTime = null; detailSeek = null; detailToggle = null; detailMode = null
-            detailScroll = null; detailCover = null; detailCoverImage = null; detailPageToggle = null
-            detailRenderedLines = null; detailActiveLine = -1; detailSeeking = false
-        }
-        dialog.show()
-        dialog.window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
-        dialog.window?.let { ScreenInsets.install(it, content) }
+        // Theme artwork may contain transparent pixels. The player must cover the
+        // browsing page, just as the old Dialog window's opaque surface did.
+        content.background = android.graphics.drawable.LayerDrawable(arrayOf(
+            android.graphics.drawable.ColorDrawable(palette.surface), requireNotNull(content.background)))
+        content.isClickable = true
         updateArtwork()
-        renderDetails(state)
+        service?.state?.value?.let(::renderDetails)
+        return content
+    }
+    internal fun releasePlayerDetailView(view: View?) {
+        if (detailContent !== view) return
+        detailScroll?.cancelPreview()
+        detailContent = null; detailTitle = null; detailTime = null; detailSeek = null; detailToggle = null; detailMode = null
+        detailScroll = null; detailCover = null; detailCoverImage = null; detailPageToggle = null
+        detailRenderedLines = null; detailActiveLine = -1; detailSeeking = false
     }
     private fun toggleDetailPage() {
         detailShowingLyrics = !detailShowingLyrics
@@ -1814,7 +1839,7 @@ class MainActivity : FragmentActivity() {
     }
 
     private fun renderDetails(state: PlayerState) {
-        if (playerDialog?.isShowing != true) return
+        if (detailContent == null) return
         detailContent?.renderSong(state.song)
         detailContent?.status?.apply {
             text = state.error.orEmpty()
@@ -2750,10 +2775,6 @@ class MainActivity : FragmentActivity() {
         if (!changingSeek) seek.progress = state.position
         time.text = "${formatTime(state.position)} / ${formatTime(state.duration)}"
         renderDetails(state)
-        if (playerRestorePending) {
-            playerRestorePending = false; showPlayerDetails()
-            if (restoreDetailLyrics != detailShowingLyrics) toggleDetailPage()
-        }
         if (startupPlayerPending && song != null) { startupPlayerPending = false; showPlayerDetails() }
     }
     private fun updateMiniPlayerVisibility(song: Song?) {

@@ -28,7 +28,6 @@ import cn.toside.music.nativeapp.online.ChartsRepository
 import cn.toside.music.nativeapp.online.NativeChartsRepository
 import cn.toside.music.nativeapp.utils.PermissionPolicy
 
-import android.app.Dialog
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.Intent
@@ -998,7 +997,7 @@ class PlaybackSettingsTest {
                     invoke(fixture.activity, "showPlayerDetails")
                     assertEquals(if (language == "en") "Repeat playlist" else "列表循環", (field(fixture.activity, "detailMode") as TextView).contentDescription.toString())
                     screenshot("player-$language")
-                    main { (field(fixture.activity, "playerDialog") as Dialog).dismiss() }
+                    main { fixture.activity.closePlayerDetails() }
                 } finally { instrumentation.removeMonitor(monitor) }
             }
         }
