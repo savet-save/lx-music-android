@@ -26,6 +26,8 @@ internal class BilibiliCredentials(context: Context) {
     fun clear() = store.clear()
 }
 
+internal data class BilibiliAccount(val name: String, val vipActive: Boolean = false, val vipLabel: String = "")
+
 /** Web endpoints documented by bilibili-plugins/bilibili-api-collect. No account data goes to CDNs. */
 internal class BilibiliApi(private val context: Context? = null, private val session: String? = null) {
     private suspend fun json(path: String, parameters: Map<String, String> = emptyMap(), signed: Boolean = false): JSONObject = withContext(Dispatchers.IO) {
@@ -54,10 +56,8 @@ internal class BilibiliApi(private val context: Context? = null, private val ses
             return JSONObject(body.byteStream().use { it.readBounded(8 * 1024 * 1024).toString(Charsets.UTF_8) })
         }
     }
-    suspend fun account(): String = withContext(Dispatchers.IO) {
-        val data = checked(request("https://api.bilibili.com/x/web-interface/nav"))
-        check(data.optBoolean("isLogin")) { "登录已失效，请重新填写 SESSDATA" }
-        data.optString("uname").ifBlank { data.optLong("mid").toString() }
+    suspend fun account(): BilibiliAccount = withContext(Dispatchers.IO) {
+        parseAccount(checked(request("https://api.bilibili.com/x/web-interface/nav")))
     }
     suspend fun search(query: String, page: Int): List<Song> {
         require(query.isNotBlank() && page > 0)
@@ -98,6 +98,12 @@ internal class BilibiliApi(private val context: Context? = null, private val ses
         private val directClient = client.newBuilder().cookieJar(CookieJar.NO_COOKIES).followRedirects(false).build()
         private val mix = intArrayOf(46,47,18,2,53,8,23,32,15,50,10,31,58,3,45,35,27,43,5,49,33,9,42,19,29,28,14,39,12,38,41,13,37,48,7,16,24,55,40,61,26,17,0,1,60,51,30,4,22,25,54,21,56,59,6,63,57,62,11,36,20,34,44,52)
         private fun encode(value: String) = NativeHttp.encode(value).replace("+", "%20").replace("%7E", "~")
+        internal fun parseAccount(data: JSONObject): BilibiliAccount {
+            check(data.optBoolean("isLogin")) { "登录已失效，请重新填写 SESSDATA" }
+            val active = data.optInt("vipStatus") == 1
+            return BilibiliAccount(data.optString("uname").ifBlank { data.optLong("mid").toString() }, active,
+                if (active) data.optJSONObject("vip_label")?.optString("text").orEmpty().trim() else "")
+        }
         internal fun sign(parameters: Map<String, String>, img: String, sub: String, timestamp: Long): String {
             val raw = img + sub; require(raw.length == 64)
             val key = mix.take(32).map { raw[it] }.joinToString("")

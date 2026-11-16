@@ -2,6 +2,13 @@
     <string name="bili_name">B站</string>
     <string name="bili_login">B站登录</string>
     <string name="bili_account_settings">扫码登录或手动填写 SESSDATA，凭据在本机加密保存</string>
+    <string name="bili_login_limits">登录限制说明</string>
+    <string name="bili_login_limits_expanded">已展开</string>
+    <string name="bili_login_limits_collapsed">已收起</string>
+    <string name="bili_login_limits_details">多设备登录\n同一账号可在多个设备登录。“保持登录”和“同时播放会员内容”的限制不同，会员播放额度不等于登录设备数量。\n\n普通大会员\n同一账号最多 2 台设备同时使用会员服务；手机端在 24 小时内最多使用 2 台设备。\n\n超级大会员\n同一账号最多 4 台设备同时播放会员版权内容；手机端、电视端在 24 小时内各最多使用 2 台设备。部分持续有效的老会员适用原规则，具体以官方协议为准。\n\n在本应用中使用\n手机和平板可分别扫码登录同一账号，各自在本机保存凭据。本应用不额外限制设备数量。普通 B站视频音频的同时播放、下载，未查到统一公开的设备额度，能否同时使用以 B站实际限制为准。\n\n以上说明供参考，规则可能调整，请以 B站最新官方协议为准。</string>
+    <string name="bili_vip_agreement">查看大会员官方协议</string>
+    <string name="bili_super_vip_agreement">查看超级大会员官方协议</string>
+    <string name="bili_login_limits_open_failed">无法打开协议，请安装或启用浏览器后重试</string>
     <string name="bili_qr_title">扫码登录</string>
     <string name="bili_qr_hint">用 B站 App 扫一扫，扫描二维码并确认登录，无需手动输入。本机使用可先保存二维码，再从 B站扫一扫的相册中识别。</string>
     <string name="bili_qr_idle">点击下方按钮生成登录二维码</string>
@@ -21,6 +28,8 @@
     <string name="bili_login_save">验证并保存</string>
     <string name="bili_checking">正在验证登录状态…</string>
     <string name="bili_logged_in">已登录：%1$s</string>
+    <string name="bili_logged_in_vip">已登录：%1$s · %2$s</string>
+    <string name="bili_vip">大会员</string>
     <string name="bili_logged_out">未保存登录凭据</string>
     <string name="bili_logout">清除登录凭据</string>
     <string name="bili_mp3_download">下载 B站音频为 MP3</string>

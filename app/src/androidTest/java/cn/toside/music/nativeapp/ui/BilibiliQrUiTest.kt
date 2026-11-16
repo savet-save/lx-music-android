@@ -72,11 +72,12 @@ class BilibiliQrUiTest {
             override suspend fun generate() = session()
             override suspend fun poll(key: String) = if (polls++ == 0) BilibiliQrState.Scanned else BilibiliQrState.Authorized("qr-fixture-not-an-account")
         })
-        val verify: suspend (String) -> String = { assertEquals("qr-fixture-not-an-account", it); "Fixture" }
+        val verify: suspend (String) -> BilibiliAccount = { assertEquals("qr-fixture-not-an-account", it); BilibiliAccount("Fixture", true, "年度大会员") }
         field(activity, "verifySession", verify)
         main { view(activity, "bili-qr-refresh").performClick() }
         waitFor("scan confirmation") { text(activity, "bili-qr-status") == activity.getString(R.string.bili_qr_scanned) }
         waitFor("encrypted login") { text(activity, "bili-login-status").contains("Fixture") }
+        assertEquals(activity.getString(R.string.bili_logged_in_vip, "Fixture", "年度大会员"), text(activity, "bili-login-status"))
         assertEquals("qr-fixture-not-an-account", BilibiliCredentials(context).load())
         assertEquals("", (view(activity, "bili-token") as EditText).text.toString())
         val encrypted = context.getSharedPreferences("bilibili-credentials", 0).all.values.joinToString()
@@ -98,7 +99,7 @@ class BilibiliQrUiTest {
                     BilibiliQrState.Authorized("late-fixture-not-an-account")
                 }
             })
-            val verify: suspend (String) -> String = { "Late fixture" }; field(activity, "verifySession", verify)
+            val verify: suspend (String) -> BilibiliAccount = { BilibiliAccount("Late fixture") }; field(activity, "verifySession", verify)
             main { view(activity, "bili-qr-refresh").performClick() }
             runBlocking { withTimeout(10000) { enteredFirst.await() } }
             main { view(activity, "bili-qr-refresh").performClick() }

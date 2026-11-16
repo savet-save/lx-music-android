@@ -10,6 +10,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import cn.toside.music.nativeapp.data.Song
 import cn.toside.music.nativeapp.online.BilibiliCredentials
+import cn.toside.music.nativeapp.online.BilibiliAccount
 import kotlinx.coroutines.*
 import org.junit.Assert.*
 import org.junit.Test
@@ -51,7 +52,7 @@ class BilibiliUiTest {
         val activity=ForegroundTestActivities.start(Intent(context,BilibiliLoginActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         val entered=CompletableDeferred<Unit>();val finish=CompletableDeferred<Unit>()
         try {
-            val validate:suspend (String)->String = { entered.complete(Unit);finish.await();"fixture" }
+            val validate:suspend (String)->BilibiliAccount = { entered.complete(Unit);finish.await();BilibiliAccount("fixture") }
             BilibiliLoginActivity::class.java.getDeclaredField("verifySession").apply { isAccessible=true }.set(activity,validate)
             instrumentation.runOnMainSync {
                 activity.window.decorView.findViewWithTag<View>("bili-manual-toggle").performClick()

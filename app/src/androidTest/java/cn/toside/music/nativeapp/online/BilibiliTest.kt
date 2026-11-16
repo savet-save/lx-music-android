@@ -14,6 +14,22 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class BilibiliTest {
     private val context = InstrumentationRegistry.getInstrumentation().targetContext
+    @Test fun membershipDisplayRequiresAnActiveMembershipEvenWhenOldVipDetailsRemain() {
+        val expired = BilibiliApi.parseAccount(JSONObject("""{"isLogin":true,"uname":"Fixture","vipStatus":0,"vipType":2,"vip_label":{"text":"年度大会员"}}"""))
+        assertEquals(BilibiliAccount("Fixture"), expired)
+        val ordinary = BilibiliApi.parseAccount(JSONObject("""{"isLogin":true,"uname":"Fixture"}"""))
+        assertEquals(BilibiliAccount("Fixture"), ordinary)
+        try { BilibiliApi.parseAccount(JSONObject("""{"isLogin":false,"vipStatus":1}""")); fail("Expired login") }
+        catch (_: IllegalStateException) { }
+    }
+    @Test fun activeMembershipKeepsTheOfficialLabelAndAllowsMissingLabels() {
+        for (label in listOf("大会员", "年度大会员", "超级大会员")) {
+            val account = BilibiliApi.parseAccount(JSONObject().put("isLogin", true).put("uname", "Fixture").put("vipStatus", 1)
+                .put("vip_label", JSONObject().put("text", label)))
+            assertEquals(BilibiliAccount("Fixture", true, label), account)
+        }
+        assertEquals(BilibiliAccount("42", true), BilibiliApi.parseAccount(JSONObject("""{"isLogin":true,"mid":42,"vipStatus":1}""")))
+    }
     @Test fun wbiSignatureMatchesPublishedExampleAndEscapesSpaces() {
         val signed=BilibiliApi.sign(mapOf("foo" to "114","bar" to "514","zab" to "1919810"),"7cd084941338484aae1ad9425b84077c","4932caff0ff746eab6f01bf08b70ac45",1702204169)
         assertTrue(signed.endsWith("w_rid=8f6f2b5b3d485fe1886cec6a0be8c5d4"))

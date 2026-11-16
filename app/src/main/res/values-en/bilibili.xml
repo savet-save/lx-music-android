@@ -2,6 +2,13 @@
     <string name="bili_name">Bilibili</string>
     <string name="bili_login">Bilibili login</string>
     <string name="bili_account_settings">Scan a QR code or enter SESSDATA. Credentials are encrypted on this device.</string>
+    <string name="bili_login_limits">Login and device limits</string>
+    <string name="bili_login_limits_expanded">Expanded</string>
+    <string name="bili_login_limits_collapsed">Collapsed</string>
+    <string name="bili_login_limits_details">Signing in on multiple devices\nOne account can be signed in on multiple devices. Limits on staying signed in differ from limits on simultaneous playback of membership content. Playback allowances are not login device limits.\n\nPremium membership (大会员)\nUp to 2 devices can use membership services simultaneously. On phones, up to 2 devices can use membership services within 24 hours.\n\nSuper Premium membership (超级大会员)\nUp to 4 devices can play membership content simultaneously. Within 24 hours, up to 2 phones and 2 TVs can use these services. Some continuously active older memberships follow earlier rules; see the official agreement.\n\nUsing this app\nYour phone and tablet can sign in to the same account separately by QR code, with credentials stored on each device. This app adds no device limit. No uniform public device allowance was found for simultaneous playback or download of ordinary Bilibili video audio; availability depends on Bilibili’s actual limits.\n\nRules may change. Refer to Bilibili’s latest official agreements.</string>
+    <string name="bili_vip_agreement">View the Premium membership agreement</string>
+    <string name="bili_super_vip_agreement">View the Super Premium membership agreement</string>
+    <string name="bili_login_limits_open_failed">Could not open the agreement. Install or enable a browser and try again.</string>
     <string name="bili_qr_title">Scan to sign in</string>
     <string name="bili_qr_hint">Scan with the Bilibili app and confirm to sign in without typing. On this phone, save the QR code and select it from the scanner’s gallery.</string>
     <string name="bili_qr_idle">Generate a login QR code using the button below</string>
@@ -21,6 +28,8 @@
     <string name="bili_login_save">Verify and save</string>
     <string name="bili_checking">Checking sign-in status…</string>
     <string name="bili_logged_in">Signed in: %1$s</string>
+    <string name="bili_logged_in_vip">Signed in: %1$s · %2$s</string>
+    <string name="bili_vip">Premium member</string>
     <string name="bili_logged_out">No saved credentials</string>
     <string name="bili_logout">Clear credentials</string>
     <string name="bili_mp3_download">Download Bilibili audio as MP3</string>

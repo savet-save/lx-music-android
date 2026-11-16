@@ -1,11 +1,13 @@
 package cn.toside.music.nativeapp.ui
 
 import android.content.ContentValues
+import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.Typeface
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.SystemClock
@@ -16,6 +18,7 @@ import android.view.View
 import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.*
 import androidx.fragment.app.FragmentActivity
+import androidx.core.view.ViewCompat
 import cn.toside.music.nativeapp.R
 import cn.toside.music.nativeapp.online.*
 import kotlinx.coroutines.*
@@ -32,7 +35,7 @@ class BilibiliLoginActivity : FragmentActivity() {
     private var qrSession: BilibiliQrSession? = null
     private var qrBitmap: Bitmap? = null
     private var exportDraft: File? = null
-    private var verifySession: suspend (String) -> String = { BilibiliApi(applicationContext, it).account() }
+    private var verifySession: suspend (String) -> BilibiliAccount = { BilibiliApi(applicationContext, it).account() }
     private var qrClient: BilibiliQrClient = BilibiliQrLogin()
     private lateinit var palette: UiPalette
     private lateinit var styles: LxStyles
@@ -45,6 +48,7 @@ class BilibiliLoginActivity : FragmentActivity() {
     private lateinit var refreshQr: TextView
     private lateinit var saveQr: TextView
     private lateinit var manual: LinearLayout
+    private lateinit var loginLimits: LinearLayout
 
     override fun attachBaseContext(base: Context) = super.attachBaseContext(UiPreferences.context(base))
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -66,6 +70,7 @@ class BilibiliLoginActivity : FragmentActivity() {
         panel.addView(label(R.string.bili_account_settings, 13f, palette.muted))
         status = label(R.string.bili_logged_out, 14f, palette.primary).apply { tag = "bili-login-status"; setPadding(0, dp(16), 0, dp(8)); accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE }
         panel.addView(status)
+        addLoginLimits(panel, savedInstanceState?.getBoolean("login-limits") == true)
         panel.addView(label(R.string.bili_qr_title, 18f).apply { isAccessibilityHeading = true; setPadding(0, dp(12), 0, dp(8)) })
         panel.addView(label(R.string.bili_qr_hint, 13f, palette.muted))
         val qrArea = FrameLayout(this).apply { background = styles.shape(Color.WHITE, border = palette.divider); setPadding(dp(8), dp(8), dp(8), dp(8)) }
@@ -104,7 +109,7 @@ class BilibiliLoginActivity : FragmentActivity() {
         setContentView(root); ScreenInsets.install(window, root); ScreenInsets.styleSystemBars(window, theme.dark)
         operation = scope.launch {
             if (withContext(Dispatchers.IO) { BilibiliCredentials(applicationContext).load().isNotBlank() }) {
-                try { status.text = getString(R.string.bili_logged_in, BilibiliApi(applicationContext).account()) }
+                try { showAccount(BilibiliApi(applicationContext).account()) }
                 catch (e: CancellationException) { throw e }
                 catch (e: Exception) { status.text = e.localizedMessage }
             }
@@ -112,6 +117,10 @@ class BilibiliLoginActivity : FragmentActivity() {
     }
 
     private fun dp(value: Int) = styles.dp(value)
+    private fun showAccount(account: BilibiliAccount) {
+        status.text = if (account.vipActive) getString(R.string.bili_logged_in_vip, account.name, account.vipLabel.ifBlank { getString(R.string.bili_vip) })
+        else getString(R.string.bili_logged_in, account.name)
+    }
     private fun label(id: Int, size: Float, color: Int = palette.foreground) = TextView(this).apply {
         text = getString(id); textSize = size; setTextColor(color); setLineSpacing(dp(3).toFloat(), 1f)
     }
@@ -123,6 +132,56 @@ class BilibiliLoginActivity : FragmentActivity() {
         accessibilityDelegate = object : View.AccessibilityDelegate() {
             override fun onInitializeAccessibilityNodeInfo(host: View, info: AccessibilityNodeInfo) { super.onInitializeAccessibilityNodeInfo(host, info); info.className = "android.widget.Button" }
         }
+    }
+
+    private fun addLoginLimits(panel: LinearLayout, expanded: Boolean) {
+        val section = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL; background = styles.shape(styles.panel, border = palette.divider)
+        }
+        val toggle = LinearLayout(this).apply {
+            tag = "bili-login-limits-toggle"; gravity = Gravity.CENTER_VERTICAL; isBaselineAligned = false
+            minimumHeight = dp(48); setPadding(dp(12), dp(8), dp(12), dp(8))
+            background = styles.touch(); isFocusable = true; contentDescription = getString(R.string.bili_login_limits)
+        }
+        toggle.addView(label(R.string.bili_login_limits, 14f, palette.primary).apply {
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }, LinearLayout.LayoutParams(0, -2, 1f))
+        val arrow = styles.label("›", 22f, palette.primary).apply {
+            gravity = Gravity.CENTER; includeFontPadding = false; importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }
+        toggle.addView(arrow, LinearLayout.LayoutParams(dp(24), dp(24)))
+        loginLimits = LinearLayout(this).apply {
+            tag = "bili-login-limits-details"; orientation = LinearLayout.VERTICAL
+            setPadding(dp(12), 0, dp(12), dp(8))
+            addView(label(R.string.bili_login_limits_details, 13f, palette.muted))
+        }
+        fun agreement(id: Int, url: String) {
+            loginLimits.addView(button(id) {
+                try { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
+                catch (_: ActivityNotFoundException) { Toast.makeText(this, R.string.bili_login_limits_open_failed, Toast.LENGTH_LONG).show() }
+            }.apply { gravity = Gravity.START or Gravity.CENTER_VERTICAL })
+        }
+        agreement(R.string.bili_vip_agreement, "https://www.bilibili.com/blackboard/big-protocol.html")
+        agreement(R.string.bili_super_vip_agreement, "https://www.bilibili.com/blackboard/activity-EUwyVx-ou.html")
+        fun setExpanded(value: Boolean) {
+            loginLimits.visibility = if (value) View.VISIBLE else View.GONE
+            arrow.rotation = if (value) 90f else 0f
+            ViewCompat.setStateDescription(toggle, getString(if (value) R.string.bili_login_limits_expanded else R.string.bili_login_limits_collapsed))
+        }
+        toggle.setOnClickListener { setExpanded(loginLimits.visibility != View.VISIBLE) }
+        toggle.accessibilityDelegate = object : View.AccessibilityDelegate() {
+            override fun onInitializeAccessibilityNodeInfo(host: View, info: AccessibilityNodeInfo) {
+                super.onInitializeAccessibilityNodeInfo(host, info); info.className = "android.widget.Button"
+                info.addAction(if (loginLimits.visibility == View.VISIBLE) AccessibilityNodeInfo.AccessibilityAction.ACTION_COLLAPSE else AccessibilityNodeInfo.AccessibilityAction.ACTION_EXPAND)
+            }
+            override fun performAccessibilityAction(host: View, action: Int, args: Bundle?): Boolean {
+                val expected = if (loginLimits.visibility == View.VISIBLE) AccessibilityNodeInfo.ACTION_COLLAPSE else AccessibilityNodeInfo.ACTION_EXPAND
+                return if (action == expected) host.performClick() else super.performAccessibilityAction(host, action, args)
+            }
+        }
+        setExpanded(expanded)
+        section.addView(toggle); section.addView(loginLimits)
+        panel.addView(section, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8); bottomMargin = dp(4) })
     }
 
     private fun resetQr(message: Int = R.string.bili_qr_idle) {
@@ -156,8 +215,8 @@ class BilibiliLoginActivity : FragmentActivity() {
                 BilibiliQrState.Scanned -> qrStatus.text = getString(R.string.bili_qr_scanned)
                 BilibiliQrState.Expired -> { resetQr(R.string.bili_qr_expired); return }
                 is BilibiliQrState.Authorized -> {
-                    val name = verifySession(result.token); storeToken(result.token)
-                    input.text.clear(); resetQr(R.string.bili_qr_success); status.text = getString(R.string.bili_logged_in, name)
+                    val account = verifySession(result.token); storeToken(result.token)
+                    input.text.clear(); resetQr(R.string.bili_qr_success); showAccount(account)
                     return
                 }
             }
@@ -173,8 +232,8 @@ class BilibiliLoginActivity : FragmentActivity() {
         save.isEnabled = false; status.text = getString(R.string.bili_checking)
         operation = scope.launch {
             try {
-                val name = verifySession(token); storeToken(token)
-                input.text.clear(); status.text = getString(R.string.bili_logged_in, name)
+                val account = verifySession(token); storeToken(token)
+                input.text.clear(); showAccount(account)
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) { status.text = e.localizedMessage }
             finally { if (currentCoroutineContext().isActive) save.isEnabled = true }
@@ -252,6 +311,7 @@ class BilibiliLoginActivity : FragmentActivity() {
     override fun onStop() { qrOperation?.cancel(); super.onStop() }
     override fun onSaveInstanceState(outState: Bundle) {
         outState.putBoolean("manual", manual.visibility == View.VISIBLE)
+        outState.putBoolean("login-limits", loginLimits.visibility == View.VISIBLE)
         exportDraft?.let { outState.putString("qr-export", it.name) }
         super.onSaveInstanceState(outState)
     }
