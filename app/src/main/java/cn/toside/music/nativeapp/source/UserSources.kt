@@ -32,6 +32,7 @@ internal class UserSources(private val context: Context) {
     val updates = mutableUpdate.asStateFlow()
 
     suspend fun catalog() = withContext(Dispatchers.IO) { library.read() }
+    suspend fun bilibiliEnabled() = withContext(Dispatchers.IO) { library.bilibiliEnabled() }
     suspend fun loadSaved(): Boolean {
         return catalog().enabled.isNotEmpty()
     }
@@ -88,10 +89,16 @@ internal class UserSources(private val context: Context) {
         if (!allowed && mutableUpdate.value?.id == id) mutableUpdate.value = null
     }
     fun dismissUpdate() { mutableUpdate.value = null }
+    private suspend fun nativeBilibili(id: String): Boolean {
+        check(!closed) { "音源已关闭" }
+        check(id in catalog().enabled) { "音源未启用" }
+        return withContext(Dispatchers.IO) { library.isBilibili(id) }
+    }
     suspend fun musicUrlFrom(id: String, source: String, info: JSONObject, quality: String): String =
-        runtime(id).musicUrl(source, info, quality, exactQuality = true)
-    suspend fun supportsFrom(id: String, source: String, action: String) = runtime(id).supports(source, action)
-    suspend fun hasQualityFrom(id: String, quality: String) = runtime(id).hasQuality(quality)
+        if (nativeBilibili(id)) cn.toside.music.nativeapp.online.BilibiliApi(context).audio(info)
+        else runtime(id).musicUrl(source, info, quality, exactQuality = true)
+    suspend fun supportsFrom(id: String, source: String, action: String) = if (nativeBilibili(id)) source == "bili" && action == "musicUrl" else runtime(id).supports(source, action)
+    suspend fun hasQualityFrom(id: String, quality: String) = if (nativeBilibili(id)) quality == "original" else runtime(id).hasQuality(quality)
     suspend fun supports(source: String, action: String): Boolean {
         for (entry in catalog().enabledEntries) {
             try { if (supportsFrom(entry.id, source, action)) return true }

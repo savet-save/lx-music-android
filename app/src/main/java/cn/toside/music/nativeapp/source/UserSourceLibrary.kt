@@ -24,7 +24,7 @@ internal class UserSourceLibrary(private val context: Context) {
     fun read(): UserSourceCatalog = synchronized(lock) {
         if (!target.baseFile.isFile) {
             val legacy = File(context.filesDir, "user-source.js")
-            val bundled = listOf(bundled(BUNDLED_ASSET), bundled(BUNDLED_KUWO_ASSET))
+            val bundled = listOf(bundled(BUNDLED_ASSET), bundled(BUNDLED_KUWO_ASSET), bundled(BUNDLED_BILIBILI_ASSET))
             val entry = if (legacy.isFile) metadata(legacy.inputStream().use { it.readBounded(2 * 1024 * 1024) }.toString(Charsets.UTF_8)) else bundled.first()
             return@synchronized UserSourceCatalog(entry.id, (listOf(entry) + bundled).distinctBy { it.id }).also(::write)
         }
@@ -47,12 +47,15 @@ internal class UserSourceLibrary(private val context: Context) {
             val additions = buildList {
                 if (version < 2) add(bundled(BUNDLED_ASSET))
                 if (version < 3) add(bundled(BUNDLED_KUWO_ASSET))
+                if (version < 5) add(bundled(BUNDLED_BILIBILI_ASSET))
             }
             return@synchronized catalog.copy(entries = (entries + additions).distinctBy { it.id }).also(::write)
         }
         catalog
     }
     fun selected(): UserSourceEntry? = read().let { data -> data.entries.firstOrNull { it.id == data.selected } }
+    fun isBilibili(id: String) = id == bundled(BUNDLED_BILIBILI_ASSET).id
+    fun bilibiliEnabled() = read().enabled.any(::isBilibili)
     fun addValidated(script: String, enableWithOthers: Boolean = false): UserSourceEntry = synchronized(lock) {
         val current = read()
         val parsed = metadata(script)
@@ -116,8 +119,9 @@ internal class UserSourceLibrary(private val context: Context) {
     companion object {
         const val BUNDLED_ASSET = "script/flower.js"
         const val BUNDLED_KUWO_ASSET = "script/oiapi-kuwo.js"
+        const val BUNDLED_BILIBILI_ASSET = "script/bilibili.js"
         const val MAX_ENABLED = 3
-        private const val CATALOG_VERSION = 4
+        private const val CATALOG_VERSION = 5
         private val lock = Any()
         fun metadata(script: String): UserSourceEntry {
             require(script.toByteArray(Charsets.UTF_8).size <= 2 * 1024 * 1024) { "音源文件超过 2 MB" }

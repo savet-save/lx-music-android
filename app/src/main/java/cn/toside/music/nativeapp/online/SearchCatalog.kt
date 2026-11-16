@@ -20,7 +20,7 @@ internal class SearchCatalog(
     private val playlistSearch: suspend (String, String, Int) -> List<OnlinePlaylist> = { source, query, page -> PlaylistSearch().search(source, query, page) }
 ) {
     suspend fun songs(query: String, source: String = ALL, cursor: Map<String, Int>? = null): SearchPage<Song> = page(
-        query, source, cursor, { if (it in setOf("wy", "mg")) 20 else 30 }, { it.source to it.id }, fetch = songSearch
+        query, source, cursor, { if (it in setOf("wy", "mg", "bili")) 20 else 30 }, { it.source to it.id }, fetch = songSearch
     )
 
     suspend fun playlists(query: String, source: String = ALL, cursor: Map<String, Int>? = null): SearchPage<OnlinePlaylist> = page(
@@ -30,7 +30,7 @@ internal class SearchCatalog(
     companion object {
         const val ALL = "all"
         val sources = listOf("kg", "kw", "tx", "wy", "mg")
-        val choices = listOf(ALL) + sources
+        val choices = listOf(ALL) + sources + "bili"
 
         internal suspend fun <T> page(
             query: String,

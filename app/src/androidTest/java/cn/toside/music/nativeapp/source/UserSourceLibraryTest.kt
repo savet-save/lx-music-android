@@ -41,7 +41,7 @@ class UserSourceLibraryTest {
             val bundled = source.catalog().entries.map { it.id }
             source.import(script("first")); val first = source.catalog().selected!!
             source.import(script("second")); val second = source.catalog().selected!!
-            assertEquals(4, source.catalog().entries.size)
+            assertEquals(5, source.catalog().entries.size)
             source.select(first)
             assertEquals("https://example.org/first.mp3", source.musicUrl("kw", JSONObject()))
             try { source.import("throw Error('bad source')"); fail("invalid source must fail") } catch (_: Exception) { }
@@ -68,7 +68,7 @@ class UserSourceLibraryTest {
             val catalog = source.catalog()
             val entry = catalog.entries.single { it.id == catalog.selected }
             assertEquals(raw, entry.script); assertEquals("legacy", entry.name); assertEquals("1.2.3", entry.version)
-            assertEquals(3, catalog.entries.size)
+            assertEquals(4, catalog.entries.size)
             assertEquals("https://example.org/legacy.mp3", source.musicUrl("kw", JSONObject()))
         }
     }
@@ -78,7 +78,8 @@ class UserSourceLibraryTest {
             val catalog = source.catalog()
             val bundled = catalog.entries.single { it.name == "野花🌷" }
             val kuwo = catalog.entries.single { it.name.startsWith("OIAPI 酷我") }
-            assertEquals(2, catalog.entries.size)
+            val bili = catalog.entries.single { it.name == "B站音源" }
+            assertEquals(3, catalog.entries.size)
             assertEquals("野花🌷", bundled.name); assertEquals("1", bundled.version)
             assertEquals(raw, bundled.script); assertEquals(bundled.id, catalog.selected)
             assertEquals(catalog, UserSourceLibrary(context).read())
@@ -86,8 +87,9 @@ class UserSourceLibraryTest {
             assertNull(UserSourceLibrary(context).read().selected)
             assertFalse(source.loadSaved())
             source.remove(bundled.id)
-            assertEquals(listOf(kuwo), UserSourceLibrary(context).read().entries)
+            assertEquals(listOf(kuwo,bili), UserSourceLibrary(context).read().entries)
             source.remove(kuwo.id)
+            source.remove(bili.id)
             assertEquals(UserSourceCatalog(null, emptyList()), UserSourceLibrary(context).read())
             assertEquals(UserSourceCatalog(null, emptyList()), UserSourceLibrary(context).read())
         }
@@ -99,10 +101,10 @@ class UserSourceLibraryTest {
             File(context.filesDir, "user-sources.json").writeText(JSONObject().put("version", 1).put("selected", id)
                 .put("sources", JSONArray().put(JSONObject().put("script", raw).put("allowUpdateAlert", false))).toString())
             val catalog = source.catalog()
-            assertEquals(id, catalog.selected); assertEquals(3, catalog.entries.size)
+            assertEquals(id, catalog.selected); assertEquals(4, catalog.entries.size)
             assertEquals(raw, catalog.entries.first().script); assertFalse(catalog.entries.first().allowUpdateAlert)
             assertEquals("野花🌷", catalog.entries[1].name)
-            assertTrue(catalog.entries.last().name.startsWith("OIAPI 酷我"))
+            assertTrue(catalog.entries.any { it.name.startsWith("OIAPI 酷我") })
             assertEquals(catalog, UserSourceLibrary(context).read())
             assertTrue(source.loadSaved())
             assertEquals("https://example.org/existing.mp3", source.musicUrl("kw", JSONObject()))
@@ -115,9 +117,9 @@ class UserSourceLibraryTest {
                 target.writeText(JSONObject().put("version", 1).put("selected", JSONObject.NULL)
                     .put("sources", JSONArray().apply { scripts.forEach { put(JSONObject().put("script", it)) } }).toString())
                 val catalog = source.catalog()
-                assertNull(catalog.selected); assertEquals(scripts.size + 2, catalog.entries.size)
+                assertNull(catalog.selected); assertEquals(scripts.size + 3, catalog.entries.size)
                 assertTrue(catalog.entries.any { it.name == "野花🌷" })
-                assertTrue(catalog.entries.last().name.startsWith("OIAPI 酷我"))
+                assertTrue(catalog.entries.any { it.name.startsWith("OIAPI 酷我") })
                 assertFalse(source.loadSaved())
                 assertEquals(catalog, UserSourceLibrary(context).read())
             }
@@ -129,7 +131,7 @@ class UserSourceLibraryTest {
             File(context.filesDir, "user-sources.json").writeText(JSONObject().put("version", 1).put("selected", JSONObject.NULL)
                 .put("sources", JSONArray().put(JSONObject().put("script", raw).put("allowUpdateAlert", false))).toString())
             val catalog = source.catalog()
-            assertEquals(2, catalog.entries.size)
+            assertEquals(3, catalog.entries.size)
             assertEquals(raw, catalog.entries.first().script); assertFalse(catalog.entries.first().allowUpdateAlert)
             assertNull(catalog.selected)
         }
@@ -144,12 +146,14 @@ class UserSourceLibraryTest {
                     .put("sources", JSONArray().put(JSONObject().put("script", raw).put("allowUpdateAlert", false))).toString())
                 val catalog = source.catalog()
                 assertEquals(selected, catalog.selected)
-                assertEquals(2, catalog.entries.size)
+                assertEquals(3, catalog.entries.size)
                 assertFalse(catalog.entries.first().allowUpdateAlert)
                 assertFalse(catalog.entries.any { it.name == "野花🌷" })
                 val kuwo = catalog.entries.single { it.name.startsWith("OIAPI 酷我") }
+            val bili = catalog.entries.single { it.name == "B站音源" }
                 assertEquals(catalog, UserSourceLibrary(context).read())
                 source.remove(kuwo.id)
+            source.remove(bili.id)
                 assertEquals(listOf(id), UserSourceLibrary(context).read().entries.map { it.id })
             }
         }
@@ -160,10 +164,10 @@ class UserSourceLibraryTest {
             File(context.filesDir, "user-sources.json").writeText(JSONObject().put("version", 2).put("selected", JSONObject.NULL)
                 .put("sources", JSONArray().put(JSONObject().put("script", raw).put("allowUpdateAlert", false))).toString())
             val catalog = source.catalog()
-            assertEquals(raw, catalog.entries.single().script)
-            assertFalse(catalog.entries.single().allowUpdateAlert)
+            assertEquals(raw, catalog.entries.single { it.name.startsWith("OIAPI 酷我") }.script)
+            assertFalse(catalog.entries.single { it.name.startsWith("OIAPI 酷我") }.allowUpdateAlert)
             assertNull(catalog.selected)
-            source.select(catalog.entries.single().id)
+            source.select(catalog.entries.single { it.name.startsWith("OIAPI 酷我") }.id)
             assertTrue(source.supports("kw", "musicUrl"))
             assertFalse(source.supports("wy", "musicUrl"))
             assertEquals(listOf("320k", "128k"), source.playbackQualities("kw", JSONObject()

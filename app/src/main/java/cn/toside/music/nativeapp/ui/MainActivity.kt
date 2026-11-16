@@ -209,7 +209,7 @@ class MainActivity : FragmentActivity() {
     private var waitingForServicePlayback: AudioAction? = null
     private var searchSource = SearchCatalog.ALL
     private val platformPopup = PlatformPopup()
-    private var searchCatalog = SearchCatalog()
+    private var searchCatalog = SearchCatalog(songSearch = { provider,query,page -> OnlineSearch(applicationContext).search(query,page,provider) })
     private var playlistSearchMode = false
     private var playlistSearchResults = emptyList<OnlinePlaylist>()
     private var searchNextPages = emptyMap<String, Int>()
@@ -949,6 +949,7 @@ class MainActivity : FragmentActivity() {
         }
     }
     private fun selectSearchCategory(playlists: Boolean) {
+        if(playlists && searchSource == "bili") searchSource=SearchCatalog.ALL
         if (playlistSearchMode == playlists) return
         playlistSearchMode = playlists
         resetCatalogResults()
@@ -1713,10 +1714,11 @@ class MainActivity : FragmentActivity() {
     private fun sourceLabel(): String = sourceLabel(searchSource)
     private fun sourceLabel(source: String): String = if (source == SearchCatalog.ALL) getString(R.string.search_all_sources) else UiPreferences.sourceName(this, source)
     private fun showSearchSources() {
-        val ids = PlatformPopup.sources + SearchCatalog.ALL
+        val ids = PlatformPopup.sources + "bili" + SearchCatalog.ALL
         val anchor = if (searchSourceButton.isShown) searchSourceButton else heading
         platformPopup.show(anchor, ids, ids.map(::sourceLabel), searchSource, palette) { selected ->
             searchSource = selected
+            if(selected == "bili") playlistSearchMode=false
             heading.text = getString(R.string.ui_e07216a6d505, sourceLabel())
             resetCatalogResults()
             if (search.text.isNotBlank()) searchOnline()
@@ -2225,6 +2227,7 @@ class MainActivity : FragmentActivity() {
             add(R.string.ui_f655b3c8a2b6)
             add(R.string.song_copy_name)
             add(R.string.ui_792336bc0bbf)
+            add(R.string.lyrics_download)
             add(R.string.ui_9c2f512b6594)
             if (selected != null) {
                 add(R.string.ui_de23dedafe75)
@@ -2239,6 +2242,7 @@ class MainActivity : FragmentActivity() {
 
     private fun runSongAction(action: Int, song: Song, selected: Playlist?, play: () -> Unit) {
         when (action) {
+            R.string.lyrics_download -> startActivityForResult(LyricsDownloadActivity.intent(this,song),REQUEST_LYRICS_DOWNLOAD)
             R.string.ui_c3396195e91c -> play()
             R.string.metadata_edit -> startActivityForResult(MetadataActivity.intentFor(this, song), REQUEST_METADATA)
             R.string.song_copy_name -> { (getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager).setPrimaryClip(android.content.ClipData.newPlainText(song.title, "${song.title} - ${song.artist}")) }
@@ -2327,6 +2331,11 @@ class MainActivity : FragmentActivity() {
         }
     }
     private fun chooseDownloadQuality(song: Song) {
+        if(song.source == "bili") {
+            AlertDialog.Builder(this).setTitle(getString(R.string.bili_mp3_download)).setMessage(getString(R.string.bili_mp3_hint))
+                .setNegativeButton(android.R.string.cancel,null).setPositiveButton(android.R.string.ok) { _,_ -> requestDownload(DownloadRequest(song,"mp3")) }.show()
+            return
+        }
         if (downloadQualityDialog?.isShowing == true) return
         downloadQualityDialog = showDownloadQuality(this, song, palette, lx, scope,
             probe = { quality, progress ->
@@ -2375,6 +2384,7 @@ class MainActivity : FragmentActivity() {
         val player = service ?: run { waitingForServiceDownload = request; return }
         scope.launch {
             try {
+                check(request.song.source != "bili" || player.bilibiliEnabled()) { "请在设置 → 自定义音源中启用 B站音源" }
                 if (Downloads(applicationContext).startWithSources(request.song, request.quality, request.retryKey, player::resolveDownloadAddress)) {
                     toast(getString(R.string.ui_6b7ce36f8aa9))
                 }
@@ -2385,6 +2395,7 @@ class MainActivity : FragmentActivity() {
     @Deprecated("Deprecated in Android")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if(requestCode == REQUEST_LYRICS_DOWNLOAD) { if(resultCode == RESULT_OK) service?.reloadLyrics(); return }
         if (requestCode == REQUEST_METADATA) {
             if (resultCode == RESULT_OK && data != null) {
                 val song = Song(data.getLongExtra("id", -1), Uri.parse(data.getStringExtra("uri")), data.getStringExtra("title").orEmpty(), data.getStringExtra("artist").orEmpty(), data.getLongExtra("duration", 0), "local", data.getStringExtra("info"))
@@ -2759,6 +2770,6 @@ class MainActivity : FragmentActivity() {
         return "%02d:%02d".format(seconds / 60, seconds % 60)
     }
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
-    companion object { private const val PAGE_LOCAL = 5; private const val REQUEST_AUDIO = 1; private const val REQUEST_LYRIC = 3; private const val REQUEST_SOURCE = 4; private const val REQUEST_BACKUP = 5; private const val REQUEST_DOWNLOAD = 6; private const val REQUEST_EXPORT = 7; private const val REQUEST_SYNC_NOTIFICATION = 8; private const val REQUEST_SOURCE_EXPORT = 9; private const val REQUEST_LOG_EXPORT = 10; private const val REQUEST_METADATA = 11 }
+    companion object { private const val PAGE_LOCAL = 5; private const val REQUEST_AUDIO = 1; private const val REQUEST_LYRIC = 3; private const val REQUEST_SOURCE = 4; private const val REQUEST_BACKUP = 5; private const val REQUEST_DOWNLOAD = 6; private const val REQUEST_EXPORT = 7; private const val REQUEST_SYNC_NOTIFICATION = 8; private const val REQUEST_SOURCE_EXPORT = 9; private const val REQUEST_LOG_EXPORT = 10; private const val REQUEST_METADATA = 11; private const val REQUEST_LYRICS_DOWNLOAD = 12 }
 }
 

@@ -38,7 +38,7 @@ class DownloadsFragment : Fragment() {
 
         fun accepts(task: DownloadTask) = when (this) {
             ALL -> true
-            ACTIVE -> task.status in setOf(DownloadStatus.RESOLVING, DownloadStatus.QUEUED, DownloadStatus.RUNNING)
+            ACTIVE -> task.status in setOf(DownloadStatus.RESOLVING, DownloadStatus.QUEUED, DownloadStatus.RUNNING, DownloadStatus.CONVERTING)
             PAUSED -> task.status == DownloadStatus.PAUSED
             FAILED -> task.failed
             COMPLETE -> task.status == DownloadStatus.COMPLETE
@@ -194,6 +194,7 @@ class DownloadsFragment : Fragment() {
         DownloadStatus.RESOLVING -> getString(R.string.download_resolving)
         DownloadStatus.QUEUED -> getString(R.string.download_queued)
         DownloadStatus.RUNNING -> getString(R.string.download_active)
+        DownloadStatus.CONVERTING -> getString(R.string.bili_converting)
         DownloadStatus.PAUSED -> getString(when (task.reason) {
             DownloadManager.PAUSED_WAITING_FOR_NETWORK -> R.string.download_wait_network
             DownloadManager.PAUSED_QUEUED_FOR_WIFI -> R.string.download_wait_wifi

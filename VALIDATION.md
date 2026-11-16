@@ -516,3 +516,27 @@ Release/设备测试 APK 构建、48 项 JVM 单元测试、Release Lint 通过�
 48 项 JVM 单元测试通过；Debug/正式签名 Release APK 构建和两种配置 Lint 均无错误。手机 360×800 dp 和平板 1024×768 dp 使用真实 Android View 在盒子上测量并绘制，未作为手机硬件窗口实测。本轮音频为本地 HTTP 静音 PCM 样本，未重新验证第三方歌曲的真实码率或服务可用性。
 
 记录位于忽略目录 `build/multi-source-validation/`：`verification.json` 汇总去重结果，`device-first.txt`、`device-regression.txt` 和 `device-final.txt` 保留原始日志（中间回归中的旧单选断言已修正并通过最终复测）；`build-final.txt` 记录构建和 Lint。最终分区截图为 `screenshots/multi-source-validation/360-sources.png` 和 `1024-sources.png`。测试包验证后移除，本轮版本号仍为 0.9.17，代码修改保留在工作区。
+
+## B站搜索、MP3 转码与歌词下载（2026-11-16）
+
+新增独立的 B站视频搜索入口及原生 B站音源。音源库升级为 v5，向已有库补入未启用的 B站入口，保留最多三个已启用音源及其顺序、停用与更新偏好。接口参考 bilibili-plugins/bilibili-api-collect（本轮读取提交 cfc5fddcc8a94b74d91970bb5b4eaeb349addc47），实现匿名 Cookie、WBI 参数签名、视频信息与可访问 AAC 音轨解析，当前只处理多 P 视频的第 1 P。B站上传者独立标记为 UP，不作为歌词歌手。已有下载和完整缓存仍优先使用，缓存播放不依赖启用音源或重新请求视频信息。
+
+B站下载先由系统下载管理器写入应用私有临时目录，再经 Android MediaCodec 解码与 LAME 编码生成真正的 MP3，最终 MP3 和匹配到的同名 UTF-8 LRC 写入 Download/LX Music/。编码设置为 320 kbps，不将重新编码描述为提升原始音质。转码完成前检查实际音频时长，任务删除或取消时清理未发布的输出，后台任务可在进程恢复后继续。歌词在五个音乐平台按歌名、歌手、版本和不超过 5 秒的时长差匹配，并拒绝时间轴明显超出音频的结果；兼容两种歌名/歌手顺序并复用搜索结果。找不到歌词时保留音频并显示无歌词。歌曲菜单新增搜索并下载歌词，本地歌曲也可核对元数据后通过系统文件选择器保存 LRC，同时缓存到应用供播放使用。
+
+设置页新增 B站 SESSDATA 页面，验证账户后使用 Android Keystore 加密保存，不回填到密码输入框，不提供给自定义脚本或音频 CDN。清除凭据会取消正在验证的操作，并对写入/清除串行处理，避免迟到的验证结果重新写入。登录接口使用独立请求客户端且不跟随重定向。
+
+MP3 编码使用两个独立共享库 libmp3lame.so 与 liblxmp3.so。JNI 在 JNI_OnLoad 中通过 RegisterNatives 注册，配合 Keep 与导出映射，仅导出 JNI_OnLoad 入口，不使用 Java_ 静态绑定符号。NDK 27.2.12479018 / CMake 3.22.1 使用 max-page-size=16384 和 common-page-size=16384；构建了 ARMv7、ARM64、x86、x86_64。修复通用包混入 x86 QuickJS 却缺少相应编码器的问题，保留 ARMv7 / ARM64 / 通用三个发布文件，通用包完整包含四个 ABI。新增脚本在 CI 和发布前检查编码器 ABI 一致性、全部 64 位 ELF LOAD 段和未压缩库的 ZIP 对齐；最终 Debug/Release 校验及 zipalign -c -P 16 -v 4 通过。LAME 源码固定提交、重建方式和 LGPL 许可见 app/src/main/cpp/lame/UPSTREAM.md，许可也包含在 APK 的关于页面。
+
+独立 .bilicheck 包在 YYA-H618 / Android 12 / API 31 上，合并去重后 56 项设备测试通过，2 项原有第三方联网检查默认跳过。覆盖 WBI 例子、搜索解析、音轨筛选、账户加密与清除取消、歌词时长/版本/标题顺序、本地下载界面、系统下载到后台转码及同名 LRC、流请求 Referer/User-Agent 且无 Cookie、缓存离线重播、v4 迁移、三音源管理和旧搜索/设置回归。音频端到端用例使用本地 HTTP 静音 PCM，产出由 MediaExtractor 确认为 audio/mpeg，时长与 12 秒输入相符，检查 MPEG-1 Layer III 的 320 kbps 帧头及 LRC 时间标签。
+
+48 项 JVM 单元测试、41 项 Python 脚本测试通过，Debug/正式签名 Release 构建与两种 Lint 均无错误。四个 ABI 的动态符号检查只发现 JNI_OnLoad 入口；ARM64/x86_64 的 MP3、LAME 和 QuickJS 库均通过 16 KB ELF 与 APK 检查。盒子实际 PAGE_SIZE 为 4096，没有 16 KB 页设备运行验证。本轮正式应用及数据未覆盖，验证结束移除独立测试包；版本仍为 0.9.17，改动保留在本地工作区。
+
+真实匿名 B站搜索在本机及盒子均收到 code=0、data.v_voucher 的验证要求，应用会显示验证错误。用户选择稍后自行登录，因此真实 B站歌曲播放、MP3 下载与歌词匹配未计入已通过项目；BilibiliLiveTest 保留为显式 liveBilibili=true 的后续验收入口。原始首次失败、修复复测、最终构建、对齐和符号记录在忽略的 build/bilibili-validation/ 目录；verification.json 汇总结果，device-regression.txt / device-final.txt / device-complete.txt / device-lyrics-final.txt 为最终设备记录，build-delivery.txt 与 python-complete.txt 为最终构建和脚本记录，native-delivery.txt 为对齐及导出记录。
+
+## 指定手机 ARM64 与页大小核验（2026-11-16）
+
+设备 9dd0fd82 为 M2007J17C，Android 12 / API 31，内核 4.19.113-perf-gd70e19d0749a；getconf PAGE_SIZE 返回 4096。该系统使用 4 KB 页，不能作为真正 16 KB 页环境的运行验证。
+
+在独立 .bilicheck 包中安装 ARM64 APK，系统确认 primaryCpuAbi=arm64-v8a。BilibiliMp3Test 的系统下载到 MP3 转码与同名 LRC、流播放请求两项，以及 UserSourceTest 的 QuickJS 初始化和异步请求一项全部通过（OK (3 tests)）。音频使用本地 HTTP 静音 PCM，转码检查实际 MP3、320 kbps 帧头及输出时长；没有进行真实 B站登录或联网歌曲验收。
+
+本轮重新检查 ARM64 Debug 与正式签名 Release APK：liblxmp3.so、libmp3lame.so、libquickjs-android-wrapper.so 均通过 16 KB ELF LOAD 段与 APK 存储对齐检查，Debug 包另经 zipalign -c -P 16 -v 4 验证通过。静态对齐与 4 KB 手机上的 ARM64 功能检查均通过，真正 16 KB 页运行仍待 PAGE_SIZE=16384 的设备或模拟器验证。测试后仅移除本轮新建的两个独立测试包，原有正式应用及数据未覆盖；记录位于 build/page-size-validation-9dd0fd82/。

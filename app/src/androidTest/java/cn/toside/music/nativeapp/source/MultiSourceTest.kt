@@ -67,9 +67,25 @@ class MultiSourceTest {
                     }).toString())
                 val data = library.read()
                 assertEquals(listOfNotNull(selected), data.enabled)
-                assertTrue(data.entries.all { !it.allowUpdateAlert })
+                assertTrue(data.entries.filter { it.id in scripts.map(::id) }.all { !it.allowUpdateAlert })
+                assertFalse(data.enabledEntries.any { it.name == "B站音源" })
                 assertEquals(data, UserSourceLibrary(context).read())
             }
+        }
+    }
+    @Test fun versionFourAddsBilibiliDisabledAndPreservesTheThreeSourceOrder() = runBlocking {
+        isolated { context, _, library ->
+            val scripts=(1..3).map { script("v4 $it","return 'https://example.org/$it.mp3';") }
+            val enabled=scripts.map(::id).reversed()
+            File(context.filesDir,"user-sources.json").writeText(JSONObject().put("version",4).put("selected",enabled[0]).put("enabled",JSONArray(enabled))
+                .put("sources",JSONArray().apply { scripts.forEach { put(JSONObject().put("script",it).put("allowUpdateAlert",false)) } }).toString())
+            val migrated=library.read()
+            assertEquals(enabled,migrated.enabled)
+            val bili=migrated.disabledEntries.single { it.name=="B站音源" }
+            assertEquals(4,migrated.entries.size)
+            library.remove(bili.id)
+            assertEquals(enabled,library.read().enabled)
+            assertEquals(3,library.read().entries.size)
         }
     }
     @Test fun requestAndBadLinkFailuresAdvanceInTheConfiguredOrder() = runBlocking {

@@ -19,11 +19,12 @@ import javax.crypto.Cipher
 import javax.crypto.spec.SecretKeySpec
 
 /** Port of the original Kugou search endpoint and LX source song-info schema. */
-class OnlineSearch {
+class OnlineSearch(private val context: android.content.Context? = null) {
     suspend fun search(query: String, page: Int = 1, source: String = "kg"): List<Song> = withContext(Dispatchers.IO) {
         require(query.isNotBlank())
         val encoded = URLEncoder.encode(query, "UTF-8")
         when (source) {
+            "bili" -> BilibiliApi(context).search(query, page)
             "kg" -> searchKg(encoded, page)
             "kw" -> searchKw(encoded, page)
             "tx" -> searchTx(query, page)

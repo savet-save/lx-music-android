@@ -52,6 +52,7 @@ class DownloadCompleteReceiver : BroadcastReceiver() {
         if (id >= 0 && Downloads(context).ownsSystemId(id)) {
             DownloadLyricsJob.schedule(context)
             DownloadFallbackJob.schedule(context)
+            Mp3ConversionJob.schedule(context)
         }
     }
 }

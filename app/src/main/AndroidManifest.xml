@@ -19,6 +19,9 @@
         android:usesCleartextTraffic="true" 
         android:icon="@mipmap/ic_launcher" 
         android:roundIcon="@mipmap/ic_launcher_round">
+        <activity android:name=".ui.BilibiliLoginActivity" android:exported="false" />
+        <activity android:name=".ui.LyricsDownloadActivity" android:exported="false" />
+        <service android:name=".data.Mp3ConversionJob" android:exported="false" android:permission="android.permission.BIND_JOB_SERVICE" />
 
         <activity
             android:name=".ui.MetadataActivity"

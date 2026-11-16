@@ -284,6 +284,9 @@ internal class SettingsPage(
     private fun sources() {
         sourceNotice = column().apply { tag = "settings-source-update"; content.addView(this) }
         note(text(R.string.sources_fallback_hint))
+        action(text(R.string.bili_login), text(R.string.bili_account_settings)) {
+            activity.startActivity(android.content.Intent(activity,BilibiliLoginActivity::class.java))
+        }.tag = "settings-bilibili-login"
         section(text(R.string.settings_source_installed))
         sourceList = column().apply { tag = "settings-source-list"; content.addView(this) }
         section(text(R.string.settings_source_online))

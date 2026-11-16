@@ -11,6 +11,7 @@ internal object OnlineArtwork {
     suspend fun url(song: Song, info: JSONObject): String {
         val id = info.optString("songmid").takeIf { it.isNotBlank() && it != "null" } ?: return ""
         return when (song.source) {
+            "bili" -> info.optString("img")
             "kw" -> NativeHttp.text("http://artistpicserver.kuwo.cn/pic.web?corp=kuwo&type=rid_pic&pictype=500&size=500&rid=${NativeHttp.encode(id)}",
                 maxBytes = 4096).trim()
             "kg" -> kugou(song, info, id)

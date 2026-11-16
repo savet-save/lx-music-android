@@ -20,6 +20,8 @@ internal class SourceAudioResolver(private val sources: UserSources,
     suspend fun resolve(song: Song, quality: String, excluded: Set<String> = emptySet(),
         validate: suspend (String) -> Unit = {}): SourceAudio {
         val enabled = sources.catalog().enabledEntries
+        val requestedQuality = if (song.source == "bili") "original" else quality
+        check(song.source != "bili" || sources.bilibiliEnabled()) { "请在设置 → 自定义音源中启用 B站音源" }
         check(enabled.isNotEmpty()) { "请至少启用一个音源" }
         val attempted = excluded.toMutableSet()
         val errors = mutableListOf<String>()
@@ -31,16 +33,16 @@ internal class SourceAudioResolver(private val sources: UserSources,
             var runtimeReady = false
             suspend fun attempt(candidate: Song): SourceAudio? {
                 try {
-                    if (!sources.hasQualityFrom(entry.id, quality)) return null
+                    if (!sources.hasQualityFrom(entry.id, requestedQuality)) return null
                     val supported = sources.supportsFrom(entry.id, candidate.source, "musicUrl")
                     runtimeReady = true
                     if (!supported) return null
                     val info = JSONObject(candidate.sourceInfo ?: error("歌曲缺少音源信息"))
-                    val url = sources.musicUrlFrom(entry.id, candidate.source, info, quality)
+                    val url = sources.musicUrlFrom(entry.id, candidate.source, info, requestedQuality)
                     val uri = Uri.parse(url)
                     require(uri.scheme in setOf("http", "https") && !uri.host.isNullOrBlank()) { "音源返回了无效的音频地址" }
                     validate(url)
-                    return SourceAudio(url, quality, entry.id, attempted.toList(), entry.name)
+                    return SourceAudio(url, requestedQuality, entry.id, attempted.toList(), entry.name)
                 } catch (e: TimeoutCancellationException) {
                     currentCoroutineContext().ensureActive(); last = e
                 } catch (e: CancellationException) { throw e }
@@ -48,7 +50,7 @@ internal class SourceAudioResolver(private val sources: UserSources,
                 return null
             }
             attempt(song)?.let { return it }
-            if (runtimeReady && autoSwitchPlatform && last?.message?.contains("429") != true) {
+            if (runtimeReady && autoSwitchPlatform && song.source != "bili" && last?.message?.contains("429") != true) {
                 val alternatives = matches ?: try { match(song).also { matches = it } }
                     catch (e: CancellationException) { throw e }
                     catch (_: Exception) { emptyList() }

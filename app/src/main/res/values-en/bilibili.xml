@@ -1,0 +1,19 @@
+<resources>
+    <string name="bili_name">Bilibili</string>
+    <string name="bili_login">Bilibili login / SESSDATA</string>
+    <string name="bili_account_settings">Manage credentials; public content may work without signing in</string>
+    <string name="bili_login_hint">Sign in on the official Bilibili website and copy the SESSDATA cookie value. No password or full cookie string is needed. Credentials are encrypted on this device and are never given to custom scripts. Replace expired credentials here.</string>
+    <string name="bili_login_save">Verify and save</string>
+    <string name="bili_checking">Checking sign-in status…</string>
+    <string name="bili_logged_in">Signed in: %1$s</string>
+    <string name="bili_logged_out">No saved credentials</string>
+    <string name="bili_logout">Clear credentials</string>
+    <string name="bili_mp3_download">Download Bilibili audio as MP3</string>
+    <string name="bili_mp3_hint">Download the original audio and encode it as MP3 at 320 kbps. Conversion cannot improve source quality. Lyrics are matched by title, artist and duration; unmatched lyrics do not affect the audio. Only the first part of multi-part videos is used.</string>
+    <string name="bili_converting">Converting to MP3</string>
+    <string name="lyrics_download">Find and download lyrics</string>
+    <string name="lyrics_match_hint">Match lyrics on other music platforms by title, artist and duration. Check the song information. Timing from another recording is never stretched.</string>
+    <string name="lyrics_search_save">Find and save LRC file</string>
+    <string name="lyrics_matching">Matching lyrics…</string>
+    <string name="lyrics_no_match">No matching lyrics with a similar duration. Edit the song information and try again.</string>
+</resources>

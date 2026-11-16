@@ -43,7 +43,7 @@ object LegacyBackup {
             meta.put("songId", songId).put("albumName", original.opt("albumName") ?: "")
                 .put("albumId", original.opt("albumId") ?: "").put("picUrl", original.opt("img") ?: "")
                 .put("qualitys", original.optJSONArray("types") ?: JSONArray()).put("_qualitys", original.optJSONObject("_types") ?: JSONObject())
-            listOf("hash", "strMediaMid", "albumMid", "copyrightId", "lrcUrl", "mrcUrl", "trcUrl").forEach {
+            listOf("hash", "strMediaMid", "albumMid", "copyrightId", "lrcUrl", "mrcUrl", "trcUrl", "bvid", "cid", "uploader").forEach {
                 if (original.has(it)) meta.put(it, original.get(it))
             }
             if (original.has("songId")) meta.put("id", original.get("songId"))
@@ -124,7 +124,7 @@ object LegacyBackup {
                 artist = item.optString("singer", found.artist), duration = duration,
                 sourceInfo = meta?.optString("albumName")?.takeIf { it.isNotBlank() }?.let { JSONObject(found.sourceInfo ?: "{}").put("albumName", it).toString() } ?: found.sourceInfo)
         }
-        if (source !in setOf("kg", "kw", "tx", "wy", "mg")) return null
+        if (source !in setOf("kg", "kw", "tx", "wy", "mg", "bili")) return null
         val songId = meta?.opt("songId") ?: item.opt("songmid") ?: return null
         val songIdText = songId.toString()
         if (songIdText.isBlank() || songIdText == "null") return null
@@ -137,7 +137,7 @@ object LegacyBackup {
             .put("albumId", meta.opt("albumId") ?: "").put("img", meta.opt("picUrl") ?: "")
             .put("types", meta.optJSONArray("qualitys") ?: JSONArray()).put("_types", meta.optJSONObject("_qualitys") ?: JSONObject())
             .put("typeUrl", JSONObject()).apply {
-                listOf("hash", "strMediaMid", "albumMid", "copyrightId", "lrcUrl", "mrcUrl", "trcUrl").forEach {
+                listOf("hash", "strMediaMid", "albumMid", "copyrightId", "lrcUrl", "mrcUrl", "trcUrl", "bvid", "cid", "uploader").forEach {
                     if (meta.has(it)) put(it, meta.get(it))
                 }
                 if (meta.has("id")) put("songId", meta.get("id"))

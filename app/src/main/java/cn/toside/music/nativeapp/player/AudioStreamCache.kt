@@ -31,14 +31,15 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
 /** One process-wide cache avoids overlapping SimpleCache directory locks across service restarts. */
-internal class AudioStreamCache(context: Context, directory: File = context.cacheDir.resolve("audio-stream")) : AutoCloseable {
+internal class AudioStreamCache(private val context: Context, directory: File = context.cacheDir.resolve("audio-stream")) : AutoCloseable {
     private val evictor = AdjustableLruEvictor(AppPreferences(context).audioCacheBytes)
     private val database = StandaloneDatabaseProvider(context)
     internal val cache = SimpleCache(directory, evictor, database)
     private val upstream = DefaultDataSource.Factory(context, OkHttpDataSource.Factory(OkHttpClient.Builder()
         .connectTimeout(13, java.util.concurrent.TimeUnit.SECONDS).readTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
         .retryOnConnectionFailure(false).build()))
-    fun dataSource(): CacheDataSource.Factory = CacheDataSource.Factory().setCache(cache).setUpstreamDataSourceFactory(upstream)
+    fun dataSource(headers: Map<String, String> = emptyMap()): CacheDataSource.Factory = CacheDataSource.Factory().setCache(cache).setUpstreamDataSourceFactory(
+        if(headers.isEmpty()) upstream else DefaultDataSource.Factory(context, OkHttpDataSource.Factory(OkHttpClient()).setDefaultRequestProperties(headers)))
         .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
     fun updateLimit(bytes: Long) = synchronized(cache) { evictor.update(cache, bytes) }
     fun clear() { cache.keys.toList().forEach { cache.removeResource(it) } }

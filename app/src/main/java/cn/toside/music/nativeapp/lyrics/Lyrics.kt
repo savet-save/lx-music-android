@@ -50,7 +50,7 @@ object LrcParser {
 
 class Lyrics(private val context: Context) {
     private fun file(songId: Long, source: String): File {
-        require(source in setOf("local", "kg", "kw", "tx", "wy", "mg"))
+        require(source in setOf("local", "kg", "kw", "tx", "wy", "mg", "bili"))
         return File(context.filesDir, if (source == "local") "lyrics/$songId.lrc" else "lyrics/${source}_$songId.lrc")
     }
     suspend fun load(songId: Long, source: String): List<LyricLine> = withContext(Dispatchers.IO) {

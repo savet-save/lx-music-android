@@ -493,6 +493,20 @@ class PlaybackSettingsTest {
         }
     }
 
+    @Test fun cachedBilibiliAudioPlaysWithItsSourceDisabledWithoutFetchingVideoMetadata() = runBlocking {
+        withQualityPlayback { fixture, reference ->
+            val song=reference.copy(source="bili",sourceInfo="""{"bvid":"BV1xx411c7mD","songmid":"BV1xx411c7mD"}""")
+            val cache=cacheAudio(song,"original",Uri.parse("http://127.0.0.1:1/cached-bili.wav"),fixture.file.readBytes())
+            Lyrics(context).cache(song,listOf(LyricLine(0,"cached lyrics")))
+            try {
+                fixture.player.selectSource(null)
+                main { fixture.player.play(listOf(song),0) }
+                waitFor { fixture.player.state.value.playing || fixture.player.state.value.error != null }
+                assertNull(fixture.player.state.value.error)
+                assertTrue(fixture.player.state.value.playing)
+            } finally { main { fixture.player.clearQueue() };cache.remove(AudioStreamCache.key(song,"original")) }
+        }
+    }
     @Test fun failedMusicUrlLowersQualityByDefaultButDisabledAndDownloadsKeepTheirQuality() = runBlocking {
         withQualityPlayback { fixture, song ->
             assertTrue(AppPreferences(context).autoLowerQuality)

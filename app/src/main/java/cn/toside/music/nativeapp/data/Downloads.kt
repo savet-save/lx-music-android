@@ -28,7 +28,7 @@ import org.json.JSONArray
 import java.io.File
 import java.util.UUID
 
-internal enum class DownloadStatus { RESOLVING, QUEUED, RUNNING, PAUSED, LINK_FAILED, FAILED, INTERRUPTED, COMPLETE }
+internal enum class DownloadStatus { RESOLVING, QUEUED, RUNNING, CONVERTING, PAUSED, LINK_FAILED, FAILED, INTERRUPTED, COMPLETE }
 internal enum class DownloadLyricStatus { PENDING, SAVED, UNAVAILABLE, FAILED }
 
 internal data class DownloadTask(
@@ -71,8 +71,11 @@ class Downloads(private val context: Context, private val scheduleLyrics: (Conte
         startInternal(song, quality, retryKey, false, false) { candidate, type, _ -> SourceAudio(resolve(candidate, type), type) }
 
     internal suspend fun startWithSources(song: Song, quality: String, retryKey: String? = null,
-        resolve: suspend (Song, String, Set<String>) -> SourceAudio): Boolean =
-        startInternal(song, quality, retryKey, true, false, resolve)
+        resolve: suspend (Song, String, Set<String>) -> SourceAudio): Boolean {
+        val target = if(song.source == "bili" && JSONObject(song.sourceInfo ?: "{}").optLong("cid") <= 0)
+            cn.toside.music.nativeapp.online.BilibiliApi(context).firstPart(song) else song
+        return startInternal(target, quality, retryKey, true, false, resolve)
+    }
 
     private suspend fun startInternal(song: Song, quality: String, retryKey: String?, ordered: Boolean, continued: Boolean,
         resolve: suspend (Song, String, Set<String>) -> SourceAudio): Boolean {
@@ -84,7 +87,7 @@ class Downloads(private val context: Context, private val scheduleLyrics: (Conte
                     if (old.key in resolving) return@synchronized null
                     if (old.localUri != null && old.localBytes > 0) return@synchronized null
                     val transfer = if (old.systemId != null || old.fileName != null) find(old, transfers(setOfNotNull(old.systemId))) else null
-                    if (transfer != null && transfer.status != DownloadStatus.FAILED) return@synchronized null
+                    if (transfer != null && transfer.status != DownloadStatus.FAILED && !(old.quality == "mp3" && old.failure != null)) return@synchronized null
                     transfer?.let { manager.remove(it.id) }
                     old.localUri?.let(files::delete); old.lyricUri?.let(files::delete)
                     old.copy(systemId = null, fileName = null, failure = null, localUri = null, localBytes = 0,
@@ -140,6 +143,7 @@ class Downloads(private val context: Context, private val scheduleLyrics: (Conte
         } finally {
             withContext(NonCancellable + Dispatchers.IO) { synchronized(lock) { resolving.remove(record.key) } }
             if (ordered) scheduleFallback(context)
+            if (record.quality == "mp3") Mp3ConversionJob.schedule(context)
         }
     }
 
@@ -199,6 +203,8 @@ class Downloads(private val context: Context, private val scheduleLyrics: (Conte
                 transfer?.let { claimed.add(it.id) }
                 val status = when {
                     record.localUri != null && record.localBytes > 0 -> DownloadStatus.COMPLETE
+                    record.quality == "mp3" && record.failure != null -> record.failure
+                    record.quality == "mp3" && transfer?.status == DownloadStatus.COMPLETE -> DownloadStatus.CONVERTING
                     transfer != null -> transfer.status
                     record.key in resolving || record.ordered && !record.exhausted && record.systemId == null && record.failure == null -> DownloadStatus.RESOLVING
                     else -> record.failure ?: DownloadStatus.INTERRUPTED
@@ -286,7 +292,9 @@ class Downloads(private val context: Context, private val scheduleLyrics: (Conte
     }
 
     internal suspend fun saveLyrics(key: String, load: suspend (Song) -> List<LyricLine> = { song ->
-        Lyrics(context).load(song.id, song.source).ifEmpty { OnlineLyrics().forSong(song) }
+        Lyrics(context).load(song.id, song.source).ifEmpty {
+            if(song.source in setOf("bili", "local")) cn.toside.music.nativeapp.online.MatchedLyrics(context).find(song) else OnlineLyrics().forSong(song)
+        }
     }): Boolean = lyricMutex.withLock { withContext(Dispatchers.IO) {
         val record = synchronized(lock) { read(key)?.takeIf { it.lyricStatus == DownloadLyricStatus.PENDING } } ?: return@withContext false
         var uri: Uri? = null
@@ -384,7 +392,7 @@ class Downloads(private val context: Context, private val scheduleLyrics: (Conte
     }
 
     private fun fileName(song: Song, uri: Uri, quality: String? = null): String {
-        val ext = uri.lastPathSegment?.substringAfterLast('.', "")?.lowercase()
+        val ext = if(song.source == "bili" && quality == "mp3") "m4a" else uri.lastPathSegment?.substringAfterLast('.', "")?.lowercase()
             ?.takeIf { it in setOf("mp3", "m4a", "aac", "flac", "ogg", "wav") } ?: if (quality in setOf("flac", "flac24bit")) "flac" else "mp3"
         val display = when (AppPreferences(context).downloadPattern) {
             "歌手 - 歌名" -> "${song.artist} - ${song.title}"
@@ -399,15 +407,50 @@ class Downloads(private val context: Context, private val scheduleLyrics: (Conte
     private fun enqueueFile(song: Song, uri: Uri, fileName: String): Long {
         validate(uri)
         val request = DownloadManager.Request(uri).setTitle(song.title).setDescription(song.artist)
-            .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-            .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "${DownloadFiles.DIRECTORY}/$fileName")
+            .setNotificationVisibility(if(song.source=="bili") DownloadManager.Request.VISIBILITY_VISIBLE else DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+        if(song.source=="bili") request.setDestinationInExternalFilesDir(context,Environment.DIRECTORY_DOWNLOADS,"${DownloadFiles.DIRECTORY}/$fileName")
+        else request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS,"${DownloadFiles.DIRECTORY}/$fileName")
+        if(song.source == "bili") cn.toside.music.nativeapp.online.BilibiliApi.audioHeaders.forEach { (name,value) -> request.addRequestHeader(name,value) }
         return manager.enqueue(request)
     }
+
+    internal suspend fun pendingConversions(): List<String> = list().filter { it.status == DownloadStatus.CONVERTING }.map { it.key }
+    internal suspend fun convertMp3(key: String): Boolean = conversionMutex.withLock { withContext(Dispatchers.IO) {
+        val record = synchronized(lock) { read(key) } ?: return@withContext false
+        if(record.quality != "mp3" || record.localUri != null || record.failure != null) return@withContext false
+        val transfer = synchronized(lock) { find(record,transfers(setOfNotNull(record.systemId))) } ?: return@withContext false
+        if(transfer.status != DownloadStatus.COMPLETE) return@withContext false
+        val input = manager.getUriForDownloadedFile(transfer.id) ?: return@withContext false
+        val name = requireNotNull(record.fileName).substringBeforeLast('.')+".mp3"
+        var output: Uri? = null; var saved = false
+        try {
+            output = files.create(name,"audio/mpeg")
+            files.output(output).use { Mp3Transcoder.convert(context,input,it) }
+            currentCoroutineContext().ensureActive()
+            val length = requireNotNull(context.contentResolver.openFileDescriptor(output,"r")).use { it.statSize }
+            check(length > 0) { "MP3 文件为空" }
+            val duration=Mp3Transcoder.durationMs(context,output)
+            check(record.song.duration <= 0 || kotlin.math.abs(duration-record.song.duration) <= 5000) { "下载音频时长与视频不符，可能只提供了试听片段" }
+            saved = synchronized(lock) {
+                val current=read(key) ?: return@synchronized false
+                files.publish(output)
+                write(current.copy(localUri=output,localBytes=length,fileName=name,systemId=null))
+                manager.remove(transfer.id); true
+            }
+            if(saved) scheduleLyrics(context)
+            saved
+        } catch(e: CancellationException) { throw e }
+        catch(e: Exception) {
+            synchronized(lock) { read(key)?.let { write(it.copy(failure=DownloadStatus.FAILED,exhausted=true,error=e.localizedMessage?.take(500))) } }
+            false
+        } finally { if(!saved && output!=null) withContext(NonCancellable) { files.delete(output) } }
+    } }
 
     private companion object {
         val lock = Any()
         val resolving = mutableSetOf<String>()
         val lyricMutex = Mutex()
+        val conversionMutex = Mutex()
     }
     private fun mimeType(name: String) = when (name.substringAfterLast('.')) {
         "flac" -> "audio/flac"; "wav" -> "audio/wav"; "m4a" -> "audio/mp4"; "aac" -> "audio/aac"; "ogg" -> "audio/ogg"; else -> "audio/mpeg"

@@ -150,6 +150,8 @@ class PlaybackService : Service() {
         mutableState.value = mutableState.value.copy(mode = mode, playbackRate = settings.playbackRate, volume = settings.volume)
         userSource = UserSources(applicationContext)
         cn.toside.music.nativeapp.data.DownloadFallbackJob.schedule(applicationContext)
+        cn.toside.music.nativeapp.data.Mp3ConversionJob.schedule(applicationContext)
+        cn.toside.music.nativeapp.data.Mp3ConversionJob.schedule(applicationContext)
         scope.launch { sourceMutex.withLock { runCatching { userSource.loadSaved() } } }
         session = MediaSession(this, "LXMusic").apply {
             setCallback(object : MediaSession.Callback() {
@@ -271,6 +273,7 @@ class PlaybackService : Service() {
     internal suspend fun setSourceEnabled(id: String, enabled: Boolean) = sourceMutex.withLock { userSource.setEnabled(id, enabled) }
     internal suspend fun moveSource(id: String, delta: Int) = sourceMutex.withLock { userSource.move(id, delta) }
     internal suspend fun setEnabledSources(ids: List<String>) = sourceMutex.withLock { userSource.setEnabledOrder(ids) }
+    internal suspend fun bilibiliEnabled() = userSource.bilibiliEnabled()
     internal suspend fun removeSource(id: String) = sourceMutex.withLock { userSource.remove(id) }
     internal suspend fun allowSourceUpdates(id: String, allowed: Boolean) = sourceMutex.withLock { userSource.allowUpdates(id, allowed) }
     internal suspend fun otherSources(song: Song): List<Song> = matcher.find(song)
@@ -368,7 +371,7 @@ class PlaybackService : Service() {
                 }
                 if (lines.isEmpty() && song.source != "local") {
                     val online = OnlineLyrics()
-                    lines = loadOnlineMetadata(song) { candidate ->
+                    lines = if(song.source == "bili") cn.toside.music.nativeapp.online.MatchedLyrics(applicationContext).find(song) else loadOnlineMetadata(song) { candidate ->
                         online.forSong(candidate).takeIf { result -> result.any { it.text.isNotBlank() } }
                     }.orEmpty()
                 }
@@ -440,7 +443,7 @@ class PlaybackService : Service() {
     private suspend fun resolveAudio(song: Song, quality: String, attempts: MutableMap<String, MutableSet<String>>? = null): ResolvedAudio {
         require(song.source != "local") { message(R.string.playback_local_download) }
         val info = JSONObject(song.sourceInfo ?: error(message(R.string.playback_source_missing)))
-        val qualities = if (preferences.autoLowerQuality) PLAYBACK_QUALITIES.drop(PLAYBACK_QUALITIES.indexOf(quality).coerceAtLeast(0))
+        val qualities = if (song.source == "bili") listOf("original") else if (preferences.autoLowerQuality) PLAYBACK_QUALITIES.drop(PLAYBACK_QUALITIES.indexOf(quality).coerceAtLeast(0))
             .filter { it == quality || it == "128k" || info.optJSONObject("_types")?.has(it) == true } else listOf(quality)
         var original: Exception? = null
         for (candidate in qualities) {
@@ -497,10 +500,19 @@ class PlaybackService : Service() {
             prepareNativePlayer(song, it, position, null, null, downloaded = true); return
         }
         val cache = withContext(Dispatchers.IO) { AudioStreamCache.get(applicationContext).also { it.updateLimit(preferences.audioCacheBytes) } }
-        val qualities = if (preferences.autoLowerQuality) PLAYBACK_QUALITIES.drop(PLAYBACK_QUALITIES.indexOf(preferred).takeIf { it >= 0 } ?: PLAYBACK_QUALITIES.lastIndex)
+        val qualities = if (song.source == "bili") listOf("original") else if (preferences.autoLowerQuality) PLAYBACK_QUALITIES.drop(PLAYBACK_QUALITIES.indexOf(preferred).takeIf { it >= 0 } ?: PLAYBACK_QUALITIES.lastIndex)
             else listOf(preferred)
         val cached = if (skipCache) null else withContext(Dispatchers.IO) {
             qualities.firstNotNullOfOrNull { quality -> cache.playbackUri(AudioStreamCache.key(song, quality))?.let { ResolvedAudio(it.toString(), quality) } }
+        }
+        if(cached == null && song.source == "bili" && JSONObject(song.sourceInfo ?: "{}").optLong("cid") <= 0) {
+            check(userSource.bilibiliEnabled()) { "请在设置 → 自定义音源中启用 B站音源" }
+            val target=cn.toside.music.nativeapp.online.BilibiliApi(applicationContext).firstPart(song)
+            if(mutableState.value.song == song) {
+                queue=queue.mapIndexed { at,item -> if(at == index) target else item }; mutableState.value=mutableState.value.copy(song=target,duration=target.duration.toInt())
+                loadLyrics(target); saveQueue(); publish()
+            }
+            prepareStreamingPlayer(target,preferred,position,useDownloads=false,skipCache=skipCache); return
         }
         val resolved = cached ?: resolveAudio(song, preferred, playbackSourceAttempts)
         val key = AudioStreamCache.key(song, resolved.quality)
@@ -563,7 +575,7 @@ class PlaybackService : Service() {
                 if (downloaded) retryDownloadedPlayback(song, engine.position, error)
                 else failNativePlayback(song, engine.position, cache, key, quality, error, engine.streamRetriesExhausted)
             }
-        })
+        }, if(song.source == "bili") cn.toside.music.nativeapp.online.BilibiliApi.audioHeaders else emptyMap())
         nativePlayer = current
         try { current.prepare(uri, key, position, state.value.playbackRate, state.value.volume, playWhenReady) }
         catch (e: Exception) {

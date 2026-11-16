@@ -39,6 +39,8 @@ val validateNativeReleaseSigning = tasks.register("validateNativeReleaseSigning"
 }
 
 android {
+    ndkVersion = "27.2.12479018"
+    externalNativeBuild { cmake { path = file("src/main/cpp/CMakeLists.txt"); version = "3.22.1" } }
     namespace = "cn.toside.music.nativeapp"
     compileSdk = 36
     defaultConfig {
@@ -49,6 +51,9 @@ android {
         versionCode = providers.gradleProperty("nativeVersionCode").get().toInt().also { require(it > 0) }
         versionName = providers.gradleProperty("nativeVersionName").get().also { require(it.matches(Regex("\\d+\\.\\d+\\.\\d+"))) }
         testInstrumentationRunner = "cn.toside.music.nativeapp.NativeTestRunner"
+        // The universal APK also includes the x86 QuickJS libraries from its AAR.
+        // Build every matching encoder ABI even when separate ARM APKs are requested.
+        externalNativeBuild { cmake { abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64") } }
     }
     // CI enables this only after testing first-use permission dialogs.
     if (providers.gradleProperty("nativeTestGrantPermissions").map { it.toBooleanStrict() }.orElse(false).get()) {
@@ -66,7 +71,7 @@ android {
     splits.abi {
         isEnable = providers.gradleProperty("nativeSplitApks").map { it.toBooleanStrict() }.orElse(false).get()
         reset()
-        include("armeabi-v7a", "arm64-v8a")
+        include("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
         isUniversalApk = true
     }
     compileOptions {
@@ -79,7 +84,12 @@ android {
 androidComponents {
     onVariants(selector().withBuildType("release")) { variant ->
         variant.outputs.forEach { output ->
-            val architecture = when (output.filters.firstOrNull { it.filterType == FilterConfiguration.FilterType.ABI }?.identifier) {
+            val abi=output.filters.firstOrNull { it.filterType == FilterConfiguration.FilterType.ABI }?.identifier
+            if(abi in setOf("x86", "x86_64")) {
+                output.enabled.set(false)
+                return@forEach
+            }
+            val architecture = when (abi) {
                 "armeabi-v7a" -> "armv7"
                 "arm64-v8a" -> "armv8"
                 null -> "all"

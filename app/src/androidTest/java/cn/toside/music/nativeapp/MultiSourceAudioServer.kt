@@ -14,6 +14,7 @@ internal class MultiSourceAudioServer : AutoCloseable {
     private val server = ServerSocket(0, 16, InetAddress.getByName("127.0.0.1"))
     private val sockets = ConcurrentHashMap.newKeySet<Socket>()
     val requests = CopyOnWriteArrayList<String>()
+    val requestHeaders = CopyOnWriteArrayList<Map<String,String>>()
     private val broken = AtomicInteger()
     val bytes = ByteBuffer.allocate(44 + 16000 * 12 * 2).order(ByteOrder.LITTLE_ENDIAN).apply {
         put("RIFF".toByteArray()).putInt(capacity() - 8).put("WAVEfmt ".toByteArray()).putInt(16)
@@ -30,12 +31,15 @@ internal class MultiSourceAudioServer : AutoCloseable {
                         val reader = it.getInputStream().bufferedReader()
                         val path = reader.readLine()?.split(' ')?.getOrNull(1).orEmpty()
                         var offset = 0
+                        val headers=mutableMapOf<String,String>()
                         while (true) {
                             val header = reader.readLine() ?: break
                             if (header.isEmpty()) break
+                            headers[header.substringBefore(':').lowercase()]=header.substringAfter(':').trim()
                             if (header.startsWith("Range:", true)) offset = header.substringAfter("bytes=").substringBefore('-').toIntOrNull() ?: 0
                         }
                         requests.add(path)
+                        requestHeaders.add(headers)
                         val output = it.getOutputStream()
                         when {
                             path.startsWith("/bad") -> output.write("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray())
