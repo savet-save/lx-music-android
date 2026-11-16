@@ -1073,6 +1073,10 @@ class PlaybackSettingsTest {
         }
         withPlayback { fixture ->
             fixture.play(); val original = fixture.player
+            main {
+                MainActivity::class.java.getDeclaredMethod("openLocalPage", Boolean::class.javaPrimitiveType)
+                    .apply { isAccessible = true }.invoke(fixture.activity, false)
+            }
             for ((language, label) in listOf("en" to "Local music", "zh-TW" to "本地音樂")) {
                 // waitForMonitorWithTimeout removes the monitor after it receives one Activity.
                 val monitor = instrumentation.addMonitor(MainActivity::class.java.name, null, false)

@@ -109,30 +109,40 @@ class PlayerFragmentTest {
 
     @Test fun predictiveBackCancellationKeepsThePlayerAndCommitRevealsThePreviousPage() = withPlayer { activity ->
         assumeTrue("Predictive fragment animation requires Android 14+", Build.VERSION.SDK_INT >= 34)
-        main { invoke(activity, "showPlayerDetails") }
-        waitFor("player animation") { activity.playerFragment()?.view?.alpha == 1f }
-        val fragment = activity.playerFragment()!!
-        val service = activity.settingsPlayer()
-        for (edge in listOf(BackEventCompat.EDGE_LEFT, BackEventCompat.EDGE_RIGHT)) {
-            main { activity.onBackPressedDispatcher.dispatchOnBackStarted(BackEventCompat(0f, 300f, 0f, edge)) }
-            instrumentation.waitForIdleSync()
-            main { activity.onBackPressedDispatcher.dispatchOnBackProgressed(BackEventCompat(150f, 300f, .65f, edge)) }
-            SystemClock.sleep(80)
-            main {
-                assertSame(fragment, activity.playerFragment())
-                assertTrue("Animation follows the gesture", fragment.requireView().alpha < 1f)
-                activity.onBackPressedDispatcher.dispatchOnBackCancelled()
+        val previousScale = android.provider.Settings.Global.getString(instrumentation.targetContext.contentResolver, "animator_duration_scale")
+        fun setScale(value: String?) {
+            val command = if (value == null) "settings delete global animator_duration_scale" else "settings put global animator_duration_scale $value"
+            android.os.ParcelFileDescriptor.AutoCloseInputStream(instrumentation.uiAutomation.executeShellCommand(command)).use { it.readBytes() }
+        }
+        // CI disables animations globally; this test explicitly exercises a seekable Animator.
+        setScale("1")
+        try {
+            waitFor("enabled Animator duration") { android.animation.ValueAnimator.areAnimatorsEnabled() }
+            main { invoke(activity, "showPlayerDetails") }
+            waitFor("player animation") { activity.playerFragment()?.view?.alpha == 1f }
+            val fragment = activity.playerFragment()!!
+            val service = activity.settingsPlayer()
+            for (edge in listOf(BackEventCompat.EDGE_LEFT, BackEventCompat.EDGE_RIGHT)) {
+                main { activity.onBackPressedDispatcher.dispatchOnBackStarted(BackEventCompat(0f, 300f, 0f, edge)) }
+                instrumentation.waitForIdleSync()
+                main { activity.onBackPressedDispatcher.dispatchOnBackProgressed(BackEventCompat(150f, 300f, .65f, edge)) }
+                SystemClock.sleep(80)
+                main {
+                    assertSame(fragment, activity.playerFragment())
+                    assertTrue("Animation follows the gesture", fragment.requireView().alpha < 1f)
+                    activity.onBackPressedDispatcher.dispatchOnBackCancelled()
+                }
+                waitFor("cancelled gesture") { fragment.isAdded && fragment.requireView().alpha == 1f }
             }
-            waitFor("cancelled gesture") { fragment.isAdded && fragment.requireView().alpha == 1f }
-        }
-        main { activity.onBackPressedDispatcher.dispatchOnBackStarted(BackEventCompat(0f, 300f, 0f, BackEventCompat.EDGE_LEFT)) }
-        instrumentation.waitForIdleSync()
-        main {
-            activity.onBackPressedDispatcher.dispatchOnBackProgressed(BackEventCompat(200f, 300f, .8f, BackEventCompat.EDGE_LEFT))
-            activity.onBackPressedDispatcher.onBackPressed()
-        }
-        waitFor("committed gesture") { activity.playerFragment() == null }
-        assertFalse(activity.isFinishing)
-        assertSame(service, activity.settingsPlayer())
+            main { activity.onBackPressedDispatcher.dispatchOnBackStarted(BackEventCompat(0f, 300f, 0f, BackEventCompat.EDGE_LEFT)) }
+            instrumentation.waitForIdleSync()
+            main {
+                activity.onBackPressedDispatcher.dispatchOnBackProgressed(BackEventCompat(200f, 300f, .8f, BackEventCompat.EDGE_LEFT))
+                activity.onBackPressedDispatcher.onBackPressed()
+            }
+            waitFor("committed gesture") { activity.playerFragment() == null }
+            assertFalse(activity.isFinishing)
+            assertSame(service, activity.settingsPlayer())
+        } finally { setScale(previousScale) }
     }
 }

@@ -213,7 +213,7 @@ class PlatformPopupTest {
     }
 
     @Test fun providerMenusAnchorToSearchPlaylistsAndChartsAndDoNotResetCurrentChoices() {
-        val activity = instrumentation.startActivitySync(Intent(instrumentation.targetContext, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
+        val activity = ForegroundTestActivities.start(Intent(instrumentation.targetContext, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
         val searches = AtomicInteger(); val playlistRequests = AtomicInteger(); val chartRequests = AtomicInteger()
         try {
             await { activity.settingsPlayer() != null }
@@ -239,7 +239,7 @@ class PlatformPopupTest {
             }
             await { searches.get() == 5 && (field(activity, "loadJob") as? Job)?.isActive != true }
             awaitLayout { (field(activity, "searchSourceButton") as View).takeIf { it.isShown } ?: field(activity, "heading") as View }
-            main { invoke(activity, "showSearchSources") }; await { menu()?.childCount == 6 }
+            main { invoke(activity, "showSearchSources") }; await { menu()?.childCount == 7 }
             main {
                 val anchor = (field(activity, "searchSourceButton") as View).takeIf { it.isShown } ?: field(activity, "heading") as View
                 verify(anchor, SearchCatalog.ALL); capture(activity, "search-platforms")
@@ -248,7 +248,7 @@ class PlatformPopupTest {
                 assertEquals("menu draft", (field(activity, "search") as EditText).text.toString())
                 invoke(activity, "showSearchSources")
             }
-            await { menu()?.childCount == 6 }
+            await { menu()?.childCount == 7 }
             main { choose("wy") }; await { searches.get() == 6 && (field(activity, "loadJob") as? Job)?.isActive != true }
             main { assertEquals("wy", field(activity, "searchSource")); invoke(activity, "showSearchSources") }
             dismissWithBack(activity)

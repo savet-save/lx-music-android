@@ -5,7 +5,6 @@ import android.content.Intent
 import android.net.Uri
 import android.os.SystemClock
 import android.view.View
-import android.view.inspector.WindowInspector
 import android.widget.Button
 import android.widget.ListView
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -89,8 +88,10 @@ class BilibiliDownloadDialogTest {
             }
             await { activity.window.decorView.findViewWithTag<View>("player-more")?.isShown == true }
             main { activity.window.decorView.findViewWithTag<View>("player-more").performClick() }
-            fun menu() = WindowInspector.getGlobalWindowViews().firstNotNullOfOrNull {
-                it.findViewWithTag<ListView>("song-actions-menu")?.takeIf(View::isShown)
+            fun menu(): ListView? {
+                val popup = MainActivity::class.java.getDeclaredField("songActionsPopup").apply { isAccessible = true }.get(activity)
+                val window = PlatformPopup::class.java.getDeclaredField("window").apply { isAccessible = true }.get(popup) as? android.widget.PopupWindow
+                return (window?.contentView as? ListView)?.takeIf { window.isShowing && it.isShown }
             }
             await { menu() != null }
             main {
