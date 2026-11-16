@@ -23,7 +23,7 @@ class PlayerFragmentTest {
     private fun main(block: () -> Unit) = instrumentation.runOnMainSync(block)
     private fun invoke(activity: MainActivity, name: String) =
         MainActivity::class.java.getDeclaredMethod(name).apply { isAccessible = true }.invoke(activity)
-    private fun waitFor(label: String, condition: () -> Boolean) {
+    private fun waitFor(label: String, diagnostics: () -> String = { "" }, condition: () -> Boolean) {
         repeat(100) {
             instrumentation.waitForIdleSync()
             var ready = false
@@ -31,7 +31,9 @@ class PlayerFragmentTest {
             if (ready) return
             SystemClock.sleep(50)
         }
-        fail("Timed out waiting for $label")
+        var detail = ""
+        main { detail = diagnostics() }
+        fail("Timed out waiting for $label${detail.takeIf(String::isNotEmpty)?.let { ": $it" }.orEmpty()}")
     }
     private fun withPlayer(block: (MainActivity) -> Unit) {
         val activity = instrumentation.startActivitySync(Intent(instrumentation.targetContext, MainActivity::class.java)
@@ -134,8 +136,14 @@ class PlayerFragmentTest {
                     assertTrue("Animation follows the gesture (edge=$edge)", content.alpha < 1f)
                     activity.onBackPressedDispatcher.dispatchOnBackCancelled()
                 }
-                waitFor("cancelled gesture") {
-                    activity.playerFragment() === fragment && fragment.isResumed && content.isAttachedToWindow && content.alpha == 1f
+                waitFor("cancelled gesture (edge=$edge)", diagnostics = {
+                    "found=${activity.playerFragment()}, added=${fragment.isAdded}, resumed=${fragment.isResumed}, " +
+                        "lifecycle=${fragment.lifecycle.currentState}, view=${fragment.view}, alpha=${fragment.view?.alpha}, " +
+                        "attached=${fragment.view?.isAttachedToWindow}, originalAttached=${content.isAttachedToWindow}, " +
+                        "backStack=${activity.supportFragmentManager.backStackEntryCount}"
+                }) {
+                    activity.playerFragment() === fragment && fragment.isResumed &&
+                        fragment.view?.let { it.isAttachedToWindow && it.alpha == 1f } == true
                 }
                 main {
                     assertEquals(1, activity.supportFragmentManager.backStackEntryCount)
