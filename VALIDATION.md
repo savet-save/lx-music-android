@@ -610,3 +610,5 @@ M2007J17C（API 31）独立测试包中 18 项下载回归通过，包含 6 项�
 2026-11-16 19:22:03（Asia/Shanghai）保留数据覆盖手机正式版为 0.9.18 / 9018，安装包 SHA-256 与本地 ARM64 正式包一致：c23b9565c8041aa526244a3d904661b67bdc95d8fa666794913ec5a700d2c80b。用户原有「生僻字」下载显示 5.62 MiB，详情确认同名 JPG 已自动补齐。真实播放旧下载时发现 DownloadProvider 的 DISPLAY_NAME 返回歌名而非文件名，已改为优先按原始下载 URI 关联封面，保留文件名匹配供媒体库 URI 使用；最终冷启动后同一本地歌曲正确显示保存的封面，播放停留在试听后的 00:34。截图见 build/native-v0.9.18-download-size.png 与 build/native-v0.9.18-local-playback.png。
 
 首次远程完整回归（Actions 43857248673）构建检查通过，设备回归发现旧测试前提尚未跟随本批功能调整：语言重建用例仍假定默认进入本地页、平台弹窗仍按 6 个选项计数、Android 9 用例调用了 API 29 的 WindowInspector、预测返回用例在 CI 全局关闭 Animator 时验证动画。分别改为显式打开本地页再验证重建、新增 B站后的 7 个搜索选项、直接读取应用弹窗，以及仅在动画专项临时恢复 Animator 时长并在 finally 还原；保留原断言。手机上相关的语言、平台菜单、AAC 码率及独立转换 4 项复测通过，记录为 build/native-v0.9.18-ci-fixes-phone-tests.txt；Android 14+ 的预测返回仍由远程 API 35 回归验证。
+
+第二轮完整回归中 Android 28 已通过，Android 35 仅剩预测返回的手势中 Fragment 标签查询断言失败。对照 AndroidX 官方 FragmentAnimatorTest 的动画与取消用例，改为手势中检查原视图仍附着且动画随进度变化，取消后等待同一 Fragment 恢复 RESUMED，并检查回退栈、主导航 Fragment 和播放服务仍保持；提交手势仍要求播放器关闭而 Activity 与服务保留。该调整验证实际可见行为与取消恢复状态，不依赖过渡期间的标签索引。

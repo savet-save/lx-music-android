@@ -119,8 +119,9 @@ class PlayerFragmentTest {
         try {
             waitFor("enabled Animator duration") { android.animation.ValueAnimator.areAnimatorsEnabled() }
             main { invoke(activity, "showPlayerDetails") }
-            waitFor("player animation") { activity.playerFragment()?.view?.alpha == 1f }
+            waitFor("player animation") { activity.playerFragment()?.let { it.isResumed && it.view?.alpha == 1f } == true }
             val fragment = activity.playerFragment()!!
+            val content = fragment.requireView()
             val service = activity.settingsPlayer()
             for (edge in listOf(BackEventCompat.EDGE_LEFT, BackEventCompat.EDGE_RIGHT)) {
                 main { activity.onBackPressedDispatcher.dispatchOnBackStarted(BackEventCompat(0f, 300f, 0f, edge)) }
@@ -128,11 +129,19 @@ class PlayerFragmentTest {
                 main { activity.onBackPressedDispatcher.dispatchOnBackProgressed(BackEventCompat(150f, 300f, .65f, edge)) }
                 SystemClock.sleep(80)
                 main {
-                    assertSame(fragment, activity.playerFragment())
-                    assertTrue("Animation follows the gesture", fragment.requireView().alpha < 1f)
+                    // A predictive pop can remove the FragmentManager tag before its view finishes animating.
+                    assertTrue("The player remains attached during the gesture (edge=$edge)", content.isAttachedToWindow)
+                    assertTrue("Animation follows the gesture (edge=$edge)", content.alpha < 1f)
                     activity.onBackPressedDispatcher.dispatchOnBackCancelled()
                 }
-                waitFor("cancelled gesture") { fragment.isAdded && fragment.requireView().alpha == 1f }
+                waitFor("cancelled gesture") {
+                    activity.playerFragment() === fragment && fragment.isResumed && content.isAttachedToWindow && content.alpha == 1f
+                }
+                main {
+                    assertEquals(1, activity.supportFragmentManager.backStackEntryCount)
+                    assertSame(fragment, activity.supportFragmentManager.primaryNavigationFragment)
+                    assertSame(service, activity.settingsPlayer())
+                }
             }
             main { activity.onBackPressedDispatcher.dispatchOnBackStarted(BackEventCompat(0f, 300f, 0f, BackEventCompat.EDGE_LEFT)) }
             instrumentation.waitForIdleSync()
