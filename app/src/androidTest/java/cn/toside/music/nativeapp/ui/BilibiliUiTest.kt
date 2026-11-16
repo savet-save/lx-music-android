@@ -21,9 +21,13 @@ class BilibiliUiTest {
     private val context=instrumentation.targetContext
     private fun children(view:View):List<View> = listOf(view) + if(view is ViewGroup) (0 until view.childCount).flatMap { children(view.getChildAt(it)) } else emptyList()
     @Test fun tokenPageDoesNotRestoreOrAutofillCredentials() {
-        val activity=instrumentation.startActivitySync(Intent(context,BilibiliLoginActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        val activity=ForegroundTestActivities.start(Intent(context,BilibiliLoginActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         try { instrumentation.runOnMainSync {
+            activity.window.decorView.findViewWithTag<View>("bili-manual-toggle").performClick()
             val input=activity.window.decorView.findViewWithTag<EditText>("bili-token")
+            val back=activity.window.decorView.findViewWithTag<TextView>("page-back")
+            assertEquals(UiPalette(activity,NativeThemes(activity).active()).primary,back.currentTextColor)
+            assertFalse(back.includeFontPadding)
             assertFalse(input.isSaveEnabled);assertEquals("",input.text.toString())
             assertNotNull(activity.window.decorView.findViewWithTag<View>("bili-token-save"))
             assertNotNull(activity.window.decorView.findViewWithTag<View>("bili-token-clear"))
@@ -31,7 +35,7 @@ class BilibiliUiTest {
     }
     @Test fun lyricsDownloadLetsLocalAndVideoSongsCorrectTitleAndSinger() {
         for(song in listOf(Song(1,Uri.EMPTY,"Monsters","Katie Sky",240000),Song(2,Uri.EMPTY,"王睿卓 - 茶花开了【动态歌词】","上传者",270000,"bili"))) {
-            val activity=instrumentation.startActivitySync(LyricsDownloadActivity.intent(context,song).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            val activity=ForegroundTestActivities.start(LyricsDownloadActivity.intent(context,song).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             try { instrumentation.runOnMainSync {
                 val fields=children(activity.window.decorView).filterIsInstance<EditText>()
                 assertEquals(2,fields.size)
@@ -44,12 +48,13 @@ class BilibiliUiTest {
     @Test fun clearingCredentialsCancelsPendingValidationAndPreventsLateSaving()=runBlocking {
         val credentials=BilibiliCredentials(context)
         val previous=credentials.load()
-        val activity=instrumentation.startActivitySync(Intent(context,BilibiliLoginActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        val activity=ForegroundTestActivities.start(Intent(context,BilibiliLoginActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         val entered=CompletableDeferred<Unit>();val finish=CompletableDeferred<Unit>()
         try {
             val validate:suspend (String)->String = { entered.complete(Unit);finish.await();"fixture" }
             BilibiliLoginActivity::class.java.getDeclaredField("verifySession").apply { isAccessible=true }.set(activity,validate)
             instrumentation.runOnMainSync {
+                activity.window.decorView.findViewWithTag<View>("bili-manual-toggle").performClick()
                 activity.window.decorView.findViewWithTag<EditText>("bili-token").setText("fixture-not-an-account")
                 activity.window.decorView.findViewWithTag<View>("bili-token-save").performClick()
             }

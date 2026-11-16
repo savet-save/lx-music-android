@@ -56,6 +56,11 @@ class PlayerDetailLayoutTest {
                             View.MeasureSpec.makeMeasureSpec(height, View.MeasureSpec.EXACTLY))
                         content.layout(0, 0, width, height)
                     }
+                    val back = content.findViewWithTag<TextView>("page-back")
+                    val header = content.findViewWithTag<ViewGroup>("player-header")
+                    assertEquals(UiPalette(activity, NativeThemes(activity).active()).primary, back.currentTextColor)
+                    assertEquals((48 * density).toInt(), back.width); assertEquals((48 * density).toInt(), back.height)
+                    assertTrue(abs(back.top + back.bottom - header.height) <= 1)
                     val album = content.cover.getChildAt(0)
                     val albumRect = rect(content, album)
                     val footer = content.findViewWithTag<View>("player-footer")

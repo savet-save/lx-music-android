@@ -10,6 +10,7 @@ import android.text.TextUtils
 import android.view.Gravity
 import android.widget.TextView
 import android.widget.FrameLayout
+import cn.toside.music.nativeapp.R
 
 /** Use the current window, so split screen and freeform windows behave like smaller devices. */
 internal data class AdaptiveLayout(val widthDp: Int, val heightDp: Int) {
@@ -68,6 +69,11 @@ internal class LxStyles(private val context: Context, private val palette: UiPal
     fun icon(code: Int, label: String, size: Float = 21f, click: () -> Unit) = label(code.toChar().toString(), size).apply {
         typeface = icons; gravity = Gravity.CENTER; contentDescription = label
         background = touch(); isFocusable = true; setOnClickListener { click() }
+    }
+    fun backButton(click: () -> Unit) = icon(59664, context.getString(R.string.ui_572cf45ba436), 24f, click).apply {
+        tag = "page-back"; includeFontPadding = false; gravity = Gravity.CENTER
+        setPadding(0, 0, 0, 0); minWidth = dp(48); minHeight = dp(48)
+        setTextColor(palette.primary); tooltipText = contentDescription
     }
     private fun blend(from: Int, to: Int, ratio: Float) = Color.rgb(
         (Color.red(from) * (1 - ratio) + Color.red(to) * ratio).toInt(),

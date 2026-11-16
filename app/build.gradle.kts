@@ -3,8 +3,8 @@ import com.android.build.api.variant.FilterConfiguration
 import java.util.Properties
 
 plugins {
-    id("com.android.application")
-    id("org.jetbrains.kotlin.android")
+    alias(libs.plugins.android.application)
+    alias(libs.plugins.kotlin.android)
 }
 
 val localProperties = Properties().apply {
@@ -108,16 +108,17 @@ tasks.matching { it.name == "preReleaseBuild" || it.name == "validateSigningRele
 }
 
 dependencies {
-    implementation("net.jthink:jaudiotagger:3.0.1")
-    implementation("androidx.core:core:1.18.0")
-    implementation("androidx.fragment:fragment-ktx:1.9.1")
-    implementation("androidx.navigation:navigation-fragment-ktx:2.10.2")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
-    implementation("com.squareup.okhttp3:okhttp:4.12.0")
-    implementation("wang.harlon.quickjs:wrapper-android:3.2.3")
-    implementation("androidx.media3:media3-exoplayer:1.10.1")
-    implementation("androidx.media3:media3-datasource-okhttp:1.10.1")
-    testImplementation("junit:junit:4.13.2")
-    androidTestImplementation("androidx.test:runner:1.5.2")
-    androidTestImplementation("androidx.test.ext:junit:1.1.5")
+    implementation(libs.jaudiotagger)
+    implementation(libs.androidx.core)
+    implementation(libs.androidx.fragment.ktx)
+    implementation(libs.androidx.navigation.fragment.ktx)
+    implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.okhttp)
+    implementation(libs.zxing.core)
+    implementation(libs.quickjs)
+    implementation(libs.media3.exoplayer)
+    implementation(libs.media3.datasource.okhttp)
+    testImplementation(libs.junit)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.junit)
 }

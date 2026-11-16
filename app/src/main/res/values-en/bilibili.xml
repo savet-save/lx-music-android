@@ -1,7 +1,22 @@
 <resources>
     <string name="bili_name">Bilibili</string>
-    <string name="bili_login">Bilibili login / SESSDATA</string>
-    <string name="bili_account_settings">Manage credentials; public content may work without signing in</string>
+    <string name="bili_login">Bilibili login</string>
+    <string name="bili_account_settings">Scan a QR code or enter SESSDATA. Credentials are encrypted on this device.</string>
+    <string name="bili_qr_title">Scan to sign in</string>
+    <string name="bili_qr_hint">Scan with the Bilibili app and confirm to sign in without typing. On this phone, save the QR code and select it from the scanner’s gallery.</string>
+    <string name="bili_qr_idle">Generate a login QR code using the button below</string>
+    <string name="bili_qr_generate">Generate login QR code</string>
+    <string name="bili_qr_refresh">Refresh QR code</string>
+    <string name="bili_qr_loading">Generating QR code…</string>
+    <string name="bili_qr_waiting">Waiting for scan (%1$d seconds left)</string>
+    <string name="bili_qr_scanned">Scanned. Confirm in the Bilibili app.</string>
+    <string name="bili_qr_expired">QR code expired. Refresh to try again.</string>
+    <string name="bili_qr_failed">Could not complete sign-in. Refresh the QR code to try again.</string>
+    <string name="bili_qr_success">Signed in</string>
+    <string name="bili_qr_save">Save QR code to gallery</string>
+    <string name="bili_qr_saved">QR code saved. Select it from the Bilibili scanner’s gallery.</string>
+    <string name="bili_qr_save_failed">Could not save QR code. Please try again.</string>
+    <string name="bili_manual">Enter SESSDATA manually</string>
     <string name="bili_login_hint">Sign in on the official Bilibili website and copy the SESSDATA cookie value. No password or full cookie string is needed. Credentials are encrypted on this device and are never given to custom scripts. Replace expired credentials here.</string>
     <string name="bili_login_save">Verify and save</string>
     <string name="bili_checking">Checking sign-in status…</string>

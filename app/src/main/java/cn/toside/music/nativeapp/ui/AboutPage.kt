@@ -130,7 +130,8 @@ internal class AboutPage(
             else {
                 license.text = "LX Music — Apache License 2.0\n\n" + activity.assets.open("licenses/Apache-2.0.txt").use { it.readBytes().toString(Charsets.UTF_8) } +
                     "\n\nJAudiotagger 3.0.1 — LGPL 2.1 or later\nhttps://www.jthink.net/jaudiotagger/\nSource: https://repo.maven.apache.org/maven2/net/jthink/jaudiotagger/3.0.1/jaudiotagger-3.0.1-sources.jar\n\n" +
-                    activity.assets.open("licenses/LGPL-2.1.txt").use { it.readBytes().toString(Charsets.UTF_8) } + "\n\nLAME — LGPL 2.0 or later\nhttps://github.com/lameproject/lame\n\n" + activity.assets.open("licenses/LAME-LGPL-2.0.txt").use { it.readBytes().toString(Charsets.UTF_8) }
+                    activity.assets.open("licenses/LGPL-2.1.txt").use { it.readBytes().toString(Charsets.UTF_8) } + "\n\nLAME — LGPL 2.0 or later\nhttps://github.com/lameproject/lame\n\n" + activity.assets.open("licenses/LAME-LGPL-2.0.txt").use { it.readBytes().toString(Charsets.UTF_8) } +
+                    "\n\nZXing — Apache License 2.0\nhttps://github.com/zxing/zxing\n\n" + activity.assets.open("licenses/ZXing-APACHE-2.0.txt").use { it.readBytes().toString(Charsets.UTF_8) }
                 license.visibility = View.VISIBLE
             }
         }); content.addView(license)

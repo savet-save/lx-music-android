@@ -552,3 +552,25 @@ MainActivity 显式启用 OnBackInvokedCallback，播放 Fragment 的进入、�
 48 项 JVM 单元测试通过；最终 Debug/正式签名 Release APK 构建、Debug/Release Lint 均无错误，ARM64 与通用包的 16 KB 原生库检查通过。手机首次安装需要手动确认；MIUI 拦截测试器从后台启动 Activity，回归时通过 ADB 显式将测试应用切到前台完成验证，未修改系统权限。最初超时记录保留在 phone-initial-tests.txt，不计入最终结果。
 
 按用户要求保留手机上的 cn.toside.music.nativeapp.playercheck 和 .playercheck.test，后续使用相同包名覆盖更新；盒子独立测试包已清理，两端正式应用及数据均未覆盖。版本仍为 0.9.17，本轮修改未提交或推送。日志、verification.json 和最终构建记录位于 build/player-fragment-validation/；phone-regression.txt、phone-final-tests.txt、box-tests.txt、box-final-tests.txt 为最终回归记录，phone-final-screens/ 和 box-screens/ 包含系统栏的真实设备截图。
+
+## B站登录主题统一、扫码登录与版本目录（2026-11-16）
+
+BilibiliLoginActivity 改用与主界面相同的 NativeThemes、UiPalette、LxStyles、字体和语言设置，包含返回顶栏、主题色操作、滚动内容及最大 640 dp 的表单宽度。使用统一 ScreenInsets 处理状态栏、刘海、导航栏和键盘，不再显示默认灰色系统栏及系统按钮；背景图下保留不透明底色。手动 SESSDATA 收入可展开区域，仍禁用密码输入框的状态保存和自动填充。
+
+新增本地生成二维码和 B站客户端扫码确认流程，参考[扫码接口文档](https://github.com/bilibili-plugins/bilibili-api-collect/blob/master/docs/login/login_action/QR.md)。二维码请求和轮询仅访问官方 passport HTTPS 接口，不发送现有账户 Cookie，也不跟随 SSO 重定向；成功后提取 SESSDATA，验证账户再用原 Android Keystore 加密存储。处理未扫码、已扫描待确认、成功、过期、网络失败及手动刷新；有效期按 180 秒限制，每两秒查询，页面进入后台暂停轮询。刷新、手动验证或清除会取消旧操作，并检查取消状态及当前二维码身份，阻止迟到结果写回。
+
+本轮调用官方匿名接口发现二维码页面已返回 account.bilibili.com/h5/account-h5/auth/scan-web，已与旧 passport.bilibili.com/h5-app/passport/login/scan 地址同时兼容，并核对返回密钥匹配。二维码由 ZXing 3.5.4 在本地编码，不经过图片服务；许可随包提供并在「关于」展示。Android 10+ 使用 MediaStore 保存到 Pictures/LX Music，供 B站扫一扫从相册识别；Android 9 使用系统文件选择器保存 PNG，不额外申请广泛写入权限。Android 9 的文件选择器路径本轮仅完成构建检查，未进行该系统的设备验收。
+
+M2007J17C（9dd0fd82，ARM64 / API 31）12 项、YYA-H618（ARMv7 / API 31）13 项专项回归全部通过，无跳过或剩余失败。包含真实匿名二维码生成和待扫码查询；模拟确认结果验证账户校验、加密保存、输入框不回填、旧二维码刷新/清除后的迟到结果、过期重试、相册 PNG 实际保存并解码为原登录 URL，以及旧手动输入、本地歌词、许可展开和深色/英文/1.3 倍字号、360/600/1024 dp 布局。截图专项在两端另各执行两项并通过，等待系统入场动画结束后核对状态栏和内容。真实账户扫码确认及认证后的 B站搜索、播放与下载未计入已通过结果，仍由用户稍后自行登录验收；测试凭据均为假数据，原有凭据在测试结束后恢复。
+
+48 项 JVM 单元测试通过，Debug 与正式签名 Release 构建及两种 Lint 无错误。ARM64、通用包的 16 KB 原生库和 APK 对齐检查通过，Release 签名 SHA-256 保持 91333f72261757beb2ec9d1eff01713cacd3db76ee863f59ca37b086678c5f84。Gradle 插件和库统一迁入 gradle/libs.versions.toml，核对原有 12 个依赖和 2 个插件版本均未变化，仅新增 ZXing。
+
+MIUI 对测试器直接启动内部 Activity 的限制，通过仅测试代码的 foregroundTestHost 参数处理：先显式打开测试应用主界面，再由已在前台的 Activity 按实际用户路径启动登录页，不修改系统权限。初始启动超时及修正前的布局断言日志保留，不计入最终回归。手机 .playercheck 主包和测试组件继续保留，盒子独立测试包已移除，两端正式应用均未覆盖。版本仍为 0.9.17，本轮未提交或推送。记录位于 build/bili-login-validation/，phone-tests.txt / box-tests.txt 为最终专项，*-screenshot-tests.txt 为截图复测，phone-screens/ / box-screens/ 包含使用假二维码的浅色、深色真机截图，build-final.txt 和 build-screenshots.txt 为最终构建与 Lint。
+
+## 顶栏返回按钮统一与居中（2026-11-16）
+
+B站登录、播放详情和设置统一使用 LxStyles.backButton：相同字体图标、24 sp 图标大小、48×48 dp 点击区域、主题色、无字体额外留白和水平/垂直居中。三个顶栏统一左侧 4 dp 留白并关闭基线对齐；设置页移除 Unicode ‹ 字符，标题也取消字体额外留白，解决返回按钮看起来靠下的问题。平板播放页顶栏提高到 56 dp，完整容纳一致的触控区域；手机播放页继续容纳歌名和歌手两行内容。
+
+手机 M2007J17C（ARM64 / API 31）6 项、盒子 YYA-H618（ARMv7 / API 31）6 项回归全部通过。覆盖三处主题色、设置页返回与标题的垂直中心、播放页 48 dp 触控区域及顶栏居中、360/600/1024 dp 等布局、平板及短横屏、深色、英文和 1.3 倍字号。未新增纯样式测试类，检查加入既有的播放布局、设置布局和登录页回归。Debug/正式签名 Release 构建、两种 Lint 及最终 16 KB 原生库/APK 对齐检查通过。
+
+预览已检查：登录页与深色播放页为包含系统栏的设备截图；360 dp 设置页和播放页为原生 View 测量绘制，使用设备当前歌曲文本，封面未加载时显示占位图。本轮未重新验证真实 B站账户登录或音频下载。手机测试包及测试组件按要求覆盖更新并保留，盒子独立测试包已清理，两端正式应用未覆盖，版本仍为 0.9.17，改动未提交或推送。记录位于 build/back-button-validation/；phone-main-tests.txt / phone-login-tests.txt / box-tests.txt 为测试日志，phone-screens/ / box-screens/ 为预览，build.txt 为构建和 Lint，native-alignment.txt 为对齐检查。

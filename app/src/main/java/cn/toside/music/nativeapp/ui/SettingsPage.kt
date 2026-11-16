@@ -136,9 +136,9 @@ internal class SettingsPage(
     internal fun createContent(): View {
         tabs.clear(); tabStrip = null
         val root = column().apply { tag = "settings-root"; setBackgroundColor(palette.surface) }
-        val header = LinearLayout(activity).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(dp(8), dp(4), dp(12), dp(4)) }
-        header.addView(button("‹") { onClose() }.apply { contentDescription = text(R.string.ui_3fd47edce45b); textSize = 30f; setPadding(0, 0, 0, 0) }, LinearLayout.LayoutParams(dp(48), dp(48)))
-        header.addView(label(text(R.string.settings_title), 21f).apply { setTypeface(null, Typeface.BOLD) }, LinearLayout.LayoutParams(0, -2, 1f))
+        val header = LinearLayout(activity).apply { tag = "settings-header"; gravity = Gravity.CENTER_VERTICAL; isBaselineAligned = false; setPadding(dp(4), dp(4), dp(12), dp(4)) }
+        header.addView(styles.backButton { onClose() }, LinearLayout.LayoutParams(dp(48), dp(48)))
+        header.addView(label(text(R.string.settings_title), 21f).apply { tag = "settings-title"; includeFontPadding = false; gravity = Gravity.CENTER_VERTICAL; setTypeface(null, Typeface.BOLD) }, LinearLayout.LayoutParams(0, -2, 1f))
         root.addView(header); divider(root)
         val body = LinearLayout(activity).apply { orientation = if (layout.expanded) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL }
         val nav = LinearLayout(activity).apply {

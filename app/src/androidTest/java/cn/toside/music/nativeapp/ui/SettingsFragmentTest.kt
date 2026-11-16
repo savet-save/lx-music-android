@@ -92,6 +92,11 @@ class SettingsFragmentTest {
                     if (category == "sources") await { (descendants(root).first { it.tag == "settings-source-list" } as ViewGroup).childCount > 0 }
                     instrumentation.runOnMainSync {
                         measure(root, layout.widthDp, layout.heightDp)
+                        val back = root.findViewWithTag<TextView>("page-back")
+                        val title = root.findViewWithTag<TextView>("settings-title")
+                        assertEquals(UiPalette(activity, NativeThemes(activity).active()).primary, back.currentTextColor)
+                        assertTrue("Back and title stay vertically centered", kotlin.math.abs(back.top + back.bottom - title.top - title.bottom) <= 1)
+                        assertFalse(back.includeFontPadding)
                         assertEquals(layout.expanded, descendants(root).any { it.tag == "settings-sidebar" })
                         assertEquals(!layout.expanded, descendants(root).any { it.tag == "settings-tabs" })
                         val content = descendants(root).first { it.tag == "settings-content" } as ViewGroup

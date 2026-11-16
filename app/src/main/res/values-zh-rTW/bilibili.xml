@@ -1,7 +1,22 @@
 <resources>
     <string name="bili_name">B站</string>
-    <string name="bili_login">B站登入 / SESSDATA</string>
-    <string name="bili_account_settings">管理登入憑據，公開內容可先嘗試不登入</string>
+    <string name="bili_login">B站登入</string>
+    <string name="bili_account_settings">掃碼登入或手動填寫 SESSDATA，憑據在本機加密儲存</string>
+    <string name="bili_qr_title">掃碼登入</string>
+    <string name="bili_qr_hint">用 B站 App 掃一掃，掃描二維碼並確認登入，無需手動輸入。本機使用可先儲存二維碼，再從 B站掃一掃的相簿中辨識。</string>
+    <string name="bili_qr_idle">點選下方按鈕產生登入二維碼</string>
+    <string name="bili_qr_generate">產生登入二維碼</string>
+    <string name="bili_qr_refresh">重新整理二維碼</string>
+    <string name="bili_qr_loading">正在產生二維碼…</string>
+    <string name="bili_qr_waiting">等待掃碼（剩餘 %1$d 秒）</string>
+    <string name="bili_qr_scanned">已掃碼，請在 B站 App 中確認登入</string>
+    <string name="bili_qr_expired">二維碼已過期，請重新整理後重試</string>
+    <string name="bili_qr_failed">取得或驗證登入失敗，請重新整理二維碼重試</string>
+    <string name="bili_qr_success">登入成功</string>
+    <string name="bili_qr_save">儲存二維碼至相簿</string>
+    <string name="bili_qr_saved">二維碼已儲存，請在 B站掃一掃中從相簿辨識</string>
+    <string name="bili_qr_save_failed">無法儲存二維碼，請重試</string>
+    <string name="bili_manual">手動填寫 SESSDATA</string>
     <string name="bili_login_hint">在 B站官方網頁登入後，從 Cookie 中複製 SESSDATA 的值。只需 SESSDATA，不需要密碼或整段 Cookie。憑據在本機加密儲存，不會提供給自訂指令碼。失效後可重新填寫。</string>
     <string name="bili_login_save">驗證並儲存</string>
     <string name="bili_checking">正在驗證登入狀態…</string>

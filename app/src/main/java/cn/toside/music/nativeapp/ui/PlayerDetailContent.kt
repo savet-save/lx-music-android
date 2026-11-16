@@ -103,11 +103,10 @@ internal class PlayerDetailContent(
         tag = if (adaptive.splitPlayer) "player-expanded" else "player-compact"
         clipChildren = false; clipToPadding = false
         val header = LinearLayout(context).apply {
-            tag = "player-header"; gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(if (adaptive.splitPlayer) 8 else 0), 0, dp(if (adaptive.splitPlayer) 8 else 0), 0)
+            tag = "player-header"; gravity = Gravity.CENTER_VERTICAL; isBaselineAligned = false
+            setPadding(dp(4), dp(4), dp(12), dp(4))
         }
-        header.addView(icon(59664, R.string.ui_572cf45ba436, 27f, actions.close),
-            LayoutParams(dp(40), dp(if (adaptive.splitPlayer) 32 else 56)))
+        header.addView(styles.backButton(actions.close), LayoutParams(dp(48), dp(48)))
         val heading = LinearLayout(context).apply {
             orientation = VERTICAL; gravity = Gravity.CENTER_VERTICAL
             addView(title, LayoutParams(-1, -2)); addView(artist, LayoutParams(-1, -2).apply { topMargin = dp(5) })
@@ -121,7 +120,7 @@ internal class PlayerDetailContent(
             }, LayoutParams(dp(48), dp(56)))
             header.addView(icon(59687, R.string.ui_8c38525734c0, 25f, actions.settings), LayoutParams(dp(48), dp(56)))
         }
-        addView(header, LayoutParams(-1, dp(if (adaptive.splitPlayer) 32 else if (adaptive.compactPlayer) 56 else 64)))
+        addView(header, LayoutParams(-1, dp(if (adaptive.splitPlayer || adaptive.compactPlayer) 56 else 64)))
 
         val album = FrameLayout(context).apply {
             background = styles.shape(palette.placeholder, 2); clipToOutline = true; elevation = dp(3).toFloat()

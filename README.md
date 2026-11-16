@@ -40,13 +40,15 @@ B站接入参考 [接口文档](https://github.com/bilibili-plugins/bilibili-api
 
 B站下载先在应用临时目录保存原始音频，再用 Android 解码器和 LAME 转为真正的 MP3（320 kbps 编码）；重新编码不会提升原始音质。最终 MP3 和匹配到的同名 UTF-8 LRC 保存在 `Download/LX Music/`。歌词按歌名、歌手、版本及相差不超过 5 秒的歌曲时长匹配其他音乐平台，找不到时明确显示无歌词并保留音频。歌曲菜单新增「搜索并下载歌词」，也支持本地歌曲，允许核对歌名、歌手后通过系统文件选择器保存 LRC。
 
-需要登录或遇到 B站验证要求时，在「设置 → 自定义音源 → B站登录 / SESSDATA」填写官方网页登录后的 SESSDATA 值。验证成功后用 Android Keystore 加密保存；凭据不会提供给自定义脚本或音频 CDN，可随时清除。验证要求仍需在 B站官方页面或客户端完成。
+需要登录或遇到 B站验证要求时，打开「设置 → 自定义音源 → B站登录」，生成二维码后用 B站 App 扫描并确认，应用自动验证并保存登录凭据。支持过期刷新及保存二维码到相册，方便同一部手机在 B站扫一扫中从相册识别；也保留手动填写 SESSDATA 的入口。登录页跟随应用主题、字号和语言，并正确避让系统栏及键盘。凭据用 Android Keystore 加密保存，不提供给自定义脚本或音频 CDN，可随时清除。其他验证要求仍需在 B站官方页面或客户端完成。
 
 MP3 编码器通过 `JNI_OnLoad` / `RegisterNatives` 动态注册。新增原生库使用 16 KB ELF 对齐，CI 和发布前同时检查所有 64 位原生库及 APK 中未压缩库的打包对齐。LAME 来源、固定提交和 LGPL 许可见 `app/src/main/cpp/lame/UPSTREAM.md`，应用「关于」中也可查看许可。
 
 ## 构建与验证
 
 使用 JDK 17、Android SDK 36；最低 Android 9。无需 Node 或 npm：
+
+Gradle 插件及依赖版本统一维护在 `gradle/libs.versions.toml`，根项目和应用通过 `libs` 别名引用。二维码由本地 ZXing 编码，「关于」页面包含其 Apache 2.0 许可。
 
 ```powershell
 .\gradlew.bat :app:assembleDebug :app:testDebugUnitTest :app:lintDebug
