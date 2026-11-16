@@ -1,4 +1,10 @@
 <resources>
+    <string name="download_total_size">總大小：%1$s</string>
+    <string name="download_size_unknown">未知</string>
+    <string name="download_cover_pending">封面：等待自動下載</string>
+    <string name="download_cover_saved">封面：已儲存</string>
+    <string name="download_cover_unavailable">封面：暫無可用封面</string>
+    <string name="download_cover_failed">封面：下載失敗，音訊已保留</string>
     <string name="download_page">下載</string>
     <string name="download_all">所有工作</string>
     <string name="download_active">下載中</string>

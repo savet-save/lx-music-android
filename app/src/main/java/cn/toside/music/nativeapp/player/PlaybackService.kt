@@ -136,6 +136,11 @@ class PlaybackService : Service() {
     private val noisyReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) { pause() }
     }
+    private val downloadedCoverReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            mutableState.value.song?.takeIf { it.source == "local" }?.let(::loadArtwork)
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -168,6 +173,8 @@ class PlaybackService : Service() {
                 NotificationChannel(CHANNEL, message(R.string.playback_channel), NotificationManager.IMPORTANCE_LOW))
         }
         registerReceiver(noisyReceiver, IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY))
+        androidx.core.content.ContextCompat.registerReceiver(this, downloadedCoverReceiver,
+            IntentFilter(cn.toside.music.nativeapp.data.DownloadCoverJob.ACTION_UPDATED), androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
         scope.launch { mutableState.map { it.song }.distinctUntilChanged().collect { loadLyrics(it); loadArtwork(it) } }
         scope.launch { combine(state, lyricState) { state, lyrics -> state to lyrics }.collect { (state, lyrics) -> desktopLyrics.render(state, lyrics) } }
         scope.launch {
@@ -806,6 +813,7 @@ class PlaybackService : Service() {
     }
     override fun onDestroy() {
         unregisterReceiver(noisyReceiver)
+        unregisterReceiver(downloadedCoverReceiver)
         scope.cancel()
         desktopLyrics.close()
         userSource.close()

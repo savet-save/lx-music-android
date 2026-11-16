@@ -14,6 +14,8 @@ import cn.toside.music.nativeapp.source.SourceAudio
 import cn.toside.music.nativeapp.lyrics.Lyrics
 import cn.toside.music.nativeapp.lyrics.LyricLine
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeout
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -63,7 +65,8 @@ class BilibiliOriginalDownloadTest {
             val player = MediaPlayer()
             try {
                 player.setDataSource(context, original.localUri!!); player.prepare(); player.start()
-                android.os.SystemClock.sleep(200); assertTrue(player.isPlaying); assertTrue(player.currentPosition > 0)
+                withTimeout(5000) { while (player.currentPosition == 0) delay(50) }
+                assertTrue(player.isPlaying)
             } finally { player.release() }
             assertTrue(downloads.startMp3Conversion(song)); assertFalse(downloads.startMp3Conversion(song))
             // Reopen the queue to exercise the persisted input URI, rather than an in-memory task.

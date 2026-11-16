@@ -60,6 +60,8 @@ class DownloadsPageTest {
     }
     private fun snapshot(name: String) {
         if (InstrumentationRegistry.getArguments().getString("downloadScreenshots") != "true") return
+        // Wait for the newly attached page to reach the screenshot compositor.
+        instrumentation.waitForIdleSync(); android.os.SystemClock.sleep(300)
         val image = requireNotNull(instrumentation.uiAutomation.takeScreenshot())
         val folder = File(context.getExternalFilesDir(null), "downloads-validation").apply { mkdirs() }
         File(folder, "$name.png").outputStream().use { image.compress(Bitmap.CompressFormat.PNG, 100, it) }
@@ -100,13 +102,18 @@ class DownloadsPageTest {
             lx.on(lx.EVENT_NAMES.request, ({info}) => { $body });
             lx.send(lx.EVENT_NAMES.inited, {sources:{kg:{type:'music',actions:['musicUrl'],qualitys:['128k','320k']}}});
         """.trimIndent()
-        val activity = instrumentation.startActivitySync(Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
+        val activity = ForegroundTestActivities.start(Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
         val root = activity.window.decorView
         fun view(tag: String) = root.findViewWithTag<View>(tag)
         try {
             waitFor("playback service and Activity focus") { activity.settingsPlayer() != null && activity.hasWindowFocus() }
             val player = requireNotNull(activity.settingsPlayer())
-            player.importSource(source("Download failure fixture", "return Promise.reject(new Error('temporary failure'))"))
+            suspend fun selectFixture(name: String, body: String) {
+                val script = source(name, body)
+                player.importSource(script)
+                player.selectSource(cn.toside.music.nativeapp.source.UserSourceLibrary.metadata(script).id)
+            }
+            selectFixture("Download failure fixture", "return Promise.reject(new Error('temporary failure'))")
             main {
                 val bar = MainActivity::class.java.getDeclaredField("miniBar").apply { isAccessible = true }.get(activity) as ViewGroup
                 activity.openChartSongActions(bar.getChildAt(0), listOf(song), 0)
@@ -161,7 +168,7 @@ class DownloadsPageTest {
             }
             if (InstrumentationRegistry.getArguments().getString("downloadScreenshots") == "true") delay(2200)
             instrumentation.waitForIdleSync(); snapshot("downloads-blue")
-            player.importSource(source("Download success fixture", "if (info.type !== '320k') throw new Error('wrong quality'); return Promise.resolve('http://127.0.0.1:${server.localPort}/track.wav')"))
+            selectFixture("Download success fixture", "if (info.type !== '320k') throw new Error('wrong quality'); return Promise.resolve('http://127.0.0.1:${server.localPort}/track.wav')")
             main { view("downloads-task-${failed.key}").findViewWithTag<View>("downloads-row-primary").performClick() }
             waitFor("retry start") { downloads.list().any { it.key == failed.key && it.status != DownloadStatus.LINK_FAILED } }
             var scheduler: DownloadTestScheduler? = null
@@ -169,7 +176,7 @@ class DownloadsPageTest {
                 val task = downloads.list().single { it.song == song }
                 if (task.systemId != null && scheduler == null) scheduler = DownloadTestScheduler(task.systemId)
                 if (task.status == DownloadStatus.QUEUED) scheduler?.onStatus(DownloadManager.STATUS_PENDING)
-                check(!task.failed) { "Retry ended in ${task.status}, reason ${task.reason}, scheduler ${scheduler?.diagnostics}" }
+                check(!task.failed) { "Retry ended in ${task.status}, reason ${task.reason}, error ${task.error}, scheduler ${scheduler?.diagnostics}" }
                 task.status == DownloadStatus.COMPLETE
             }
             val completed = downloads.list().single { it.song == song }
@@ -214,6 +221,11 @@ class DownloadsPageTest {
             main { view("navigation-4").performClick() }
             waitFor("the compact download row") { view("downloads-task-${failed.key}")?.isShown == true }
             assertNull(view("downloads-table-header"))
+            main {
+                val size = view("downloads-task-${failed.key}").findViewWithTag<TextView>("downloads-row-size")
+                assertEquals(activity.getString(R.string.download_total_size,
+                    activity.getString(R.string.download_size_mib, completed.total / (1024.0 * 1024))), size.text.toString())
+            }
             instrumentation.waitForIdleSync(); snapshot("downloads-compact")
             main { view("downloads-task-${failed.key}").findViewWithTag<View>("downloads-row-remove").performClick() }
             waitFor("remove confirmation") {

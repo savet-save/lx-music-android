@@ -598,3 +598,13 @@ B站下载弹窗按实际返回的 AAC 音轨列出码率，使用稳定音轨 I
 52 项 JVM 测试、28 项手机专项全部通过。覆盖三次 403 后第四次成功、四次均失败后才提示、取链前三次失败后成功、拒绝主 CDN 后播放备用地址、续传共享额度、失败缓存定向清理、旧重定向失效、音轨变更、原有换源及 AAC 下载/转换；包含公开音轨 CDN 请求对照。早期模拟脚本的三项失败日志保留在 build/bili-playback-retry-phone-tests.txt，不计为通过；最终记录为 build/bili-playback-retry-phone-complete.txt 和 build/bili-cdn-probe-final.json。Debug/测试包/正式签名 Release 构建、Debug Lint（0 errors / 263 warnings）、Release Lint Vital、apksigner 及 16 KB zipalign 检查通过。前一轮系统下载中断换源超时用例本轮未重跑，不视为已修复。
 
 2026-11-16 18:42:07（Asia/Shanghai）保留数据覆盖手机正式版，仍为 0.9.17 / 9017。直接播放用户原来失败的同一歌曲：正式进程 AudioTrack 于 18:42:32 开始输出，播放状态为 PLAYING，18:44:47 验证后暂停，实际播放位置为 135156 ms，界面显示 02:15 / 04:50，无播放错误。该结果仅代表这条公开视频的真实验收。已安装 APK 与本次 release 的 SHA-256 一致：705057cc44fc83ee56e3ec93fafe55c64c91e51b5700251455e5dcd81c0434f2。构建、安装、播放状态和汇总分别见 build/bili-playback-retry-final-build.txt、build/bili-playback-retry-release-install-final.txt、build/bili-playback-retry-real-song-paused.txt、build/bili-playback-retry-verification.json。诊断不保存账号 Cookie、完整签名 URL 或音频内容；未更新盒子，改动尚未提交或推送。
+
+## 下载总大小与封面保存（2026-11-16）
+
+下载列表的手机行新增独立总大小信息，宽屏状态栏使用第二行显示大小，详情同步显示；总大小尚未获取时显示未知。下载完成后独立后台任务保存同名 JPG 到 Download/LX Music/，优先读取封面缓存，旧任务缺少封面字段时自动加入补齐队列。本地歌曲先读内嵌封面，再读下载的 JPG；封面保存后刷新正在播放的本地歌曲。B站图片地址在网络请求时升级为 HTTPS 并使用 B站图片请求头，已有缓存键保持可复用。
+
+封面网络失败最多尝试 3 次，后台退避重试，音频完成状态和原始文件均不受影响；移除下载会移除其封面，保存过程中移除任务不会产生迟到文件。独立 MP3 转换保留原始音频及 JPG，为新 MP3 保存各自的 JPG。
+
+M2007J17C（API 31）独立测试包中 18 项下载回归通过，包含 6 项新增封面测试：旧记录迁移及离线缓存复用、503 后重试成功、三次失败后停止且保留音频、保存中删除无残留、真实后台 Job 与 MP3 转换文件独立性、系统下载 URI 的封面读取；同时覆盖 AAC 原样保存、所选音轨缓存、LRC 和下载页面总大小断言。旧页面用例显式选择所导入的测试音源，适配多音源优先级；AAC 播放用例按实际进度等待，移除设备上不稳定的固定 200 ms 假设。最终日志为 build/download-cover-device-tests.txt；早期失败不计为通过。52 项 JVM 测试、Debug 和正式三架构构建、两种 Lint（0 errors）、签名与 16 KB zipalign 检查通过，最终构建记录为 build/native-v0.9.18-final-build.txt。版本递增至 0.9.18 / 9018，并补齐自上一个 tag 后的更新摘要。
+
+2026-11-16 19:22:03（Asia/Shanghai）保留数据覆盖手机正式版为 0.9.18 / 9018，安装包 SHA-256 与本地 ARM64 正式包一致：c23b9565c8041aa526244a3d904661b67bdc95d8fa666794913ec5a700d2c80b。用户原有「生僻字」下载显示 5.62 MiB，详情确认同名 JPG 已自动补齐。真实播放旧下载时发现 DownloadProvider 的 DISPLAY_NAME 返回歌名而非文件名，已改为优先按原始下载 URI 关联封面，保留文件名匹配供媒体库 URI 使用；最终冷启动后同一本地歌曲正确显示保存的封面，播放停留在试听后的 00:34。截图见 build/native-v0.9.18-download-size.png 与 build/native-v0.9.18-local-playback.png。

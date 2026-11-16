@@ -2,6 +2,8 @@ package cn.toside.music.nativeapp.data
 
 import android.app.DownloadManager
 import android.content.Context
+import android.content.Intent
+import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Environment
 import cn.toside.music.nativeapp.R
@@ -31,6 +33,7 @@ import java.util.UUID
 
 internal enum class DownloadStatus { RESOLVING, QUEUED, RUNNING, CONVERTING, PAUSED, LINK_FAILED, FAILED, INTERRUPTED, COMPLETE }
 internal enum class DownloadLyricStatus { PENDING, SAVED, UNAVAILABLE, FAILED }
+internal enum class DownloadCoverStatus { PENDING, SAVED, UNAVAILABLE, FAILED }
 
 internal data class DownloadTask(
     val key: String, val song: Song, val quality: String?, val status: DownloadStatus,
@@ -40,6 +43,7 @@ internal data class DownloadTask(
     val directory: String = DownloadFiles.RELATIVE_PATH,
     val sourceName: String? = null, val sourceAttempts: Int = 0, val error: String? = null,
     val isConversion: Boolean = false,
+    val coverStatus: DownloadCoverStatus? = null, val coverUri: Uri? = null,
 ) {
     val failed get() = status in setOf(DownloadStatus.LINK_FAILED, DownloadStatus.FAILED, DownloadStatus.INTERRUPTED)
     val percent get() = if (status == DownloadStatus.COMPLETE) 100 else if (total > 0)
@@ -61,6 +65,7 @@ class Downloads(private val context: Context, private val scheduleLyrics: (Conte
         val ordered: Boolean = false, val exhausted: Boolean = false, val attemptedSources: List<String> = emptyList(),
         val sourceId: String? = null, val sourceName: String? = null, val error: String? = null,
         val conversionInput: Uri? = null,
+        val coverStatus: DownloadCoverStatus = DownloadCoverStatus.PENDING, val coverUri: Uri? = null, val coverAttempts: Int = 0,
     )
     private data class Transfer(
         val id: Long, val title: String, val artist: String, val fileName: String?, val updated: Long,
@@ -128,9 +133,10 @@ class Downloads(private val context: Context, private val scheduleLyrics: (Conte
                     val transfer = if (old.systemId != null || old.fileName != null) find(old, transfers(setOfNotNull(old.systemId))) else null
                     if (transfer != null && transfer.status != DownloadStatus.FAILED && !(old.quality == "mp3" && old.failure != null)) return@synchronized null
                     transfer?.let { manager.remove(it.id) }
-                    old.localUri?.let(files::delete); old.lyricUri?.let(files::delete)
+                    old.localUri?.let(files::delete); old.lyricUri?.let(files::delete); old.coverUri?.let(files::delete)
                     old.copy(systemId = null, fileName = null, failure = null, localUri = null, localBytes = 0,
                         lyricStatus = DownloadLyricStatus.PENDING, lyricUri = null, lyricAttempts = 0,
+                        coverStatus = DownloadCoverStatus.PENDING, coverUri = null, coverAttempts = 0,
                         ordered = ordered, exhausted = false, error = null,
                         attemptedSources = if (continued) old.attemptedSources else emptyList(), sourceId = null, sourceName = null)
                 }
@@ -256,7 +262,7 @@ class Downloads(private val context: Context, private val scheduleLyrics: (Conte
                     transfer?.bytes ?: record.localBytes, transfer?.total ?: record.localBytes.takeIf { it > 0 } ?: -1,
                     transfer?.reason ?: 0, transfer?.fileName ?: record.fileName, record.localUri, record.lyricStatus,
                     record.lyricUri, transfer?.directory ?: DownloadFiles.RELATIVE_PATH, record.sourceName, record.attemptedSources.size, record.error,
-                    isConversion = record.conversionInput != null)
+                    isConversion = record.conversionInput != null, coverStatus = record.coverStatus, coverUri = record.coverUri)
             }
             val older = transfers.filter { it.id !in claimed && it.fileName != null }.map { transfer ->
                 val song = Song(-transfer.id, Uri.EMPTY, transfer.title, transfer.artist, 0)
@@ -274,7 +280,7 @@ class Downloads(private val context: Context, private val scheduleLyrics: (Conte
             } else read(task.key)?.let { record ->
                 val systemId = if (record.systemId != null || record.fileName != null) find(record, transfers(setOfNotNull(record.systemId)))?.id else null
                 systemId?.let { manager.remove(it) }
-                record.localUri?.let(files::delete); record.lyricUri?.let(files::delete)
+                record.localUri?.let(files::delete); record.lyricUri?.let(files::delete); record.coverUri?.let(files::delete)
                 check(history.edit().remove(record.key).commit()) { "无法移除下载任务" }
             }
         }
@@ -318,6 +324,56 @@ class Downloads(private val context: Context, private val scheduleLyrics: (Conte
 
     internal suspend fun pendingLyrics(): List<DownloadTask> = list().filter {
         it.status == DownloadStatus.COMPLETE && it.lyricStatus == DownloadLyricStatus.PENDING
+    }
+
+    internal suspend fun pendingCovers(): List<DownloadTask> = list().filter {
+        it.status == DownloadStatus.COMPLETE && it.coverStatus == DownloadCoverStatus.PENDING
+    }
+
+    /** Keep artwork beside the audio so original audio bytes remain unchanged. */
+    internal suspend fun saveCover(key: String, load: suspend (Song) -> Bitmap? = { Artwork(context).load(it, strict = true) }): Boolean =
+        coverMutex.withLock { withContext(Dispatchers.IO) {
+            val record = synchronized(lock) { read(key)?.takeIf { it.coverStatus == DownloadCoverStatus.PENDING } } ?: return@withContext false
+            var output: Uri? = null
+            var saved = false
+            try {
+                val bitmap = load(record.song)
+                if (bitmap == null) {
+                    synchronized(lock) { read(key)?.let { write(it.copy(coverStatus = DownloadCoverStatus.UNAVAILABLE)) } }
+                    return@withContext false
+                }
+                val name = requireNotNull(record.fileName).substringBeforeLast('.') + ".jpg"
+                output = files.create(name, "image/jpeg")
+                files.output(output).use { check(bitmap.compress(Bitmap.CompressFormat.JPEG, 95, it)) { "无法保存封面" } }
+                currentCoroutineContext().ensureActive()
+                saved = synchronized(lock) {
+                    val current = read(key)?.takeIf { it.fileName == record.fileName } ?: return@synchronized false
+                    files.publish(output)
+                    write(current.copy(coverStatus = DownloadCoverStatus.SAVED, coverUri = output)); true
+                }
+                if (saved) runCatching { context.sendBroadcast(Intent(DownloadCoverJob.ACTION_UPDATED).setPackage(context.packageName)) }
+                false
+            } catch (e: CancellationException) { throw e }
+            catch (_: Exception) {
+                synchronized(lock) { read(key)?.let {
+                    val attempts = it.coverAttempts + 1
+                    write(it.copy(coverAttempts = attempts, coverStatus = if (attempts >= 3) DownloadCoverStatus.FAILED else DownloadCoverStatus.PENDING))
+                } }
+                synchronized(lock) { read(key)?.coverStatus == DownloadCoverStatus.PENDING }
+            } finally { if (!saved) output?.let(files::delete) }
+        } }
+
+    internal suspend fun localCover(song: Song): ByteArray? = withContext(Dispatchers.IO) {
+        val records = synchronized(lock) { history.all.keys.mapNotNull(::read).filter { it.coverStatus == DownloadCoverStatus.SAVED } }
+        // DownloadProvider may expose the song title as DISPLAY_NAME, instead of the actual filename.
+        val direct = records.firstOrNull {
+            it.localUri == song.uri || it.systemId?.let { id -> runCatching { manager.getUriForDownloadedFile(id) }.getOrNull() } == song.uri
+        }
+        val uri = direct?.coverUri ?: run {
+            val name = runCatching { ExternalAudio.name(context, song.uri) }.getOrNull() ?: return@withContext null
+            records.firstOrNull { it.fileName == name }?.coverUri
+        } ?: return@withContext null
+        runCatching { context.contentResolver.openInputStream(uri)?.use { it.readBounded(8 * 1024 * 1024) } }.getOrNull()
     }
 
     /** MediaStore and the download page can identify the same file with different local IDs. */
@@ -415,6 +471,7 @@ class Downloads(private val context: Context, private val scheduleLyrics: (Conte
             .put("ordered", record.ordered).put("exhausted", record.exhausted).put("attemptedSources", JSONArray(record.attemptedSources))
             .put("sourceId", record.sourceId).put("sourceName", record.sourceName).put("error", record.error)
             .put("conversionInput", record.conversionInput?.toString())
+            .put("coverStatus", record.coverStatus.name).put("coverUri", record.coverUri?.toString()).put("coverAttempts", record.coverAttempts)
         check(history.edit().putString(record.key, value.toString()).commit()) { "无法保存下载任务" }
     }
 
@@ -431,7 +488,9 @@ class Downloads(private val context: Context, private val scheduleLyrics: (Conte
                     lyricAttempts = json.optInt("lyricAttempts"), ordered = json.optBoolean("ordered"), exhausted = json.optBoolean("exhausted"),
                     attemptedSources = json.optJSONArray("attemptedSources")?.let { ids -> (0 until ids.length()).map { ids.optString(it) }.distinct() }.orEmpty(),
                     sourceId = optional("sourceId"), sourceName = optional("sourceName"), error = optional("error"),
-                    conversionInput = optional("conversionInput")?.let(Uri::parse))
+                    conversionInput = optional("conversionInput")?.let(Uri::parse),
+                    coverStatus = optional("coverStatus")?.let(DownloadCoverStatus::valueOf) ?: DownloadCoverStatus.PENDING,
+                    coverUri = optional("coverUri")?.let(Uri::parse), coverAttempts = json.optInt("coverAttempts"))
         }.getOrNull()
     }
 
@@ -503,6 +562,7 @@ class Downloads(private val context: Context, private val scheduleLyrics: (Conte
         val resolving = mutableSetOf<String>()
         val lyricMutex = Mutex()
         val conversionMutex = Mutex()
+        val coverMutex = Mutex()
     }
     private fun mimeType(name: String) = when (name.substringAfterLast('.')) {
         "flac" -> "audio/flac"; "wav" -> "audio/wav"; "m4a" -> "audio/mp4"; "aac" -> "audio/aac"; "ogg" -> "audio/ogg"; else -> "audio/mpeg"
