@@ -55,6 +55,7 @@ internal class UserSourceLibrary(private val context: Context) {
     }
     fun selected(): UserSourceEntry? = read().let { data -> data.entries.firstOrNull { it.id == data.selected } }
     fun isBilibili(id: String) = id == bundled(BUNDLED_BILIBILI_ASSET).id
+    fun isBundled(id: String) = listOf(BUNDLED_ASSET, BUNDLED_KUWO_ASSET, BUNDLED_BILIBILI_ASSET).any { id == bundled(it).id }
     fun bilibiliEnabled() = read().enabled.any(::isBilibili)
     fun addValidated(script: String, enableWithOthers: Boolean = false): UserSourceEntry = synchronized(lock) {
         val current = read()

@@ -394,7 +394,11 @@ class Downloads(private val context: Context, private val scheduleLyrics: (Conte
     internal suspend fun saveLyrics(key: String, load: suspend (Song) -> List<LyricLine> = { song ->
         Lyrics(context).load(song.id, song.source).ifEmpty {
             (if (song.source == "local") localLyrics(song) else emptyList()).ifEmpty {
-                if(song.source in setOf("bili", "local")) cn.toside.music.nativeapp.online.MatchedLyrics(context).find(song) else OnlineLyrics().forSong(song)
+                when (song.source) {
+                    "bili" -> cn.toside.music.nativeapp.online.BilibiliLyrics(context).find(song)
+                    "local" -> cn.toside.music.nativeapp.online.MatchedLyrics(context).find(song)
+                    else -> OnlineLyrics().forSong(song)
+                }
             }
         }
     }): Boolean = lyricMutex.withLock { withContext(Dispatchers.IO) {

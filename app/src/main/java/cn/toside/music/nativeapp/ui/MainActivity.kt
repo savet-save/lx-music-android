@@ -308,6 +308,7 @@ class MainActivity : FragmentActivity() {
             handleIncomingIntent()
             settingsFragment()?.refreshSources()
             settingsFragment()?.refreshPlayback()
+            refreshBilibiliSearchAvailability()
         }
         override fun onServiceDisconnected(name: ComponentName?) { service = null; stateJob?.cancel(); lyricJob?.cancel(); artworkJob?.cancel(); sourceUpdateJob?.cancel() }
     }
@@ -1526,6 +1527,7 @@ class MainActivity : FragmentActivity() {
     }
     internal fun refreshSettingsPreferences() {
         service?.refreshPreferences(); filterSongs(); service?.state?.value?.let(::renderPlayer)
+        refreshBilibiliSearchAvailability()
     }
     internal fun closeSettings() {
         if (!supportFragmentManager.isStateSaved) navigation?.popBackStack()
@@ -1635,7 +1637,8 @@ class MainActivity : FragmentActivity() {
             labels.addAll(listOf(getString(R.string.ui_0fd5cd79a1b5),
                 getString(R.string.ui_ba9a8defba4e, getString(if (entry.allowUpdateAlert) R.string.ui_3fd47edce45b else R.string.ui_8da97ddda990)),
                 getString(R.string.ui_2f9daa828907)))
-            choicesPopup.show(anchor, ids, labels, "", palette) { action ->
+            val disabled = if (withContext(Dispatchers.IO) { UserSourceLibrary(applicationContext).isBundled(entry.id) }) setOf("delete") else emptySet()
+            choicesPopup.show(anchor, ids, labels, "", palette, disabled = disabled) { action ->
                 when (action) {
                     "toggle", "up", "down", "updates" -> scope.launch {
                         try {
@@ -1645,7 +1648,7 @@ class MainActivity : FragmentActivity() {
                                 "down" -> player.moveSource(entry.id, 1)
                                 else -> player.allowSourceUpdates(entry.id, !entry.allowUpdateAlert)
                             }
-                            changed()
+                            refreshBilibiliSearchAvailability(); changed()
                         } catch (e: CancellationException) { throw e }
                         catch (e: Exception) { toast(e.localizedMessage.orEmpty()) }
                     }
@@ -1756,15 +1759,31 @@ class MainActivity : FragmentActivity() {
     }
     private fun sourceLabel(): String = sourceLabel(searchSource)
     private fun sourceLabel(source: String): String = if (source == SearchCatalog.ALL) getString(R.string.search_all_sources) else UiPreferences.sourceName(this, source)
+    private suspend fun availableSearchSources(): List<String> {
+        val enabled = withContext(Dispatchers.IO) { UserSourceLibrary(applicationContext).bilibiliEnabled() }
+        if (!enabled && searchSource == "bili") {
+            searchSource = SearchCatalog.ALL
+            if (isCatalogPage) {
+                heading.text = getString(R.string.ui_e07216a6d505, sourceLabel())
+                resetCatalogResults()
+            }
+        }
+        return PlatformPopup.sources + (if (enabled) listOf("bili") else emptyList()) + SearchCatalog.ALL
+    }
+    private fun refreshBilibiliSearchAvailability() {
+        scope.launch { availableSearchSources() }
+    }
     private fun showSearchSources() {
-        val ids = PlatformPopup.sources + "bili" + SearchCatalog.ALL
-        val anchor = if (searchSourceButton.isShown) searchSourceButton else heading
-        platformPopup.show(anchor, ids, ids.map(::sourceLabel), searchSource, palette) { selected ->
-            searchSource = selected
-            if(selected == "bili") playlistSearchMode=false
-            heading.text = getString(R.string.ui_e07216a6d505, sourceLabel())
-            resetCatalogResults()
-            if (search.text.isNotBlank()) searchOnline()
+        scope.launch {
+            val ids = availableSearchSources()
+            val anchor = if (searchSourceButton.isShown) searchSourceButton else heading
+            platformPopup.show(anchor, ids, ids.map(::sourceLabel), searchSource, palette) { selected ->
+                searchSource = selected
+                if(selected == "bili") playlistSearchMode=false
+                heading.text = getString(R.string.ui_e07216a6d505, sourceLabel())
+                resetCatalogResults()
+                if (search.text.isNotBlank()) searchOnline()
+            }
         }
     }
     private fun showPlayerDetails() {

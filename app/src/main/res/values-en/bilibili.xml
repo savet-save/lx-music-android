@@ -1,5 +1,10 @@
 <resources>
-    <string name="bili_name">Bilibili</string>
+    <string name="bili_name">bilibili</string>
+    <string name="bili_settings">bilibili settings</string>
+    <string name="bili_lyrics_mode">Lyrics source</string>
+    <string name="bili_lyrics_subtitle">Prefer subtitles</string>
+    <string name="bili_lyrics_match">Prefer matched lyrics</string>
+    <string name="bili_lyrics_mode_hint">Prefer subtitles: use the video subtitle track and its timing, then try matching lyrics if unavailable. Subtitles may require signing in. Text embedded in the video image cannot be read.\nPrefer matched lyrics (default): keep matching lyrics on other platforms by title, artist and similar duration, then try video subtitles if no match is found. Applies to playback and lyric downloads. Manually imported lyrics take priority.</string>
     <string name="bili_login">Bilibili login</string>
     <string name="bili_account_settings">Scan a QR code or enter SESSDATA. Credentials are encrypted on this device.</string>
     <string name="bili_login_limits">Login and device limits</string>

@@ -38,6 +38,7 @@ internal class AppPreferences(context: Context, name: String = "app-settings") {
     val startupPlayer get() = bool("player.startupPushPlayDetailScreen")
     val searchHistory get() = bool("search.isShowHistorySearch", true)
     val hotSearch get() = bool("search.isShowHotSearch")
+    val preferBilibiliSubtitles get() = string("bilibili.lyricsMode", "match") == "subtitle"
     val recordHistory get() = bool("player.recordHistory", true)
     val autoCleanQueue get() = bool("player.isAutoCleanPlayedList")
     val autoLowerQuality get() = bool("player.autoLowerQuality", true)

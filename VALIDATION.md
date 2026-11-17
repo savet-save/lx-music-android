@@ -618,3 +618,11 @@ M2007J17C（API 31）独立测试包中 18 项下载回归通过，包含 6 项�
 详细诊断确认 Android 35 取消手势后，同一播放器已恢复 RESUMED、当前视图仍附着、回退栈为 1，但 alpha 停留在 0.27300477，属于实际界面恢复缺陷。PlayerDetailFragment.onResume 现在显式将透明度、横纵缩放还原为 1；回归同时验证左右两侧取消后的透明度、缩放、同一 Fragment、主导航与服务，以及完成手势后的退出行为。Android 15 验收继续以远程 API 35 结果为准。
 
 补丁后的 5 项手机播放器回归、52 项 JVM 测试、正式三架构构建与 Debug/Release Lint 均通过；手机测试覆盖返回只关闭播放器、设置返回歌词页、系统栏布局、AAC 码率与独立 MP3 菜单，记录为 build/native-v0.9.18-player-final-phone-tests.txt。20:20:26 保留数据覆盖手机正式版，最终 ARM64 APK 与手机安装包 SHA-256 一致：24308f12b942db32e0f746ee823b7512912325b98c1d7398f23d96e71deb9791；正式签名保持不变，三个 APK 的 16 KB zipalign 通过。
+
+## bilibili 搜索与歌词偏好、内置音源删除限制（2026-11-17）
+
+搜索平台显示名称改为 bilibili，仅在内置「B站音乐」启用时提供，停用当前选中的 bilibili 后回到聚合搜索并清除旧结果。自定义音源页增加 bilibili 歌词方式及说明，默认优先匹配歌词，可改为优先视频字幕；两种方式支持回退、分别缓存，切换后重载当前 bilibili 歌词，手动导入的 LRC 优先。仅内置音源的删除菜单项变灰不可点击，导入音源保持可删除。
+
+52 项 JVM 测试、Debug 应用及测试包构建通过，Debug Lint 为 0 errors / 268 warnings。在线 YYA-H618（Android 12 / API 31）使用独立 `.bilisettingscheck` 包完成 29 项设备测试：BilibiliLyricsTest 7 项、BilibiliSettingsUiTest 2 项、BilibiliTest 11 项、SearchPageTest 8 项、MultiSourceSettingsTest 1 项；设置界面 2 项在第二轮再次通过。覆盖字幕时间轴及空隙、字幕语言与人工轨道优先级、两种歌词方式的首选与失败回退、取消请求、缓存隔离与手动导入优先、内置脚本识别、搜索入口随启用状态变化、设置持久化、删除项的禁用状态与灰色，以及原搜索分页/切换/主题和音源排序回归。
+
+记录为 build/bilibili-settings-build.txt、build/bilibili-settings-checks.txt、build/bilibili-settings-device-tests.txt 和 build/bilibili-settings-regression.txt。字幕接口按公开实现接入，本轮使用固定数据验证解析与选择逻辑，未使用真实 B站账号验证联网字幕。正式应用未覆盖，版本仍为 0.9.18 / 9018，未提交或推送。

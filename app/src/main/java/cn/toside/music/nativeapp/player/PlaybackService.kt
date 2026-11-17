@@ -108,6 +108,7 @@ class PlaybackService : Service() {
     private lateinit var queueStore: QueueStore
     private lateinit var settings: PlayerSettings
     private lateinit var preferences: AppPreferences
+    private var preferBilibiliSubtitles = false
     private lateinit var matcher: SongMatcher
     private lateinit var lyrics: Lyrics
     private var lyricLoadJob: Job? = null
@@ -148,6 +149,7 @@ class PlaybackService : Service() {
         queueStore = QueueStore(applicationContext)
         settings = PlayerSettings(applicationContext)
         preferences = AppPreferences(applicationContext)
+        preferBilibiliSubtitles = preferences.preferBilibiliSubtitles
         matcher = SongMatcher(applicationContext, scope)
         lyrics = Lyrics(applicationContext)
         desktopLyrics = DesktopLyrics(this)
@@ -302,7 +304,14 @@ class PlaybackService : Service() {
         AudioStreamCache.get(this@PlaybackService).removeSong(prefix)
         matcher.clearSong(song)
     }
-    internal fun refreshLyricPreferences() { desktopLyrics.render(state.value, lyricState.value); publish() }
+    internal fun refreshLyricPreferences() {
+        val preferSubtitles = preferences.preferBilibiliSubtitles
+        if (preferSubtitles != preferBilibiliSubtitles) {
+            preferBilibiliSubtitles = preferSubtitles
+            if (state.value.song?.source == "bili") reloadLyrics()
+        }
+        desktopLyrics.render(state.value, lyricState.value); publish()
+    }
     internal fun refreshPreferences() {
         if (!preferences.handleAudioFocus) { resumeOnFocus = false; focusRequest?.let { audio.abandonAudioFocusRequest(it) } }
         else if (state.value.playing && !requestFocus()) pause()
@@ -354,10 +363,11 @@ class PlaybackService : Service() {
         val key = song?.let { "${it.source}:${it.id}" }
         mutableLyrics.value = PlayerLyrics(key)
         if (song == null) return
+        val preferSubtitles = preferences.preferBilibiliSubtitles
         lyricLoadJob = scope.launch {
             try {
                 if (forceOnline) lyrics.clearOnlineCache(song)
-                var lines = lyrics.load(song.id, song.source)
+                var lines = lyrics.load(song.id, song.source, preferSubtitles)
                 val fromCache = lines.isNotEmpty()
                 if (lines.isEmpty() && song.source == "local") {
                     lines = attemptMetadata { Downloads(applicationContext).localLyrics(song) }.getOrNull().orEmpty()
@@ -380,12 +390,12 @@ class PlaybackService : Service() {
                 }
                 if (lines.isEmpty() && song.source != "local") {
                     val online = OnlineLyrics()
-                    lines = if(song.source == "bili") cn.toside.music.nativeapp.online.MatchedLyrics(applicationContext).find(song) else loadOnlineMetadata(song) { candidate ->
+                    lines = if(song.source == "bili") cn.toside.music.nativeapp.online.BilibiliLyrics(applicationContext).find(song, preferSubtitles) else loadOnlineMetadata(song) { candidate ->
                         online.forSong(candidate).takeIf { result -> result.any { it.text.isNotBlank() } }
                     }.orEmpty()
                 }
                 if (mutableState.value.song == song) { mutableLyrics.value = PlayerLyrics(key, lines); publish() }
-                if (!fromCache && lines.isNotEmpty()) attemptMetadata { lyrics.cache(song, lines) }
+                if (!fromCache && lines.isNotEmpty()) attemptMetadata { lyrics.cache(song, lines, preferSubtitles) }
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) { if (mutableState.value.song == song) mutableLyrics.value = PlayerLyrics(key, error = message(R.string.playback_lyrics_error, e.localizedMessage.orEmpty())) }
         }

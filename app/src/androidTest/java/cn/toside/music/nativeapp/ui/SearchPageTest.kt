@@ -114,6 +114,9 @@ class SearchPageTest {
         instrumentation.runOnMainSync { invoke(activity, "showSearchSources") }
         instrumentation.waitForIdleSync()
         if (Build.VERSION.SDK_INT >= 29) {
+            awaitUi("Provider menu must be visible") {
+                WindowInspector.getGlobalWindowViews().any { it.findViewWithTag<ListView>("platform-menu")?.isShown == true }
+            }
             instrumentation.runOnMainSync {
                 val list = WindowInspector.getGlobalWindowViews().firstNotNullOfOrNull { root ->
                     root.findViewWithTag<ListView>("platform-menu")?.takeIf(View::isShown)

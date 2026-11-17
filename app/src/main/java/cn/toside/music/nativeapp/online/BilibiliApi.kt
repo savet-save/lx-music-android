@@ -5,13 +5,16 @@ import android.net.Uri
 import android.text.Html
 import cn.toside.music.nativeapp.data.PlaylistCredentials
 import cn.toside.music.nativeapp.data.Song
+import cn.toside.music.nativeapp.lyrics.LyricLine
 import cn.toside.music.nativeapp.utils.readBounded
 import cn.toside.music.nativeapp.utils.NativeHttp
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withContext
 import okhttp3.Cookie
 import okhttp3.CookieJar
 import okhttp3.HttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONArray
@@ -93,7 +96,61 @@ internal class BilibiliApi(private val context: Context? = null, private val ses
         info.put("cid",first.getLong("cid")).put("img",view.optString("pic",info.optString("img")))
         return song.copy(duration=first.getLong("duration")*1000,sourceInfo=info.toString())
     }
+    suspend fun subtitles(info: JSONObject): List<LyricLine> = withContext(Dispatchers.IO) {
+        val bvid = info.getString("bvid")
+        require(bvid.matches(Regex("BV[0-9A-Za-z]{10}"))) { "B站视频编号无效" }
+        val cid = info.optLong("cid").takeIf { it > 0 }
+            ?: json("/x/web-interface/view", mapOf("bvid" to bvid)).getJSONArray("pages").getJSONObject(0).getLong("cid")
+        val data = json("/x/player/wbi/v2", mapOf("bvid" to bvid, "cid" to "$cid"), true)
+        var failure: Exception? = null
+        for (url in subtitleUrls(data)) {
+            try {
+                // Subtitle CDNs never receive the account cookie or the API cookie jar.
+                val request = Request.Builder().url(url).apply { audioHeaders.forEach { (key, value) -> header(key, value) } }.build()
+                val lines = directClient.newCall(request).execute().use { response ->
+                    check(response.isSuccessful) { "B站字幕请求失败（HTTP ${response.code}）" }
+                    val body = response.body ?: error("B站字幕为空")
+                    require(body.contentLength() <= 2 * 1024 * 1024) { "B站字幕过大" }
+                    parseSubtitles(JSONObject(body.byteStream().use { it.readBounded(2 * 1024 * 1024).toString(Charsets.UTF_8) }))
+                }
+                if (lines.any { it.text.isNotBlank() }) return@withContext lines
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) { failure = e }
+        }
+        if (failure != null) throw failure
+        emptyList()
+    }
     companion object {
+        internal fun subtitleUrls(data: JSONObject): List<String> {
+            val tracks = data.optJSONObject("subtitle")?.optJSONArray("subtitles") ?: return emptyList()
+            return (0 until tracks.length()).mapNotNull { tracks.optJSONObject(it) }
+                .sortedWith(compareBy<JSONObject> {
+                    if (it.optString("lan").removePrefix("ai-").startsWith("zh")) 0 else 1
+                }.thenBy { if (it.optString("lan").startsWith("ai-") || it.optInt("ai_type") > 0) 1 else 0 }
+                    .thenBy { if (it.optString("lan").removePrefix("ai-") in setOf("zh", "zh-CN", "zh-Hans")) 0 else 1 })
+                .mapNotNull { track ->
+                    val raw = track.optString("subtitle_url")
+                    val url = (if (raw.startsWith("//")) "https:$raw" else raw).toHttpUrlOrNull()
+                    url?.takeIf { it.isHttps && listOf("hdslb.com", "bilibili.com", "bilivideo.com").any { host -> it.host == host || it.host.endsWith(".$host") } }?.toString()
+                }.distinct()
+        }
+        internal fun parseSubtitles(data: JSONObject): List<LyricLine> {
+            val body = data.optJSONArray("body") ?: return emptyList()
+            val cues = (0 until body.length()).mapNotNull { index ->
+                val cue = body.optJSONObject(index) ?: return@mapNotNull null
+                val start = cue.optDouble("from", Double.NaN)
+                val end = cue.optDouble("to", Double.NaN)
+                val text = cue.optString("content").trim()
+                if (!start.isFinite() || !end.isFinite() || start < 0 || end <= start || end >= Long.MAX_VALUE / 1000.0 || text.isBlank()) null
+                else Triple((start * 1000).toLong(), (end * 1000).toLong(), text)
+            }.sortedBy { it.first }
+            return buildList {
+                cues.forEachIndexed { index, (start, end, text) ->
+                    add(LyricLine(start, text))
+                    if (index == cues.lastIndex || end < cues[index + 1].first) add(LyricLine(end, ""))
+                }
+            }
+        }
         // These are web playback URLs. Some CDNs reject an Android browser UA with HTTP 403.
         val audioHeaders = mapOf("User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36", "Referer" to "https://www.bilibili.com/")
         private val cookies = mutableListOf<Cookie>()

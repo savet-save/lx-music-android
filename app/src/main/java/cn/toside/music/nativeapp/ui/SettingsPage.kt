@@ -284,9 +284,14 @@ internal class SettingsPage(
     private fun sources() {
         sourceNotice = column().apply { tag = "settings-source-update"; content.addView(this) }
         note(text(R.string.sources_fallback_hint))
+        section(text(R.string.bili_settings))
         action(text(R.string.bili_login), text(R.string.bili_account_settings)) {
             activity.startActivity(android.content.Intent(activity,BilibiliLoginActivity::class.java))
         }.tag = "settings-bilibili-login"
+        choice(R.string.bili_lyrics_mode, "bilibili.lyricsMode",
+            arrayOf(text(R.string.bili_lyrics_subtitle), text(R.string.bili_lyrics_match)),
+            arrayOf("subtitle", "match"), "match")
+        note(text(R.string.bili_lyrics_mode_hint))
         section(text(R.string.settings_source_installed))
         sourceList = column().apply { tag = "settings-source-list"; content.addView(this) }
         section(text(R.string.settings_source_online))
@@ -375,7 +380,7 @@ internal class SettingsPage(
         fun change(action: suspend () -> Unit) {
             if (importJob?.isActive == true) return
             scope.launch {
-                try { action(); refreshSources() }
+                try { action(); refresh(); refreshSources() }
                 catch (e: CancellationException) { throw e }
                 catch (e: Exception) { sourceMessage = e.localizedMessage; updateImportState(); refreshSources() }
             }

@@ -1,5 +1,10 @@
 <resources>
-    <string name="bili_name">B站</string>
+    <string name="bili_name">bilibili</string>
+    <string name="bili_settings">bilibili 设置</string>
+    <string name="bili_lyrics_mode">歌词获取方式</string>
+    <string name="bili_lyrics_subtitle">优先字幕</string>
+    <string name="bili_lyrics_match">优先匹配歌词</string>
+    <string name="bili_lyrics_mode_hint">优先字幕：使用视频提供的字幕及其时间轴，无可用字幕时再匹配歌词。字幕可能需要登录，画面内嵌的字幕无法读取。\n优先匹配歌词（默认）：沿用当前逻辑，按歌名、歌手及相近时长匹配其他平台歌词，未匹配到时再尝试视频字幕。此设置同时用于播放和下载歌词，手动导入的歌词优先。</string>
     <string name="bili_login">B站登录</string>
     <string name="bili_account_settings">扫码登录或手动填写 SESSDATA，凭据在本机加密保存</string>
     <string name="bili_login_limits">登录限制说明</string>
