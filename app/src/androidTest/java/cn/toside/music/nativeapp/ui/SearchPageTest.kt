@@ -128,7 +128,24 @@ class SearchPageTest {
             instrumentation.waitForIdleSync()
             return
         }
-        val node = instrumentation.uiAutomation.rootInActiveWindow?.findAccessibilityNodeInfosByText(label)?.firstOrNull { it.text?.toString() == label }
+        fun choiceNode(): AccessibilityNodeInfo? {
+            val candidates = instrumentation.uiAutomation.rootInActiveWindow?.findAccessibilityNodeInfosByText(label).orEmpty()
+            return candidates.firstOrNull { node ->
+                if (node.text?.toString() != label) return@firstOrNull false
+                var parent = node.parent
+                while (parent != null) {
+                    if (parent.className?.toString() == ListView::class.java.name) return@firstOrNull true
+                    parent = parent.parent
+                }
+                false
+            }
+        }
+        val deadline = SystemClock.uptimeMillis() + 10_000
+        var node = choiceNode()
+        while (node == null && SystemClock.uptimeMillis() < deadline) {
+            SystemClock.sleep(50)
+            node = choiceNode()
+        }
         assertNotNull("Provider choice must be visible: $label", node)
         var target = node
         while (target != null && !target.isClickable) target = target.parent
