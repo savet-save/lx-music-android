@@ -1914,6 +1914,7 @@ class MainActivity : FragmentActivity() {
                 cn.toside.music.nativeapp.player.PlayMode.SHUFFLE -> 59650
             }.toChar().toString()
             contentDescription = state.mode.localized(this@MainActivity)
+            tooltipText = contentDescription
         }
         val scroll = detailScroll ?: return
         val container = scroll.lines
