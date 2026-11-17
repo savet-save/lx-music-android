@@ -25,6 +25,7 @@ import cn.toside.music.nativeapp.data.Playlist
 import cn.toside.music.nativeapp.data.Playlists
 import cn.toside.music.nativeapp.data.Song
 import cn.toside.music.nativeapp.online.*
+import cn.toside.music.nativeapp.source.UserSourceLibrary
 import kotlinx.coroutines.Job
 import org.junit.Assert.*
 import org.junit.Test
@@ -239,7 +240,8 @@ class PlatformPopupTest {
             }
             await { searches.get() == 5 && (field(activity, "loadJob") as? Job)?.isActive != true }
             awaitLayout { (field(activity, "searchSourceButton") as View).takeIf { it.isShown } ?: field(activity, "heading") as View }
-            main { invoke(activity, "showSearchSources") }; await { menu()?.childCount == 7 }
+            val searchChoiceCount = PlatformPopup.sources.size + 1 + if (UserSourceLibrary(activity).bilibiliEnabled()) 1 else 0
+            main { invoke(activity, "showSearchSources") }; await { menu()?.adapter?.count == searchChoiceCount }
             main {
                 val anchor = (field(activity, "searchSourceButton") as View).takeIf { it.isShown } ?: field(activity, "heading") as View
                 verify(anchor, SearchCatalog.ALL); capture(activity, "search-platforms")
@@ -248,7 +250,7 @@ class PlatformPopupTest {
                 assertEquals("menu draft", (field(activity, "search") as EditText).text.toString())
                 invoke(activity, "showSearchSources")
             }
-            await { menu()?.childCount == 7 }
+            await { menu()?.adapter?.count == searchChoiceCount }
             main { choose("wy") }; await { searches.get() == 6 && (field(activity, "loadJob") as? Job)?.isActive != true }
             main { assertEquals("wy", field(activity, "searchSource")); invoke(activity, "showSearchSources") }
             dismissWithBack(activity)
@@ -381,7 +383,7 @@ class PlatformPopupTest {
                 assertTrue(palette.theme.dark)
                 descendants(list).filterIsInstance<TextView>().forEach { assertEquals(if (it.isActivated) palette.primary else palette.foreground, it.currentTextColor) }
                 capture(activity, "platforms-dark-large-font-short-window")
-                list.setSelection(5)
+                list.setSelection(list.adapter.count - 1)
             }
             await { menu()?.findViewWithTag<View>("platform-${SearchCatalog.ALL}")?.isShown == true }
             main { choose(SearchCatalog.ALL); invoke(activity, "showSearchSources") }
