@@ -44,21 +44,24 @@ class Artwork(private val context: Context) {
             ?: Downloads(context).localCover(song) ?: return@withContext null
         decode(bytes)
     }
-    private fun decode(bytes: ByteArray): Bitmap? {
-        if (bytes.size > 8 * 1024 * 1024) return null
+    private fun decode(bytes: ByteArray, maxDimension: Int = 512): Bitmap? {
+        if (bytes.size > cacheLimit(maxDimension)) return null
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
         var sample = 1
-        while (bounds.outWidth / sample > 512 || bounds.outHeight / sample > 512) sample *= 2
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+        while (bounds.outWidth / sample > maxDimension || bounds.outHeight / sample > maxDimension ||
+            bounds.outWidth.toLong() / sample * (bounds.outHeight / sample) > 8_000_000) sample *= 2
         return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample })
     }
-    internal suspend fun loadUrl(value: String, strict: Boolean = false): Bitmap? = withContext(Dispatchers.IO) {
+    internal suspend fun loadUrl(value: String, strict: Boolean = false, maxDimension: Int = 512): Bitmap? = withContext(Dispatchers.IO) {
+        require(maxDimension in 128..4096)
         val url = value.trim().let { if (it.startsWith("//")) "https:$it" else it }
         if (!url.startsWith("https://") && !url.startsWith("http://")) return@withContext null
         locks[(url.hashCode() and Int.MAX_VALUE) % locks.size].withLock {
-            val file = AtomicFile(cacheFile(url))
+            val file = AtomicFile(cacheFile(url, maxDimension))
             if (file.baseFile.isFile) {
-                val cached = runCatching { file.openRead().use { decode(it.readBounded(8 * 1024 * 1024)) } }.getOrNull()
+                val cached = runCatching { file.openRead().use { decode(it.readBounded(cacheLimit(maxDimension)), maxDimension) } }.getOrNull()
                 if (cached != null) return@withLock cached
                 file.delete()
             }
@@ -76,7 +79,7 @@ class Artwork(private val context: Context) {
                     null
                 } else connection.inputStream.use { it.readBounded(8 * 1024 * 1024) }
             } finally { connection.disconnect() }
-            val bitmap = bytes?.let(::decode) ?: return@withLock null
+            val bitmap = bytes?.let { decode(it, maxDimension) } ?: return@withLock null
             runCatching {
                 file.baseFile.parentFile?.mkdirs()
                 val output = file.startWrite()
@@ -89,8 +92,10 @@ class Artwork(private val context: Context) {
     internal suspend fun forget(url: String) = withContext(Dispatchers.IO) {
         locks[(url.hashCode() and Int.MAX_VALUE) % locks.size].withLock { AtomicFile(cacheFile(url)).delete() }
     }
-    private fun cacheFile(url: String): File {
-        val key = MessageDigest.getInstance("SHA-256").digest(url.toByteArray()).joinToString("") { "%02x".format(it.toInt() and 255) }
+    private fun cacheLimit(maxDimension: Int) = if (maxDimension > 512) 32 * 1024 * 1024 else 8 * 1024 * 1024
+    private fun cacheFile(url: String, maxDimension: Int = 512): File {
+        val cacheKey = if (maxDimension == 512) url else "$maxDimension:$url"
+        val key = MessageDigest.getInstance("SHA-256").digest(cacheKey.toByteArray()).joinToString("") { "%02x".format(it.toInt() and 255) }
         return context.cacheDir.resolve("artwork/$key.png")
     }
     companion object { private val locks = Array(16) { Mutex() } }

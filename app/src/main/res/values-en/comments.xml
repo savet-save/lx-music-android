@@ -9,4 +9,7 @@
     <string name="comments_empty">No comments yet</string>
     <string name="comments_fallback">Comments unavailable on the original platform. Showing: %1$s</string>
     <string name="comments_view_replies">View replies (%1$d)</string>
+    <string name="comments_image_title">Image</string>
+    <string name="comments_image_error">Could not load image</string>
+    <string name="comments_image_gestures">Pinch to zoom, drag to move when enlarged, double-tap to reset or zoom in</string>
 </resources>

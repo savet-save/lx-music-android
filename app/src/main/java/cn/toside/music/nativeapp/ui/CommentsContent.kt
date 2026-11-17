@@ -2,11 +2,9 @@ package cn.toside.music.nativeapp.ui
 
 import android.annotation.SuppressLint
 import android.content.Context
-import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
-import android.net.Uri
 import android.os.Parcelable
 import android.text.TextUtils
 import android.util.LruCache
@@ -18,7 +16,6 @@ import cn.toside.music.nativeapp.R
 import cn.toside.music.nativeapp.data.Artwork
 import cn.toside.music.nativeapp.data.Song
 import cn.toside.music.nativeapp.online.MusicComment
-import cn.toside.music.nativeapp.utils.ToastUtils
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -37,7 +34,7 @@ internal class CommentsContent(context: Context, private val scope: CoroutineSco
     private fun label(value: String = "", size: Float = 15f, color: Int = palette.foreground) = styles.label(value, size, color).apply {
         includeFontPadding = false; maxLines = Int.MAX_VALUE; ellipsize = null
     }
-    private val title = label(size = 19f).apply { tag = "comments-title"; gravity = Gravity.CENTER; maxLines = 2; ellipsize = TextUtils.TruncateAt.END }
+    private val title = label(size = 19f).apply { tag = "comments-title"; gravity = Gravity.CENTER; maxLines = 1; ellipsize = TextUtils.TruncateAt.END }
     private val hot = label(size = 17f).apply { tag = "comments-hot" }
     private val latest = label(size = 17f).apply { tag = "comments-latest" }
     private val source = label(size = 12f, color = palette.muted).apply { tag = "comments-source"; setPadding(dp(16), dp(8), dp(16), dp(8)) }
@@ -72,21 +69,21 @@ internal class CommentsContent(context: Context, private val scope: CoroutineSco
         val header = LinearLayout(context).apply { tag = "comments-header"; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(4), dp(4), dp(4), dp(4)) }
         header.addView(styles.backButton(close), LinearLayout.LayoutParams(dp(48), dp(48)))
         header.addView(title, LinearLayout.LayoutParams(0, -2, 1f))
-        header.addView(Space(context), LinearLayout.LayoutParams(dp(48), dp(48)))
+        header.addView(label("↻", 27f, palette.muted).apply {
+            tag = "comments-refresh"; contentDescription = context.getString(R.string.comments_refresh)
+            gravity = Gravity.CENTER; background = styles.touch(); isFocusable = true; setOnClickListener { refresh() }
+        }, LinearLayout.LayoutParams(dp(48), dp(48)))
         column.addView(header)
-        val tabs = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(dp(8), 0, dp(8), 0) }
+        val tabs = LinearLayout(context).apply {
+            tag = "comments-tabs"; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(8), 0, dp(8), 0)
+            visibility = if (replyName == null) View.VISIBLE else View.GONE
+        }
         for ((view, selected) in listOf(hot to true, latest to false)) {
             view.maxLines = 1; view.ellipsize = TextUtils.TruncateAt.END
             view.gravity = Gravity.CENTER; view.minHeight = dp(48); view.setPadding(dp(10), dp(10), dp(10), dp(10))
             view.background = styles.touch(); view.isFocusable = true; view.setOnClickListener { select(selected) }
             tabs.addView(view, LinearLayout.LayoutParams(-2, -2))
-            view.visibility = if (replyName == null) View.VISIBLE else View.GONE
         }
-        tabs.addView(Space(context), LinearLayout.LayoutParams(0, 1, 1f))
-        tabs.addView(label("↻", 27f, palette.muted).apply {
-            tag = "comments-refresh"; contentDescription = context.getString(R.string.comments_refresh)
-            gravity = Gravity.CENTER; background = styles.touch(); isFocusable = true; setOnClickListener { refresh() }
-        }, LinearLayout.LayoutParams(dp(48), dp(48)))
         column.addView(tabs)
         column.addView(View(context).apply { setBackgroundColor(palette.divider) }, LinearLayout.LayoutParams(-1, dp(1)))
         column.addView(progress, LinearLayout.LayoutParams(-1, dp(2)))
@@ -104,7 +101,7 @@ internal class CommentsContent(context: Context, private val scope: CoroutineSco
     internal fun restoreListState(value: Parcelable?) { pendingRestore = value }
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val width = minOf(MeasureSpec.getSize(widthMeasureSpec) - paddingLeft - paddingRight, dp(960))
-        val maxTabWidth = ((width - dp(64)) / 2).coerceAtLeast(dp(40))
+        val maxTabWidth = ((width - dp(16)) / 2).coerceAtLeast(dp(40))
         hot.maxWidth = maxTabWidth; latest.maxWidth = maxTabWidth
         super.onMeasure(widthMeasureSpec, heightMeasureSpec)
     }
@@ -155,6 +152,7 @@ internal class CommentsContent(context: Context, private val scope: CoroutineSco
         var items = emptyList<MusicComment>()
         private val artwork = Artwork(context)
         private val requests = java.util.WeakHashMap<ImageView, Job>()
+        private val thumbnails = java.util.WeakHashMap<CommentImageThumbnails, Unit>()
         private val cache = object : LruCache<String, Bitmap>(2 * 1024 * 1024) { override fun sizeOf(key: String, value: Bitmap) = value.byteCount }
         override fun getCount() = items.size
         override fun getItem(position: Int) = items[position]
@@ -182,6 +180,7 @@ internal class CommentsContent(context: Context, private val scope: CoroutineSco
             }
             private val text = label(size = 16f).apply { setLineSpacing(dp(4).toFloat(), 1f); setTextIsSelectable(true) }
             private val extra = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
+            private val images = CommentImageThumbnails(context, scope, palette).also { thumbnails[it] = Unit }
             private val thread = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16), 0, 0, 0) }
             private val replyRows = mutableListOf<CommentRow>()
             init {
@@ -233,14 +232,8 @@ internal class CommentsContent(context: Context, private val scope: CoroutineSco
                     }
                 }
                 extra.removeAllViews()
-                for (urlValue in item.images) {
-                    val urlText = if (urlValue.startsWith("//")) "https:$urlValue" else urlValue
-                    if (!urlText.startsWith("https://") && !urlText.startsWith("http://")) continue
-                    extra.addView(label(context.getString(R.string.ui_475d38917292, (item.images.indexOf(urlValue) + 1).toString()), 13f, palette.primary).apply {
-                        minHeight = dp(40); gravity = Gravity.CENTER_VERTICAL; background = styles.touch(); isFocusable = true
-                        setOnClickListener { runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(urlText))) }.onFailure { ToastUtils.show(context, context.getString(R.string.ui_7206c39ccf2e)) } }
-                    })
-                }
+                images.bind(item.images)
+                if (images.childCount > 0) extra.addView(images, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
                 for (child in listOfNotNull(item.quoted)) extra.addView(label("${child.name}: ${child.text}", 14f, palette.muted).apply {
                     setTextIsSelectable(true); setPadding(dp(10), dp(8), dp(8), dp(8)); setLineSpacing(dp(3).toFloat(), 1f)
                     setBackgroundColor(palette.placeholder)
@@ -260,7 +253,10 @@ internal class CommentsContent(context: Context, private val scope: CoroutineSco
                 }
             }
         }
-        override fun close() { requests.values.toList().forEach(Job::cancel); requests.clear(); cache.evictAll() }
+        override fun close() {
+            requests.values.toList().forEach(Job::cancel); requests.clear(); cache.evictAll()
+            thumbnails.keys.toList().forEach(CommentImageThumbnails::close); thumbnails.clear()
+        }
     }
     companion object {
         internal fun formatDate(value: String): String = value.toLongOrNull()?.takeIf { it > 0 }?.let {

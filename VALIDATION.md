@@ -638,3 +638,13 @@ M2007J17C（API 31）独立测试包中 18 项下载回归通过，包含 6 项�
 真实联网结果：酷我 Monsters 热门 20 条、最新 20 条、下一页 20 条，首屏 17 条带头像；bilibili 公开视频 BV1GJ411x7h7 热门 20 条、最新 18 条、下一页 20 条、楼中楼 20 条，首屏 20 条带头像。bilibili 使用隔离包的匿名状态，本轮未验证登录账号或受限视频。跨平台回退使用固定数据验证，联网检查分别读取酷我与 bilibili，不将其视为真实跨平台切换验收。
 
 52 项 JVM 测试、Debug 应用及测试包构建、Debug Lint（0 errors / 284 warnings）通过。最初触控用例被手机系统拒绝跨应用事件注入，已改为从应用窗口派发 MotionEvent 并验证完整视图分发，最终 28 项全部通过；早期失败不计为通过。最终记录为 build/comments-final-build.txt、build/comments-touch-build.txt、build/comments-final-phone-tests.txt 和 build/comments-phone-validation/live-comments.json；真实页面截图为同目录的 phone-live-kw.png、phone-live-bili.png。临时联网用例和隔离构建设置仅保存在忽略的 build/ 下，不加入日常离线回归。当前版本仍为 0.9.19 / 9019，本批改动尚未提交或推送。
+
+## 评论单行标题、缩略图与图片详情（2026-11-17）
+
+评论和回复标题最多一行，超长省略；刷新移至标题右侧，回复页整行隐藏热门/最新，消除空白工具栏。配图显示为可换行的页内缩略图，点击打开非导出的独立 CommentImageActivity，不再调用浏览器或图片 Dialog。
+
+详情页默认按可用区域完整、等比居中显示，支持原生双指缩放、超出视口后的四向拖动、双击放大或恢复。能够完整显示的方向始终居中，超出的方向限制在图片边界内。重建页面保留同一图片 ViewModel、缩放倍数和可见中心，返回原评论 Activity。缩略图使用 256 px 解码上限，普通封面沿用 512 px 与原缓存键，详情使用独立缓存、4096 px 长边和 800 万像素解码上限；沿用有界网络读取、bilibili 图片请求头及失败重试。
+
+60 项 JVM 测试通过，含 8 项新增 ImageViewport 测试，覆盖横/长/小图适配、焦点缩放、四边拖动约束、单轴居中、倍数边界、尺寸变化和无效输入。仅在手机 9dd0fd82 的独立 .commentscheck 包验证，另一台设备及正式应用未操作。31 项设备综合运行中的 27 项评论/标题检查及其他图片检查通过，最初图片手势断言错误地要求未超出视口的方向也能移动；随后按设备实际缩放启动阈值重复手势，明确放大到两轴均超出后验证拖动。最终单独复测的 4 项图片检查全部通过，覆盖尺寸缓存隔离及离线复用、缩略图到内部页面及返回、双指缩放/拖动/重建/双击恢复、加载失败重试及无效 URL 排除。早期综合运行整体失败，不记为整轮通过；当前 31 项各项均已有通过记录。
+
+Debug 与测试包构建、Debug Lint（0 errors / 287 warnings）通过。记录为 build/comment-images-final-build.txt、build/comment-images-gesture-build.txt、build/comment-images-final-phone-tests.txt 和 build/comment-images-gesture-phone-tests.txt。已目视核对单行回复标题、缩略图、默认适配和放大后的截图，保存于 build/comment-images-validation/；截图图片为本地 HTTP 测试素材。本轮未新增真实平台联网验收，版本保持 0.9.19 / 9019，改动尚未提交。

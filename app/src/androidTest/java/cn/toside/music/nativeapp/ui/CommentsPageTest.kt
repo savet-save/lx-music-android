@@ -239,4 +239,34 @@ class CommentsPageTest {
             assertSame(model, recreated.model); assertFalse(recreated.model.state.value.hot)
         } finally { instrumentation.removeMonitor(monitor); main { activity.finish() } }
     }
+    @Test fun longCommentAndReplyTitlesUseOneLineAndRefreshSharesTheHeader() {
+        val activity = start()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+        var content: CommentsContent? = null
+        try {
+            await { !activity.model.state.value.loading }
+            main {
+                for (reply in listOf(null, "很长的回复用户名".repeat(12))) {
+                    var refreshes = 0
+                    content?.close()
+                    content = CommentsContent(activity, scope, UiPalette(activity, NativeThemes(activity).active()), reply, {}, {}, { refreshes++ }, {}, { _, _ -> })
+                    val root = requireNotNull(content); activity.setContentView(root)
+                    root.render(CommentsState(video.copy(title = "【戴荃】《悟空》经典现场，如果一去不回，便一去不回！".repeat(4)), page = 1, hasMore = false))
+                    val density = root.resources.displayMetrics.density
+                    repeat(3) {
+                        root.measure(View.MeasureSpec.makeMeasureSpec((360 * density).toInt(), View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec((780 * density).toInt(), View.MeasureSpec.EXACTLY))
+                        root.layout(0, 0, root.measuredWidth, root.measuredHeight)
+                    }
+                    val title = root.findViewWithTag<TextView>("comments-title")
+                    val header = root.findViewWithTag<View>("comments-header")
+                    val refresh = root.findViewWithTag<View>("comments-refresh")
+                    assertEquals(1, title.maxLines); assertEquals(1, title.lineCount)
+                    assertSame(header, refresh.parent); assertTrue(header.height <= 57 * density)
+                    assertEquals(if (reply == null) View.VISIBLE else View.GONE, root.findViewWithTag<View>("comments-tabs").visibility)
+                    refresh.performClick(); assertEquals(1, refreshes)
+                    snapshot(if (reply == null) "single-line-comment-header" else "single-line-reply-header", root)
+                }
+            }
+        } finally { main { content?.close(); activity.finish() }; scope.cancel() }
+    }
 }

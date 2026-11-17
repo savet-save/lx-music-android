@@ -9,4 +9,7 @@
     <string name="comments_empty">暂无评论</string>
     <string name="comments_fallback">原平台暂无可用评论，当前来源：%1$s</string>
     <string name="comments_view_replies">查看回复（%1$d）</string>
+    <string name="comments_image_title">图片详情</string>
+    <string name="comments_image_error">图片加载失败</string>
+    <string name="comments_image_gestures">双指缩放，放大后可上下左右拖动，双击恢复或放大</string>
 </resources>
