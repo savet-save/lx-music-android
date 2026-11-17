@@ -660,3 +660,9 @@ Debug 与测试包构建、Debug Lint（0 errors / 287 warnings）通过。记�
 修复后，原第三张图片在手机上成功加载为 252×189 缩略图和 2016×1512 详情图，真实 HTTP 状态与结果保存于 build/comment-image-current-after-fix.json。最终构建与设备日志为 build/comment-image-settings-build.txt、build/comment-image-settings-phone-tests.txt；居中错误示例已目视核对，保存于 build/comment-image-settings-validation/comment-image-size-error-centered.png，该示例使用本地测试图。未继续操作另一台设备，正式应用未覆盖；当前版本仍为 0.9.19 / 9019，改动尚未提交。
 
 图片加载上限默认值按用户要求调整为 16 MiB，同步偏好回退、设置页默认选项、三种语言说明与文档，保留已有手动选择。60 项 JVM 测试、Debug/测试包构建及 Lint 通过；手机 9dd0fd82 隔离包的设置专项复测通过，包含独立空偏好下的 16 MiB 默认读取与设置保存断言。记录为 build/comment-image-default16-build.txt 和 build/comment-image-default16-phone-tests.txt，本次调整合并到最近一次本地提交。
+
+## 0.9.20 发布前检查（2026-11-17）
+
+版本更新为 0.9.20 / 9020，新增 doc/release-notes/native-v0.9.20.md，概述评论独立页面、跨平台回退、bilibili 评论、缩略图与缩放详情、默认 16 MiB 上限及居中失败说明。60 项 JVM 单元测试、Debug Lint（0 errors / 287 warnings）、正式三架构 APK 构建及 Release Lint Vital 通过；包名、版本、ABI、与现有正式版一致的证书及 16 KB zipalign 校验通过。记录为 build/native-v0.9.20-local-build.txt 和 build/native-v0.9.20-apk-checks.json。
+
+本地 Python 应用别名未能启动，发布脚本测试未在本地执行，不记为通过；该检查由随后远程 Native Android 工作流执行。按用户要求先推送 dev，等待分支及现有 PR 的完整 Actions 回归成功，再为经过检查的提交创建 native-v0.9.20；发布前尚未创建 tag。本轮不安装或操作 adb 设备。
