@@ -1,0 +1,12 @@
+<resources>
+    <string name="comments_title">「%1$s」的評論</string>
+    <string name="comments_hot">熱門</string>
+    <string name="comments_latest">最新</string>
+    <string name="comments_tab_count">%1$s（%2$d）</string>
+    <string name="comments_refresh">重新整理評論</string>
+    <string name="comments_likes">%1$d 次按讚，僅供顯示</string>
+    <string name="comments_anonymous">匿名使用者</string>
+    <string name="comments_empty">暫無評論</string>
+    <string name="comments_fallback">原平台暫無可用評論，目前來源：%1$s</string>
+    <string name="comments_view_replies">查看回覆（%1$d）</string>
+</resources>

@@ -626,3 +626,15 @@ M2007J17C（API 31）独立测试包中 18 项下载回归通过，包含 6 项�
 52 项 JVM 测试、Debug 应用及测试包构建通过，Debug Lint 为 0 errors / 268 warnings。在线 YYA-H618（Android 12 / API 31）使用独立 `.bilisettingscheck` 包完成 29 项设备测试：BilibiliLyricsTest 7 项、BilibiliSettingsUiTest 2 项、BilibiliTest 11 项、SearchPageTest 8 项、MultiSourceSettingsTest 1 项；设置界面 2 项在第二轮再次通过。覆盖字幕时间轴及空隙、字幕语言与人工轨道优先级、两种歌词方式的首选与失败回退、取消请求、缓存隔离与手动导入优先、内置脚本识别、搜索入口随启用状态变化、设置持久化、删除项的禁用状态与灰色，以及原搜索分页/切换/主题和音源排序回归。
 
 记录为 build/bilibili-settings-build.txt、build/bilibili-settings-checks.txt、build/bilibili-settings-device-tests.txt 和 build/bilibili-settings-regression.txt。字幕接口按公开实现接入，本轮使用固定数据验证解析与选择逻辑，未使用真实 B站账号验证联网字幕。正式应用未覆盖，版本仍为 0.9.18 / 9018，未提交或推送。
+
+## 评论独立页面与平台回退（2026-11-17）
+
+评论入口迁移到非浮动的 CommentsActivity，包含热门/最新、刷新、分页、头像、日期、正文、仅展示的灰色点赞数，以及带相同信息的缩进回复行。查看完整回复也打开普通 Activity，删除原 CommentsDialog。返回保留原搜索输入，重建保留 ViewModel、所选标签和列表位置；界面适配窄屏、宽屏、深色主题和大字号。
+
+原音乐平台请求失败或评论为空时，按现有歌曲匹配规则尝试其他音乐平台，并显示实际来源；后续分页和回复固定来源，刷新重新尝试原平台。bilibili 始终读取当前视频，使用用户指定镜像文档的 WBI 主评论和回复接口，不加入跨平台回退。所有评论读取路径均不包含点赞、发布或追加回复操作。
+
+收到仅使用手机 9dd0fd82 的限制后，后续安装与测试全部指定该序列号，使用独立的 cn.toside.music.nativeapp.commentscheck 包；未覆盖正式应用，也未继续操作另一台设备。最终 28 项设备检查通过，其中 26 项持久化回归覆盖六平台解析、头像/引用/大 ID、WBI 模式与游标、回退与来源固定、失败重试、取消隔离、计数切源清理、只读点赞、完整窗口触摸分发下的分页和回复入口、返回与重建、窄/宽屏和深色英文大字号；另外 2 项临时联网检查验证公开接口及真实页面。
+
+真实联网结果：酷我 Monsters 热门 20 条、最新 20 条、下一页 20 条，首屏 17 条带头像；bilibili 公开视频 BV1GJ411x7h7 热门 20 条、最新 18 条、下一页 20 条、楼中楼 20 条，首屏 20 条带头像。bilibili 使用隔离包的匿名状态，本轮未验证登录账号或受限视频。跨平台回退使用固定数据验证，联网检查分别读取酷我与 bilibili，不将其视为真实跨平台切换验收。
+
+52 项 JVM 测试、Debug 应用及测试包构建、Debug Lint（0 errors / 284 warnings）通过。最初触控用例被手机系统拒绝跨应用事件注入，已改为从应用窗口派发 MotionEvent 并验证完整视图分发，最终 28 项全部通过；早期失败不计为通过。最终记录为 build/comments-final-build.txt、build/comments-touch-build.txt、build/comments-final-phone-tests.txt 和 build/comments-phone-validation/live-comments.json；真实页面截图为同目录的 phone-live-kw.png、phone-live-bili.png。临时联网用例和隔离构建设置仅保存在忽略的 build/ 下，不加入日常离线回归。当前版本仍为 0.9.19 / 9019，本批改动尚未提交或推送。

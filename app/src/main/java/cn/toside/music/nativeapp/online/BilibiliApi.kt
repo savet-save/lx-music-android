@@ -42,7 +42,7 @@ internal interface BilibiliAudioProvider {
 
 /** Web endpoints documented by bilibili-plugins/bilibili-api-collect. No account data goes to CDNs. */
 internal class BilibiliApi(private val context: Context? = null, private val session: String? = null) : BilibiliAudioProvider {
-    private suspend fun json(path: String, parameters: Map<String, String> = emptyMap(), signed: Boolean = false): JSONObject = withContext(Dispatchers.IO) {
+    internal suspend fun json(path: String, parameters: Map<String, String> = emptyMap(), signed: Boolean = false): JSONObject = withContext(Dispatchers.IO) {
         val query = if (signed) {
             val nav = request("https://api.bilibili.com/x/web-interface/nav")
             val images = nav.getJSONObject("data").getJSONObject("wbi_img")

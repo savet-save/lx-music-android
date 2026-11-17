@@ -1,0 +1,12 @@
+<resources>
+    <string name="comments_title">「%1$s」的评论</string>
+    <string name="comments_hot">热门</string>
+    <string name="comments_latest">最新</string>
+    <string name="comments_tab_count">%1$s（%2$d）</string>
+    <string name="comments_refresh">刷新评论</string>
+    <string name="comments_likes">%1$d 次点赞，仅展示</string>
+    <string name="comments_anonymous">匿名用户</string>
+    <string name="comments_empty">暂无评论</string>
+    <string name="comments_fallback">原平台暂无可用评论，当前来源：%1$s</string>
+    <string name="comments_view_replies">查看回复（%1$d）</string>
+</resources>

@@ -5,22 +5,26 @@ import cn.toside.music.nativeapp.ui.CommentEmoji
 import cn.toside.music.nativeapp.utils.NativeHttp
 
 import android.text.Html
+import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
 import java.security.MessageDigest
 import java.net.URLDecoder
 
 internal data class MusicComment(val id: String, val name: String, val text: String, val date: String = "", val likes: Long = 0,
-    val location: String = "", val images: List<String> = emptyList(), val replies: List<MusicComment> = emptyList(), val replyCount: Int = 0)
+    val location: String = "", val images: List<String> = emptyList(), val replies: List<MusicComment> = emptyList(), val replyCount: Int = 0,
+    val avatar: String = "", val quoted: MusicComment? = null)
 internal data class CommentPage(val comments: List<MusicComment>, val total: Long, val hasMore: Boolean)
 
 /** Public read-only comment protocols ported from the original five providers. Each screen owns its cursors. */
-internal class OnlineComments {
+internal class OnlineComments(context: Context? = null) {
+    private val bilibili = BilibiliComments(context)
     private var wyCursor = System.currentTimeMillis().toString()
     private var mgCursor = ""
     private val resolvedIds = mutableMapOf<String, String>()
     suspend fun load(song: Song, hot: Boolean, page: Int = 1, reply: String? = null): CommentPage {
         require(page > 0)
+        if (song.source == "bili") return bilibili.load(song, hot, page, reply)
         val info = JSONObject(song.sourceInfo ?: error("本地歌曲没有平台评论"))
         val id = info.optString("songmid"); val size = 20
         val result: JSONObject
@@ -118,33 +122,42 @@ internal class OnlineComments {
         return when (source) {
             "kw" -> MusicComment(item.optString("id"), text("u_name"), text("msg"), item.optString("time"), item.optLong("like_num"),
                 images = item.optString("mpic").takeIf { it.isNotBlank() }?.let { listOf(runCatching { URLDecoder.decode(it, "UTF-8") }.getOrDefault(it)) } ?: emptyList(),
-                replies = objects(item.optJSONArray("child_comments")).map { parseItem(source, it, hot) })
+                replies = objects(item.optJSONArray("child_comments")).map { parseItem(source, it, hot) },
+                avatar = avatar(item, "u_pic", "u_avatar", "u_head", "avatar"))
             "kg" -> {
                 var content = text("content")
                 objects(item.optJSONArray("atlist")).forEach { content = content.replace("[at=${it.optString("id")}]", "@${it.optString("name")} ") }
                 val value = MusicComment(item.optString("id"), text("user_name"), content, item.optString("addtime"), item.optJSONObject("like")?.optLong("likenum") ?: 0,
-                    item.optString("location"), objects(item.optJSONArray("images")).map { it.optString("url") }, replyCount = item.optInt("reply_num"))
-                if (item.optString("pcontent").isBlank()) value else MusicComment(value.id, text("puser"), text("pcontent"), replies = listOf(value))
+                    item.optString("location"), objects(item.optJSONArray("images")).map { it.optString("url") }, replyCount = item.optInt("reply_num"),
+                    avatar = avatar(item, "user_pic", "user_pic_url", "userpic", "avatar"))
+                if (item.optString("pcontent").isBlank()) value else value.copy(quoted = MusicComment("", text("puser"), text("pcontent")))
             }
             "wy" -> {
                 val user = item.optJSONObject("user") ?: JSONObject()
-                val value = MusicComment(item.optString("commentId"), decode(user.optString("nickname")), text("content"), item.optString("time"), item.optLong("likedCount"), item.optJSONObject("ipLocation")?.optString("location") ?: "")
+                val value = MusicComment(item.optString("commentId"), decode(user.optString("nickname")), text("content"), item.optString("time"), item.optLong("likedCount"), item.optJSONObject("ipLocation")?.optString("location") ?: "",
+                    avatar = avatar(user, "avatarUrl"))
                 val parent = item.optJSONArray("beReplied")?.optJSONObject(0)
-                if (parent == null) value else MusicComment(parent.optString("beRepliedCommentId"), decode(parent.optJSONObject("user")?.optString("nickname") ?: ""), decode(parent.optString("content")), replies = listOf(value))
+                if (parent == null) value else value.copy(quoted = MusicComment(parent.optString("beRepliedCommentId"), decode(parent.optJSONObject("user")?.optString("nickname") ?: ""), decode(parent.optString("content")),
+                    avatar = avatar(parent.optJSONObject("user") ?: JSONObject(), "avatarUrl")))
             }
             "tx" -> if (hot) MusicComment("${item.optString("SeqNo")}_${item.optString("CmId")}", text("Nick"), text("Content"), item.optString("PubTime"), item.optLong("PraiseNum"),
-                item.optString("Location"), item.optString("Pic").takeIf { it.isNotBlank() }?.let(::listOf) ?: emptyList(), objects(item.optJSONArray("SubComments")).map { parseItem(source, it, true) })
+                item.optString("Location"), item.optString("Pic").takeIf { it.isNotBlank() }?.let(::listOf) ?: emptyList(), objects(item.optJSONArray("SubComments")).map { parseItem(source, it, true) },
+                avatar = avatar(item, "Avatar", "Face", "avatarurl"))
             else MusicComment("${item.optString("rootcommentid")}_${item.optString("commentid")}", text("rootcommentnick").removePrefix("@"), text("rootcommentcontent"), item.optString("time"), item.optLong("praisenum"),
-                replies = objects(item.optJSONArray("middlecommentcontent")).reversed().map { MusicComment(it.optString("subcommentid"), decode(it.optString("replynick")).removePrefix("@"), decode(it.optString("subcommentcontent"))) })
+                replies = objects(item.optJSONArray("middlecommentcontent")).reversed().map { MusicComment(it.optString("subcommentid"), decode(it.optString("replynick")).removePrefix("@"), decode(it.optString("subcommentcontent"))) },
+                avatar = avatar(item, "avatarurl", "rootcommentavatar", "Avatar"))
             "mg" -> {
                 val user = item.optJSONObject("user") ?: JSONObject()
                 MusicComment(item.optString("commentId").ifBlank { item.optString("replyId") }, decode(user.optString("nickName")), text("commentInfo").ifBlank { text("replyInfo") },
                     item.optString("commentTime").ifBlank { item.optString("replyTime") }, item.optJSONObject("opNumItem")?.optLong("thumbNum") ?: 0,
-                    replies = objects(item.optJSONArray("replyComments")).map { parseItem(source, it, hot) }, replyCount = item.optInt("replyTotalCount"))
+                    replies = objects(item.optJSONArray("replyComments")).map { parseItem(source, it, hot) }, replyCount = item.optInt("replyTotalCount"),
+                    avatar = avatar(user, "avatarUrl", "headPic", "headIcon", "avatar"))
             }
             else -> error("不支持的评论平台")
         }
     }
     private fun objects(a: JSONArray?): List<JSONObject> = if (a == null) emptyList() else (0 until a.length()).mapNotNull { a.optJSONObject(it) }
+    private fun avatar(item: JSONObject, vararg keys: String): String = keys.asSequence().map { item.optString(it).trim() }
+        .firstOrNull { it.startsWith("https://") || it.startsWith("http://") || it.startsWith("//") }.orEmpty()
     private fun decode(value: String): String = Html.fromHtml(CommentEmoji.decode(value).replace("\\n", "\n").replace("\n", "<br>"), Html.FROM_HTML_MODE_LEGACY).toString()
 }

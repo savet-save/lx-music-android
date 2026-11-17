@@ -1,0 +1,12 @@
+<resources>
+    <string name="comments_title">Comments on “%1$s”</string>
+    <string name="comments_hot">Popular</string>
+    <string name="comments_latest">Latest</string>
+    <string name="comments_tab_count">%1$s (%2$d)</string>
+    <string name="comments_refresh">Refresh comments</string>
+    <string name="comments_likes">%1$d likes, display only</string>
+    <string name="comments_anonymous">Anonymous</string>
+    <string name="comments_empty">No comments yet</string>
+    <string name="comments_fallback">Comments unavailable on the original platform. Showing: %1$s</string>
+    <string name="comments_view_replies">View replies (%1$d)</string>
+</resources>

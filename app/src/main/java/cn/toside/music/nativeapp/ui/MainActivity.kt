@@ -1827,7 +1827,7 @@ class MainActivity : FragmentActivity() {
             mode = { service?.cycleMode() }, queue = ::showPlaybackQueue, sleep = ::showSleepTimer,
             settings = ::showPlaybackSettings,
             collect = { service?.state?.value?.song?.let(::choosePlaylistForSong) },
-            comments = { service?.state?.value?.song?.takeIf { it.source != "local" }?.let { showComments(this, scope, it) } },
+            comments = { service?.state?.value?.song?.takeIf { it.source != "local" }?.let { showComments(this, it) } },
             more = { anchor -> service?.state?.value?.song?.let { song -> showSongActionsFor(anchor, song, null, allowConversion = true, play = ::togglePlayback) } },
         ))
         detailContent = content
@@ -2365,7 +2365,7 @@ class MainActivity : FragmentActivity() {
                 } catch (e: CancellationException) { throw e }
                 catch (e: Exception) { toast(getString(R.string.ui_f6baa7a2ba08, java.lang.String.valueOf(e.localizedMessage))) }
             }
-            R.string.ui_07f73642e525 -> showComments(this, scope, song)
+            R.string.ui_07f73642e525 -> showComments(this, song)
             R.string.ui_9b3d69ae09ce -> showDislikeChoices(song)
             R.string.ui_94ca0a7bf933, R.string.ui_f655b3c8a2b6 -> {
                 service?.enqueue(listOf(song), action == R.string.ui_94ca0a7bf933); toast(getString(R.string.ui_51a4e2f9dea0))
