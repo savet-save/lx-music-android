@@ -19,6 +19,11 @@ import java.security.MessageDigest
 import android.util.AtomicFile
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import java.io.IOException
+
+internal class ArtworkSizeException(val limit: Int, val actual: Long? = null) : IOException("Image exceeds $limit bytes")
+internal class ArtworkHttpException(val status: Int) : IOException("Image HTTP $status")
+internal class ArtworkDecodeException : IOException("Image decoding failed")
 
 class Artwork(private val context: Context) {
     suspend fun load(song: Song, strict: Boolean = false): Bitmap? = withContext(Dispatchers.IO) {
@@ -44,8 +49,8 @@ class Artwork(private val context: Context) {
             ?: Downloads(context).localCover(song) ?: return@withContext null
         decode(bytes)
     }
-    private fun decode(bytes: ByteArray, maxDimension: Int = 512): Bitmap? {
-        if (bytes.size > cacheLimit(maxDimension)) return null
+    private fun decode(bytes: ByteArray, maxDimension: Int = 512, maxBytes: Int = cacheLimit(maxDimension)): Bitmap? {
+        if (bytes.size > maxBytes) return null
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
         var sample = 1
@@ -54,8 +59,10 @@ class Artwork(private val context: Context) {
             bounds.outWidth.toLong() / sample * (bounds.outHeight / sample) > 8_000_000) sample *= 2
         return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample })
     }
-    internal suspend fun loadUrl(value: String, strict: Boolean = false, maxDimension: Int = 512): Bitmap? = withContext(Dispatchers.IO) {
+    internal suspend fun loadUrl(value: String, strict: Boolean = false, maxDimension: Int = 512,
+        maxDownloadBytes: Int = 8 * 1024 * 1024): Bitmap? = withContext(Dispatchers.IO) {
         require(maxDimension in 128..4096)
+        require(maxDownloadBytes in 1..MAX_DOWNLOAD_BYTES)
         val url = value.trim().let { if (it.startsWith("//")) "https:$it" else it }
         if (!url.startsWith("https://") && !url.startsWith("http://")) return@withContext null
         locks[(url.hashCode() and Int.MAX_VALUE) % locks.size].withLock {
@@ -75,11 +82,20 @@ class Artwork(private val context: Context) {
                 connection.setRequestProperty("User-Agent", "Mozilla/5.0")
                 if (bilibiliImage) cn.toside.music.nativeapp.online.BilibiliApi.audioHeaders.forEach(connection::setRequestProperty)
                 if (connection.responseCode != 200) {
-                    if (strict) throw java.io.IOException("Cover HTTP ${connection.responseCode}")
+                    if (strict) throw ArtworkHttpException(connection.responseCode)
                     null
-                } else connection.inputStream.use { it.readBounded(8 * 1024 * 1024) }
+                } else {
+                    val length = connection.contentLengthLong
+                    if (length > maxDownloadBytes) throw ArtworkSizeException(maxDownloadBytes, length)
+                    try { connection.inputStream.use { it.readBounded(maxDownloadBytes) } }
+                    catch (_: IllegalArgumentException) { throw ArtworkSizeException(maxDownloadBytes) }
+                }
             } finally { connection.disconnect() }
-            val bitmap = bytes?.let { decode(it, maxDimension) } ?: return@withLock null
+            val bitmap = bytes?.let { decode(it, maxDimension, maxDownloadBytes) }
+            if (bitmap == null) {
+                if (strict && bytes != null) throw ArtworkDecodeException()
+                return@withLock null
+            }
             runCatching {
                 file.baseFile.parentFile?.mkdirs()
                 val output = file.startWrite()
@@ -98,5 +114,8 @@ class Artwork(private val context: Context) {
         val key = MessageDigest.getInstance("SHA-256").digest(cacheKey.toByteArray()).joinToString("") { "%02x".format(it.toInt() and 255) }
         return context.cacheDir.resolve("artwork/$key.png")
     }
-    companion object { private val locks = Array(16) { Mutex() } }
+    companion object {
+        internal const val MAX_DOWNLOAD_BYTES = 32 * 1024 * 1024
+        private val locks = Array(16) { Mutex() }
+    }
 }

@@ -12,6 +12,7 @@ import android.widget.ProgressBar
 import android.widget.TextView
 import cn.toside.music.nativeapp.R
 import cn.toside.music.nativeapp.data.Artwork
+import cn.toside.music.nativeapp.data.AppPreferences
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -61,7 +62,7 @@ internal class CommentImageThumbnails(context: Context, private val scope: Corou
             job = scope.launch {
                 loading.visibility = View.VISIBLE; error.visibility = View.GONE
                 try {
-                    val image = artwork.loadUrl(url, maxDimension = 256)
+                    val image = artwork.loadUrl(url, maxDimension = 256, maxDownloadBytes = AppPreferences(context).commentImageMaxBytes)
                     if (image == null) error.visibility = View.VISIBLE else picture.setImageBitmap(image)
                 } catch (e: CancellationException) { throw e }
                 catch (_: Exception) { error.visibility = View.VISIBLE }

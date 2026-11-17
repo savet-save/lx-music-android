@@ -648,3 +648,15 @@ M2007J17C（API 31）独立测试包中 18 项下载回归通过，包含 6 项�
 60 项 JVM 测试通过，含 8 项新增 ImageViewport 测试，覆盖横/长/小图适配、焦点缩放、四边拖动约束、单轴居中、倍数边界、尺寸变化和无效输入。仅在手机 9dd0fd82 的独立 .commentscheck 包验证，另一台设备及正式应用未操作。31 项设备综合运行中的 27 项评论/标题检查及其他图片检查通过，最初图片手势断言错误地要求未超出视口的方向也能移动；随后按设备实际缩放启动阈值重复手势，明确放大到两轴均超出后验证拖动。最终单独复测的 4 项图片检查全部通过，覆盖尺寸缓存隔离及离线复用、缩略图到内部页面及返回、双指缩放/拖动/重建/双击恢复、加载失败重试及无效 URL 排除。早期综合运行整体失败，不记为整轮通过；当前 31 项各项均已有通过记录。
 
 Debug 与测试包构建、Debug Lint（0 errors / 287 warnings）通过。记录为 build/comment-images-final-build.txt、build/comment-images-gesture-build.txt、build/comment-images-final-phone-tests.txt 和 build/comment-images-gesture-phone-tests.txt。已目视核对单行回复标题、缩略图、默认适配和放大后的截图，保存于 build/comment-images-validation/；截图图片为本地 HTTP 测试素材。本轮未新增真实平台联网验收，版本保持 0.9.19 / 9019，改动尚未提交。
+
+## 评论图片大小设置与失败原因（2026-11-17）
+
+手机截图确认问题来自张雨生《大海》（BV1pP4y1G7hU）第二页热门评论中的第三张海边照片，而非之前《悟空》的配图。手机上三张原图均返回 HTTP 200、JPEG，实际响应大小分别为 5,926,862、5,957,955、8,839,771 字节；第三张约 8.43 MiB，超过原来复用封面加载器的 8 MiB 限制，缩略图和详情均抛出“文件或响应内容过大”。评论 API 的 img_size 小于实际 CDN 响应，不用该字段代替真实下载限制。原始证据为 build/comment-image-current-before-fix.json；最初未找到评论的诊断尝试不计为成功，之后已按游标定位到对应条目。
+
+通用设置新增「评论图片加载上限」，选项为 1、2、4、8、16、32 MiB，默认 16 MiB，缩略图和详情共用，重试重新读取偏好。普通封面下载仍保持 8 MiB。已知 Content-Length 超限时提前终止，未知长度仍有流式读取上限；缓存解码、下载大小与解码像素限制分开。图片详情保留 4096 px 长边、800 万像素上限。错误状态携带类型与状态码，使用本地化文案说明大小超限、HTTP、超时、DNS、安全连接、解码或连接中断；文案多行居中，限制宽度，四周保留 24 dp 间距。
+
+60 项 JVM 测试、Debug 应用/测试包构建及 Debug Lint（0 errors / 287 warnings）通过。仅在手机 9dd0fd82 的隔离 .commentscheck 包完成 14 项检查：7 项评论页面、6 项图片/设置，以及 1 项临时真实配图诊断。新增回归使用超过 8 MiB 的有效 PNG，验证普通封面仍受限、缩略图按所选 32 MiB 成功、详情在用户选择 8 MiB 时显示实际大小与居中提示、调高至 16 MiB 后重试成功，以及设置菜单的偏好持久化。原 HTTP 503 重试用例同步检查具体状态码，原缩放/拖动/重建和标题检查通过。
+
+修复后，原第三张图片在手机上成功加载为 252×189 缩略图和 2016×1512 详情图，真实 HTTP 状态与结果保存于 build/comment-image-current-after-fix.json。最终构建与设备日志为 build/comment-image-settings-build.txt、build/comment-image-settings-phone-tests.txt；居中错误示例已目视核对，保存于 build/comment-image-settings-validation/comment-image-size-error-centered.png，该示例使用本地测试图。未继续操作另一台设备，正式应用未覆盖；当前版本仍为 0.9.19 / 9019，改动尚未提交。
+
+图片加载上限默认值按用户要求调整为 16 MiB，同步偏好回退、设置页默认选项、三种语言说明与文档，保留已有手动选择。60 项 JVM 测试、Debug/测试包构建及 Lint 通过；手机 9dd0fd82 隔离包的设置专项复测通过，包含独立空偏好下的 16 MiB 默认读取与设置保存断言。记录为 build/comment-image-default16-build.txt 和 build/comment-image-default16-phone-tests.txt，本次调整合并到最近一次本地提交。

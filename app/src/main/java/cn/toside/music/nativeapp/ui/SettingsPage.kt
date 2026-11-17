@@ -233,6 +233,8 @@ internal class SettingsPage(
         note(text(R.string.settings_apply_hint))
         choice(R.string.interface_language, "common.langId", arrayOf(text(R.string.language_system), "简体中文", "繁體中文", "English"), arrayOf("", "zh-CN", "zh-TW", "en"), "")
         choice(R.string.ui_6089721beb10, "common.fontScale", arrayOf("80%", "90%", "100%", "110%", "120%", "130%", "150%"), arrayOf("0.8", "0.9", "1.0", "1.1", "1.2", "1.3", "1.5"), "1.0")
+        choice(R.string.comments_image_limit, "common.commentImageMaxSize", arrayOf("1 MiB", "2 MiB", "4 MiB", "8 MiB", "16 MiB", "32 MiB"), arrayOf("1", "2", "4", "8", "16", "32"), "16")
+        note(text(R.string.comments_image_limit_hint))
         toggle(R.string.ui_11c5a044b748, "common.showBackBtn")
         toggle(R.string.ui_c9edbe7646fb, "common.showExitBtn", true)
         choice(R.string.ui_d715550e650d, "common.drawerLayoutPosition", arrayOf(text(R.string.ui_6a24b14f33c7), text(R.string.ui_1cf1d4d0b24b)), arrayOf("left", "right"), "left")

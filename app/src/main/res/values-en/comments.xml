@@ -12,4 +12,16 @@
     <string name="comments_image_title">Image</string>
     <string name="comments_image_error">Could not load image</string>
     <string name="comments_image_gestures">Pinch to zoom, drag to move when enlarged, double-tap to reset or zoom in</string>
+    <string name="comments_image_limit">Comment image size limit</string>
+    <string name="comments_image_limit_hint">Shared by thumbnails and image details. Default: 16 MiB. Reload the image after changing this setting.</string>
+    <string name="comments_image_size_error">The image is %1$s MiB, exceeding your %2$d MiB limit.\nAdjust it in Settings → General.</string>
+    <string name="comments_image_limit_error">The image exceeds your %1$d MiB limit.\nAdjust it in Settings → General.</string>
+    <string name="comments_image_missing">The image is missing or has expired (HTTP %1$d).</string>
+    <string name="comments_image_denied">The image server denied access (HTTP %1$d).</string>
+    <string name="comments_image_http_error">The image server returned an error (HTTP %1$d). Please try again later.</string>
+    <string name="comments_image_timeout">The image request timed out. Check your connection and try again.</string>
+    <string name="comments_image_dns_error">The image server address could not be resolved. Check your connection.</string>
+    <string name="comments_image_tls_error">The secure image connection failed. Check your connection or system time.</string>
+    <string name="comments_image_decode_error">The image is damaged or uses an unsupported format.</string>
+    <string name="comments_image_network_error">The image connection failed or was interrupted. Check your connection and try again.</string>
 </resources>

@@ -12,4 +12,16 @@
     <string name="comments_image_title">圖片詳情</string>
     <string name="comments_image_error">圖片載入失敗</string>
     <string name="comments_image_gestures">雙指縮放，放大後可上下左右拖曳，點兩下還原或放大</string>
+    <string name="comments_image_limit">評論圖片載入上限</string>
+    <string name="comments_image_limit_hint">縮圖和圖片詳情共用此上限，預設為 16 MiB。修改後重新載入圖片生效。</string>
+    <string name="comments_image_size_error">圖片為 %1$s MiB，超過設定的 %2$d MiB 上限。\n可在「設定 → 一般設定」中調整。</string>
+    <string name="comments_image_limit_error">圖片超過設定的 %1$d MiB 大小上限。\n可在「設定 → 一般設定」中調整。</string>
+    <string name="comments_image_missing">圖片不存在或已失效（HTTP %1$d）。</string>
+    <string name="comments_image_denied">圖片伺服器拒絕存取（HTTP %1$d）。</string>
+    <string name="comments_image_http_error">圖片伺服器傳回錯誤（HTTP %1$d），請稍後重試。</string>
+    <string name="comments_image_timeout">圖片請求逾時，請檢查網路後重試。</string>
+    <string name="comments_image_dns_error">無法解析圖片伺服器位址，請檢查網路。</string>
+    <string name="comments_image_tls_error">圖片安全連線失敗，請檢查網路或系統時間。</string>
+    <string name="comments_image_decode_error">圖片內容損壞或格式不受支援，無法解碼。</string>
+    <string name="comments_image_network_error">圖片下載連線失敗或已中斷，請檢查網路後重試。</string>
 </resources>

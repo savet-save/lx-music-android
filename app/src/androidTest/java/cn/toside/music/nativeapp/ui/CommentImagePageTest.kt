@@ -11,11 +11,18 @@ import android.view.InputDevice
 import android.view.MotionEvent
 import android.view.View
 import android.widget.ImageView
+import android.widget.TextView
+import android.widget.ListView
+import android.view.Gravity
+import android.view.inspector.WindowInspector
+import androidx.test.filters.SdkSuppress
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
 import androidx.test.runner.lifecycle.Stage
 import cn.toside.music.nativeapp.data.Artwork
+import cn.toside.music.nativeapp.data.AppPreferences
+import cn.toside.music.nativeapp.data.ArtworkSizeException
 import cn.toside.music.nativeapp.data.Song
 import cn.toside.music.nativeapp.online.MusicComment
 import kotlinx.coroutines.*
@@ -182,7 +189,11 @@ class CommentImagePageTest {
             val activity = start("${server.address}/retry-${System.nanoTime()}")
             try {
                 await { activity.model.state.value.failed }
-                main { assertTrue(activity.window.decorView.findViewWithTag<View>("comment-image-error").isShown); activity.window.decorView.findViewWithTag<View>("comment-image-retry").performClick() }
+                main {
+                    assertTrue(activity.window.decorView.findViewWithTag<View>("comment-image-error").isShown)
+                    assertTrue(activity.window.decorView.findViewWithTag<TextView>("comment-image-reason").text.contains("503"))
+                    activity.window.decorView.findViewWithTag<View>("comment-image-retry").performClick()
+                }
                 await { activity.model.state.value.bitmap != null }
                 main {
                     assertEquals(2, server.requests.get()); assertFalse(activity.window.decorView.findViewWithTag<View>("comment-image-error").isShown)
@@ -192,5 +203,87 @@ class CommentImagePageTest {
                 }
             } finally { main { activity.finish() } }
         }
+    }
+    @Test fun largeCommentImageThumbnailAndDetailUseTheirOwnDownloadLimit() = runBlocking {
+        val preferences = AppPreferences(context)
+        val before = preferences.string("common.commentImageMaxSize", "16")
+        preferences.set("common.commentImageMaxSize", "32")
+        try {
+        CoverHttpFixture(2048, 1536, noisy = true).use { server ->
+            assertTrue("Fixture must exceed the cover's 8 MiB limit", server.imageByteCount > 8 * 1024 * 1024)
+            val url = "${server.address}/large-photo-${System.nanoTime()}"
+            try { Artwork(context).loadUrl(url, strict = true); fail("Cover downloads must keep their existing limit") }
+            catch (expected: ArtworkSizeException) { assertEquals(8 * 1024 * 1024, expected.limit) }
+            val song = Song(1, Uri.EMPTY, "Large photo", "artist", 0, "bili", """{"bvid":"invalid"}""")
+            val host = ForegroundTestActivities.start(CommentsActivity.intent(context, song).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as CommentsActivity
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+            val monitor = instrumentation.addMonitor(CommentImageActivity::class.java.name, null, false)
+            var thumbnails: CommentImageThumbnails? = null
+            var detail: CommentImageActivity? = null
+            try {
+                await { !host.model.state.value.loading }
+                main {
+                    thumbnails = CommentImageThumbnails(host, scope, UiPalette(host, NativeThemes(host).active()))
+                    host.setContentView(thumbnails); thumbnails?.bind(listOf(url))
+                }
+                await { thumbnails?.findViewWithTag<ImageView>("comment-thumbnail-image")?.drawable is BitmapDrawable }
+                main {
+                    preferences.set("common.commentImageMaxSize", "8")
+                    requireNotNull(thumbnails).findViewWithTag<View>("comment-thumbnail-0").performClick()
+                }
+                detail = instrumentation.waitForMonitorWithTimeout(monitor, 10000) as CommentImageActivity
+                val page = requireNotNull(detail)
+                await { !page.model.state.value.loading }
+                main {
+                    val error = page.model.state.value.error as ArtworkSizeException
+                    assertEquals(8 * 1024 * 1024, error.limit)
+                    val reason = page.window.decorView.findViewWithTag<TextView>("comment-image-reason")
+                    assertEquals(imageFailureMessage(page, error), reason.text.toString())
+                    assertEquals(Gravity.CENTER, reason.gravity)
+                    assertTrue(reason.maxLines > 1)
+                    val bounds = android.graphics.Rect(); assertTrue(reason.getGlobalVisibleRect(bounds))
+                    val safeMargin = (23 * page.resources.displayMetrics.density).toInt()
+                    assertTrue(bounds.left >= safeMargin && bounds.right <= page.window.decorView.width - safeMargin)
+                    assertEquals(page.window.decorView.width / 2f, bounds.exactCenterX(), page.resources.displayMetrics.density * 2)
+                    snapshot("comment-image-size-error-centered", page.window.decorView)
+                    preferences.set("common.commentImageMaxSize", "16")
+                    page.window.decorView.findViewWithTag<View>("comment-image-retry").performClick()
+                }
+                await { page.model.state.value.bitmap != null }
+                main {
+                    val bitmap = requireNotNull(page.model.state.value.bitmap)
+                    assertEquals(2048, bitmap.width); assertEquals(1536, bitmap.height)
+                    assertFalse(page.model.state.value.failed)
+                }
+            } finally {
+                instrumentation.removeMonitor(monitor)
+                main { detail?.finish(); thumbnails?.close(); host.finish() }; scope.cancel()
+            }
+        }
+        } finally { preferences.set("common.commentImageMaxSize", before) }
+    }
+    @SdkSuppress(minSdkVersion = 29)
+    @Test fun imageSizeSettingPersistsAndIsSharedByThumbnailsAndDetails() {
+        val preferences = AppPreferences(context)
+        val before = preferences.string("common.commentImageMaxSize", "16")
+        val freshPreferences = AppPreferences(context, "image-limit-default-${System.nanoTime()}")
+        assertEquals(16, freshPreferences.commentImageLimitMiB)
+        assertEquals(16 * 1024 * 1024, freshPreferences.commentImageMaxBytes)
+        val activity = ForegroundTestActivities.start(Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
+        fun menu() = WindowInspector.getGlobalWindowViews().firstNotNullOfOrNull { it.findViewWithTag<ListView>("settings-choice-menu")?.takeIf(View::isShown) }
+        try {
+            preferences.set("common.commentImageMaxSize", "32")
+            main { activity.openSettings("basic") }
+            await { activity.window.decorView.findViewWithTag<View>("settings-common.commentImageMaxSize") != null }
+            main { activity.window.decorView.findViewWithTag<View>("settings-common.commentImageMaxSize").performClick() }
+            await { menu() != null }
+            main {
+                val list = requireNotNull(menu())
+                val position = (0 until list.count).first { list.getItemAtPosition(it) == "16 MiB" }
+                list.performItemClick(list.adapter.getView(position, null, list), position, list.adapter.getItemId(position))
+                assertEquals(16, AppPreferences(context).commentImageLimitMiB)
+                assertEquals(16 * 1024 * 1024, AppPreferences(context).commentImageMaxBytes)
+            }
+        } finally { preferences.set("common.commentImageMaxSize", before); main { activity.finish() } }
     }
 }

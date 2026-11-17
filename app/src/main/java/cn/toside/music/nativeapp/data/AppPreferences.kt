@@ -39,6 +39,8 @@ internal class AppPreferences(context: Context, name: String = "app-settings") {
     val searchHistory get() = bool("search.isShowHistorySearch", true)
     val hotSearch get() = bool("search.isShowHotSearch")
     val preferBilibiliSubtitles get() = string("bilibili.lyricsMode", "match") == "subtitle"
+    val commentImageLimitMiB get() = string("common.commentImageMaxSize", "16").toIntOrNull()?.coerceIn(1, 32) ?: 16
+    val commentImageMaxBytes get() = commentImageLimitMiB * 1024 * 1024
     val recordHistory get() = bool("player.recordHistory", true)
     val autoCleanQueue get() = bool("player.isAutoCleanPlayedList")
     val autoLowerQuality get() = bool("player.autoLowerQuality", true)
