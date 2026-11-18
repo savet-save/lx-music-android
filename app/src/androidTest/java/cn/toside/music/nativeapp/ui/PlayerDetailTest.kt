@@ -1,6 +1,5 @@
 package cn.toside.music.nativeapp.ui
 
-import android.app.Dialog
 import android.widget.TextView
 import android.content.Intent
 import android.os.SystemClock
@@ -31,15 +30,18 @@ class PlayerDetailTest {
             assertNotNull(cover)
             instrumentation.runOnMainSync { cover!!.performClick() }
             instrumentation.waitForIdleSync()
-            val dialogField = MainActivity::class.java.getDeclaredField("playerDialog").apply { isAccessible = true }
-            val dialog = dialogField.get(activity) as? Dialog
-            assertTrue(dialog?.isShowing == true)
+            val fragment = activity.playerFragment()
+            assertTrue(fragment?.isAdded == true)
+            assertTrue(fragment!!.requireView().isShown)
+            assertEquals(activity.window.decorView.windowToken, fragment.requireView().windowToken)
             val toggleField = MainActivity::class.java.getDeclaredField("detailPageToggle").apply { isAccessible = true }
             val toggle = toggleField.get(activity) as View
             instrumentation.runOnMainSync { toggle.performClick() }
             val scrollField = MainActivity::class.java.getDeclaredField("detailScroll").apply { isAccessible = true }
-            assertEquals(View.VISIBLE, (scrollField.get(activity) as View).visibility)
-            instrumentation.runOnMainSync { dialog?.dismiss() }
+            val split = activity.resources.configuration.let { it.screenWidthDp >= 600 && it.screenHeightDp >= 480 }
+            assertEquals(if (split) View.GONE else View.VISIBLE, (scrollField.get(activity) as View).visibility)
+            if (split) instrumentation.runOnMainSync { toggle.performClick() }
+            instrumentation.runOnMainSync { activity.closePlayerDetails() }
             val openSync = MainActivity::class.java.getDeclaredMethod("showSyncSettings").apply { isAccessible = true }
             instrumentation.runOnMainSync { openSync.invoke(activity) }
             instrumentation.waitForIdleSync()

@@ -1,4 +1,10 @@
 <resources>
+    <string name="download_total_size">Total size: %1$s</string>
+    <string name="download_size_unknown">Unknown</string>
+    <string name="download_cover_pending">Cover: waiting to download</string>
+    <string name="download_cover_saved">Cover: saved</string>
+    <string name="download_cover_unavailable">Cover: unavailable</string>
+    <string name="download_cover_failed">Cover: download failed; audio kept</string>
     <string name="download_page">Downloads</string>
     <string name="download_all">All tasks</string>
     <string name="download_active">Downloading</string>

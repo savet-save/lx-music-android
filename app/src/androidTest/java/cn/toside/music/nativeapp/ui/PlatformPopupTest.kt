@@ -25,6 +25,7 @@ import cn.toside.music.nativeapp.data.Playlist
 import cn.toside.music.nativeapp.data.Playlists
 import cn.toside.music.nativeapp.data.Song
 import cn.toside.music.nativeapp.online.*
+import cn.toside.music.nativeapp.source.UserSourceLibrary
 import kotlinx.coroutines.Job
 import org.junit.Assert.*
 import org.junit.Test
@@ -46,6 +47,8 @@ class PlatformPopupTest {
     private fun invoke(activity: MainActivity, name: String) = MainActivity::class.java.getDeclaredMethod(name).apply { isAccessible = true }.invoke(activity)
     private fun descendants(view: View): List<View> = listOf(view) + if (view is ViewGroup) (0 until view.childCount).flatMap { descendants(view.getChildAt(it)) } else emptyList()
     private fun menu() = WindowInspector.getGlobalWindowViews().flatMap(::descendants).filterIsInstance<ListView>().firstOrNull { it.tag == "platform-menu" && it.isShown }
+    private fun navigationActions() = WindowInspector.getGlobalWindowViews().flatMap(::descendants).filterIsInstance<ListView>()
+        .firstOrNull { it.tag == "app-choice-menu" && it.isShown }
     private fun bounds(view: View) = Rect().also { rect -> val p = IntArray(2).also(view::getLocationOnScreen); rect.set(p[0], p[1], p[0] + view.width, p[1] + view.height) }
     private fun visibleWindow(view: View) = Rect().also { frame ->
         view.getWindowVisibleDisplayFrame(frame)
@@ -140,8 +143,10 @@ class PlatformPopupTest {
                     activity.window.setLayout((360 * density).toInt(), (800 * density).toInt())
                     invoke(activity, "applyThemeInPlace")
                 }
-                awaitLayout { field(activity, "heading") as View }
-                main { (field(activity, "heading") as View).performClick() }
+                awaitLayout { field(activity, "pageTitle") as View }
+                main { invoke(activity, "openMyLists") }
+                await("favorites page") { (field(activity, "activePlaylist") as? Playlist)?.id == favorites && (field(activity, "loadJob") as? Job)?.isActive != true }
+                main { (field(activity, "pageTitle") as View).performClick() }
                 await("the playlist rows") {
                     option("playlist-drawer-panel")?.translationX == 0f && option("playlist-more-$favorites")?.isShown == true &&
                         option("playlist-choice-$custom")?.isShown == true
@@ -149,7 +154,7 @@ class PlatformPopupTest {
                 main {
                     assertNull(option("playlist-choice-local"))
                     assertNull(option("playlist-more-local"))
-                    assertFalse(requireNotNull(option("playlist-choice-$favorites")).isSelected)
+                    assertTrue(requireNotNull(option("playlist-choice-$favorites")).isSelected)
                     assertTrue(bounds(requireNotNull(option("playlist-choice-$trial"))).top < bounds(requireNotNull(option("playlist-choice-$favorites"))).top)
                     assertEquals(activity.getString(R.string.playlist_trial), (option("playlist-choice-$trial") as TextView).text.toString())
                 }
@@ -163,7 +168,7 @@ class PlatformPopupTest {
                         assertEquals(button.bottom, menu.top)
                         assertTrue(abs(button.right - menu.right) <= 1)
                         assertTrue(visibleWindow(option("playlist-more-$builtin")!!).contains(menu))
-                        assertNull(field(activity, "activePlaylist"))
+                        assertEquals(favorites, (field(activity, "activePlaylist") as Playlist).id)
                         val remove = actionPosition(popup, "DELETE")
                         assertFalse(popup.adapter.isEnabled(remove))
                         assertFalse(popup.adapter.isEnabled(actionPosition(popup, "RENAME")))
@@ -181,7 +186,7 @@ class PlatformPopupTest {
                 await("single-tap playlist switch") {
                     (field(activity, "activePlaylist") as? Playlist)?.id == custom && option("playlist-drawer-panel")?.isShown == false
                 }
-                main { (field(activity, "heading") as View).performClick() }
+                main { (field(activity, "pageTitle") as View).performClick() }
                 await("the selected playlist row") { option("playlist-choice-$custom")?.let { it.isShown && it.isSelected } == true && option("playlist-drawer-panel")?.translationX == 0f }
                 tap("playlist-more-$custom")
                 await("custom playlist actions") { actions()?.rootView?.hasWindowFocus() == true }
@@ -209,7 +214,7 @@ class PlatformPopupTest {
     }
 
     @Test fun providerMenusAnchorToSearchPlaylistsAndChartsAndDoNotResetCurrentChoices() {
-        val activity = instrumentation.startActivitySync(Intent(instrumentation.targetContext, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
+        val activity = ForegroundTestActivities.start(Intent(instrumentation.targetContext, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
         val searches = AtomicInteger(); val playlistRequests = AtomicInteger(); val chartRequests = AtomicInteger()
         try {
             await { activity.settingsPlayer() != null }
@@ -235,7 +240,8 @@ class PlatformPopupTest {
             }
             await { searches.get() == 5 && (field(activity, "loadJob") as? Job)?.isActive != true }
             awaitLayout { (field(activity, "searchSourceButton") as View).takeIf { it.isShown } ?: field(activity, "heading") as View }
-            main { invoke(activity, "showSearchSources") }; await { menu()?.childCount == 6 }
+            val searchChoiceCount = PlatformPopup.sources.size + 1 + if (UserSourceLibrary(activity).bilibiliEnabled()) 1 else 0
+            main { invoke(activity, "showSearchSources") }; await { menu()?.adapter?.count == searchChoiceCount }
             main {
                 val anchor = (field(activity, "searchSourceButton") as View).takeIf { it.isShown } ?: field(activity, "heading") as View
                 verify(anchor, SearchCatalog.ALL); capture(activity, "search-platforms")
@@ -244,7 +250,7 @@ class PlatformPopupTest {
                 assertEquals("menu draft", (field(activity, "search") as EditText).text.toString())
                 invoke(activity, "showSearchSources")
             }
-            await { menu()?.childCount == 6 }
+            await { menu()?.adapter?.count == searchChoiceCount }
             main { choose("wy") }; await { searches.get() == 6 && (field(activity, "loadJob") as? Job)?.isActive != true }
             main { assertEquals("wy", field(activity, "searchSource")); invoke(activity, "showSearchSources") }
             dismissWithBack(activity)
@@ -377,13 +383,111 @@ class PlatformPopupTest {
                 assertTrue(palette.theme.dark)
                 descendants(list).filterIsInstance<TextView>().forEach { assertEquals(if (it.isActivated) palette.primary else palette.foreground, it.currentTextColor) }
                 capture(activity, "platforms-dark-large-font-short-window")
-                list.setSelection(5)
+                list.setSelection(list.adapter.count - 1)
             }
             await { menu()?.findViewWithTag<View>("platform-${SearchCatalog.ALL}")?.isShown == true }
             main { choose(SearchCatalog.ALL); invoke(activity, "showSearchSources") }
             await { menu() != null }
             main { invoke(activity, "applyThemeInPlace") }
             await { menu() == null }
+        } finally {
+            main { activity.finish() }
+            preferences.edit().apply { saved.forEach { (key, value) -> when (value) {
+                is String -> putString(key, value); is Boolean -> putBoolean(key, value); else -> remove(key)
+            } } }.commit()
+        }
+    }
+
+    @Test fun sidebarMoreAlignsWithNavigationIconsAndContainsOnlyIndependentActions() {
+        val preferences = instrumentation.targetContext.getSharedPreferences("app-settings", 0)
+        val keys = listOf("common.drawerLayoutPosition", "common.showBackBtn", "common.showExitBtn")
+        val saved = keys.associateWith { preferences.all[it] }
+        preferences.edit().putBoolean("common.showBackBtn", true).putBoolean("common.showExitBtn", true).commit()
+        val activity = instrumentation.startActivitySync(Intent(instrumentation.targetContext, MainActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
+        try {
+            awaitHostFocus(activity)
+            for (width in listOf(600, 1024)) for (right in listOf(false, true)) {
+                preferences.edit().putString("common.drawerLayoutPosition", if (right) "right" else "left").commit()
+                main {
+                    MainActivity::class.java.getDeclaredField("uiLayout").apply { isAccessible = true }.set(activity, AdaptiveLayout(width, 768))
+                    val density = activity.resources.displayMetrics.density
+                    activity.window.setLayout((width * density).toInt(), (768 * density).toInt())
+                    invoke(activity, "applyThemeInPlace")
+                }
+                awaitLayout { activity.window.decorView.findViewWithTag<View>("navigation-more") }
+                main {
+                    val more = activity.window.decorView.findViewWithTag<ViewGroup>("navigation-more")
+                    val local = activity.window.decorView.findViewWithTag<ViewGroup>("navigation-local")
+                    assertEquals(bounds(local.getChildAt(0)).centerX(), bounds(more.getChildAt(0)).centerX())
+                    assertEquals(bounds(local.getChildAt(0)).width(), bounds(more.getChildAt(0)).width())
+                    assertEquals(local.width, more.width)
+                    more.performClick()
+                }
+                await("sidebar actions") { navigationActions()?.rootView?.hasWindowFocus() == true }
+                main {
+                    val popup = requireNotNull(navigationActions())
+                    val labels = (0 until popup.count).map { popup.adapter.getItem(it).toString() }
+                    val sidebar = activity.window.decorView.findViewWithTag<View>("home-sidebar")
+                    val primary = descendants(sidebar).filterIsInstance<TextView>().map { it.text.toString() }.toSet()
+                    assertTrue("More must not repeat sidebar entries", labels.none { it in primary })
+                    assertFalse(labels.contains(activity.getString(R.string.ui_599818eb56df)))
+                    listOf(R.string.ui_3158c8d56b7b, R.string.ui_a5cd0a9169e8, R.string.ui_3facd3e00be5,
+                        R.string.ui_8c38525734c0, R.string.ui_f01b6815d826, R.string.ui_426744e26e7e,
+                        R.string.ui_f75a93326a3c, R.string.ui_b0d269c8707c).forEach { assertTrue(labels.contains(activity.getString(it))) }
+                    assertTrue(visibleWindow(sidebar).contains(bounds(popup)))
+                    capture(activity, "sidebar-more-$width-${if (right) "right" else "left"}", popup)
+                    (field(activity, "choicesPopup") as PlatformPopup).dismiss()
+                }
+                awaitHostFocus(activity)
+            }
+        } finally {
+            main { activity.finish() }
+            preferences.edit().apply { saved.forEach { (key, value) -> when (value) {
+                is String -> putString(key, value); is Boolean -> putBoolean(key, value); else -> remove(key)
+            } } }.commit()
+        }
+    }
+
+    @Test fun phoneMoreKeepsIndependentActionsAndDispatchesTheSelectedSetting() {
+        val preferences = instrumentation.targetContext.getSharedPreferences("app-settings", 0)
+        val keys = listOf("common.drawerLayoutPosition", "common.showBackBtn", "common.showExitBtn")
+        val saved = keys.associateWith { preferences.all[it] }
+        preferences.edit().putBoolean("common.showBackBtn", true).putBoolean("common.showExitBtn", true).commit()
+        val activity = instrumentation.startActivitySync(Intent(instrumentation.targetContext, MainActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
+        try {
+            awaitHostFocus(activity)
+            for (right in listOf(false, true)) {
+                preferences.edit().putString("common.drawerLayoutPosition", if (right) "right" else "left").commit()
+                main {
+                    MainActivity::class.java.getDeclaredField("uiLayout").apply { isAccessible = true }.set(activity, AdaptiveLayout(360, 800))
+                    val density = activity.resources.displayMetrics.density
+                    activity.window.setLayout((360 * density).toInt(), (800 * density).toInt())
+                    invoke(activity, "applyThemeInPlace"); invoke(activity, "showNavigation")
+                }
+                awaitLayout { activity.window.decorView.findViewWithTag<View>("navigation-more") }
+                main { activity.window.decorView.findViewWithTag<View>("navigation-more").performClick() }
+                await("phone actions") { navigationActions()?.rootView?.hasWindowFocus() == true }
+                main {
+                    val popup = requireNotNull(navigationActions())
+                    val labels = (0 until popup.count).map { popup.adapter.getItem(it).toString() }
+                    val panel = activity.window.decorView.findViewWithTag<View>("home-drawer-panel")
+                    val primary = descendants(panel).filterIsInstance<TextView>().map { it.text.toString() }.toSet()
+                    assertTrue("More must not repeat drawer entries", labels.none { it in primary })
+                    assertTrue(labels.contains(activity.getString(R.string.ui_727036c7fc2a)))
+                    assertTrue(labels.contains(activity.getString(R.string.ui_788db1cfec2a)))
+                    assertTrue((field(activity, "navigationDrawer") as HomeDrawerLayout).isOpen)
+                    if (!right) (field(activity, "choicesPopup") as PlatformPopup).dismiss()
+                    else {
+                        val position = (0 until popup.count).single { popup.adapter.getView(it, null, popup).tag == "app-choice-11" }
+                        popup.performItemClick(popup.getChildAt(position - popup.firstVisiblePosition), position, position.toLong())
+                    }
+                }
+                if (!right) awaitHostFocus(activity)
+            }
+            await("playback setting selected by its original action ID") { activity.settingsFragment()?.savePageState()?.getString("category") == "playback" }
+            main { assertFalse((field(activity, "navigationDrawer") as HomeDrawerLayout).isOpen) }
         } finally {
             main { activity.finish() }
             preferences.edit().apply { saved.forEach { (key, value) -> when (value) {
@@ -399,7 +503,7 @@ class PlatformPopupTest {
         try {
             await { activity.settingsPlayer() != null }
             main {
-                val anchor = field(activity, "heading") as View
+                val anchor = field(activity, "pageTitle") as View
                 assertTrue(anchor.isAttachedToWindow)
                 activity.finish()
                 popup.show(anchor, listOf("kw"), listOf("Kuwo"), "kw", field(activity, "palette") as UiPalette) { }

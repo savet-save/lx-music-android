@@ -160,6 +160,7 @@ globalThis.lx_setup = (key, id, name, description, version, author, homepage, ra
   }
   const supportActions = {
     kw: ['musicUrl'],
+    bili: ['musicUrl'],
     kg: ['musicUrl'],
     tx: ['musicUrl'],
     wy: ['musicUrl'],

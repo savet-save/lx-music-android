@@ -51,12 +51,13 @@ class OnlineSourceImportTest {
         SourceHttpFixture().use { server -> isolated { source ->
             source.import(server.script)
             val selected = source.catalog().selected
+            val count = source.catalog().entries.size
             failure { source.import(OnlineSourceImport(context).download("${server.address}/invalid")) }
             assertEquals(selected, source.catalog().selected)
             failure { source.import(OnlineSourceImport(context).download("${server.address}/missing")) }
             assertEquals(selected, source.catalog().selected)
             source.import(OnlineSourceImport(context).download("${server.address}/script"))
-            assertEquals(2, source.catalog().entries.size)
+            assertEquals(count, source.catalog().entries.size)
             assertEquals("https://example.org/test.mp3", source.musicUrl("kw", JSONObject()))
         } }
     }

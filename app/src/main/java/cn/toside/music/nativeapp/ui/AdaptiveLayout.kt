@@ -10,6 +10,7 @@ import android.text.TextUtils
 import android.view.Gravity
 import android.widget.TextView
 import android.widget.FrameLayout
+import cn.toside.music.nativeapp.R
 
 /** Use the current window, so split screen and freeform windows behave like smaller devices. */
 internal data class AdaptiveLayout(val widthDp: Int, val heightDp: Int) {
@@ -22,13 +23,29 @@ internal data class AdaptiveLayout(val widthDp: Int, val heightDp: Int) {
 }
 
 /** Fit the square artwork during measurement, including the first frame after resizing. */
-internal class AlbumCoverLayout(context: Context) : FrameLayout(context) {
+internal class AlbumCoverLayout(context: Context, private val expanded: Boolean = false) : FrameLayout(context) {
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val density = resources.displayMetrics.density
-        val size = minOf(MeasureSpec.getSize(widthMeasureSpec) - (40 * density).toInt(),
-            MeasureSpec.getSize(heightMeasureSpec) - (24 * density).toInt(), (340 * density).toInt()).coerceAtLeast(0)
+        val availableWidth = MeasureSpec.getSize(widthMeasureSpec)
+        val availableHeight = MeasureSpec.getSize(heightMeasureSpec)
+        val metadata = getChildAt(1)?.takeIf { it.visibility != GONE }
+        val maxWidth = (availableWidth * if (expanded) .72f else .80f).toInt()
+        metadata?.measure(MeasureSpec.makeMeasureSpec(maxWidth, MeasureSpec.EXACTLY), MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED))
+        val reserve = if (expanded) (48 * density).toInt() + (metadata?.measuredHeight ?: 0) else (24 * density).toInt()
+        val size = minOf(maxWidth, availableHeight - reserve, ((if (expanded) 340 else 420) * density).toInt()).coerceAtLeast(0)
         getChildAt(0)?.layoutParams?.apply { width = size; height = size }
+        metadata?.layoutParams?.width = size
         super.onMeasure(widthMeasureSpec, heightMeasureSpec)
+    }
+    override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
+        val album = getChildAt(0) ?: return
+        val x = (width - album.measuredWidth) / 2
+        val y = if (expanded) (32 * resources.displayMetrics.density).toInt() else (height - album.measuredHeight) / 2
+        album.layout(x, y, x + album.measuredWidth, y + album.measuredHeight)
+        getChildAt(1)?.takeIf { it.visibility != GONE }?.let {
+            val next = y + album.measuredHeight + (12 * resources.displayMetrics.density).toInt()
+            it.layout(x, next, x + album.measuredWidth, next + it.measuredHeight)
+        }
     }
 }
 
@@ -52,6 +69,11 @@ internal class LxStyles(private val context: Context, private val palette: UiPal
     fun icon(code: Int, label: String, size: Float = 21f, click: () -> Unit) = label(code.toChar().toString(), size).apply {
         typeface = icons; gravity = Gravity.CENTER; contentDescription = label
         background = touch(); isFocusable = true; setOnClickListener { click() }
+    }
+    fun backButton(click: () -> Unit) = icon(59664, context.getString(R.string.ui_572cf45ba436), 24f, click).apply {
+        tag = "page-back"; includeFontPadding = false; gravity = Gravity.CENTER
+        setPadding(0, 0, 0, 0); minWidth = dp(48); minHeight = dp(48)
+        setTextColor(palette.primary); tooltipText = contentDescription
     }
     private fun blend(from: Int, to: Int, ratio: Float) = Color.rgb(
         (Color.red(from) * (1 - ratio) + Color.red(to) * ratio).toInt(),

@@ -1,0 +1,4 @@
+LXMP3 {
+  global: JNI_OnLoad;
+  local: *;
+};

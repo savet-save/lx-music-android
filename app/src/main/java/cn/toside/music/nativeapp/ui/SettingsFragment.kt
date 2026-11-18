@@ -1,6 +1,5 @@
 package cn.toside.music.nativeapp.ui
 
-import android.content.Context
 import android.content.SharedPreferences
 import android.os.Bundle
 import android.view.LayoutInflater
@@ -9,6 +8,7 @@ import android.view.ViewGroup
 import android.widget.FrameLayout
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
+import cn.toside.music.nativeapp.utils.StoreHelper
 
 /** A full settings screen in the activity back stack, with work owned by its view lifecycle. */
 class SettingsFragment : Fragment() {
@@ -41,7 +41,7 @@ class SettingsFragment : Fragment() {
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
-        preferences = requireContext().getSharedPreferences("app-settings", Context.MODE_PRIVATE).also {
+        preferences = StoreHelper.getSP().also {
             it.registerOnSharedPreferenceChangeListener(appearanceListener)
         }
         view.requestFocus()

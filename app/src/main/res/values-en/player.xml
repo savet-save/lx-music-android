@@ -1,0 +1,8 @@
+<resources>
+    <string name="player_play_mode">Play mode</string>
+    <string name="player_queue_timer">Play queue; long press for the sleep timer</string>
+    <string name="player_hide_lyrics">Hide lyrics</string>
+    <string name="player_metadata_title">Track: %1$s</string>
+    <string name="player_metadata_artist">Artist: %1$s</string>
+    <string name="player_metadata_album">Album: %1$s</string>
+</resources>

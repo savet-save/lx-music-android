@@ -13,12 +13,19 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <application 
+        android:name=".NativeApplication"
         android:label="@string/app_name" 
         android:theme="@android:style/Theme.Material.Light.NoActionBar" 
         android:allowBackup="false" 
         android:usesCleartextTraffic="true" 
         android:icon="@mipmap/ic_launcher" 
         android:roundIcon="@mipmap/ic_launcher_round">
+        <activity android:name=".ui.BilibiliLoginActivity" android:exported="false" />
+        <activity android:name=".ui.CommentsActivity" android:exported="false" />
+        <activity android:name=".ui.CommentImageActivity" android:exported="false" />
+        <activity android:name=".ui.LyricsDownloadActivity" android:exported="false" />
+        <service android:name=".data.Mp3ConversionJob" android:exported="false" android:permission="android.permission.BIND_JOB_SERVICE" />
+        <service android:name=".data.DownloadCoverJob" android:exported="false" android:permission="android.permission.BIND_JOB_SERVICE" />
 
         <activity
             android:name=".ui.MetadataActivity"
@@ -27,6 +34,7 @@
         <activity 
             android:name=".ui.MainActivity" 
             android:exported="true" 
+            android:enableOnBackInvokedCallback="true"
             android:launchMode="singleTop">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -73,6 +81,11 @@
 
         <service
             android:name=".data.DownloadLyricsJob"
+            android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE"/>
+
+        <service
+            android:name=".data.DownloadFallbackJob"
             android:exported="false"
             android:permission="android.permission.BIND_JOB_SERVICE"/>
 

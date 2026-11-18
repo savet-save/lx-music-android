@@ -2,6 +2,7 @@ import importlib.util
 import json
 from pathlib import Path
 import subprocess
+import struct
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -33,9 +34,14 @@ class PublishReleaseTest(unittest.TestCase):
         for architecture, abi in release.ARCHITECTURES.items():
             name = f"lx-music-native-v0.9.3-{architecture}.apk"
             path = output / name
-            with zipfile.ZipFile(path, "w") as apk:
+            with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as apk:
                 for value in [abi] if abi else ["armeabi-v7a", "arm64-v8a", "x86", "x86_64"]:
-                    apk.writestr(f"lib/{value}/libfixture.so", b"native fixture")
+                    elf = bytearray(120)
+                    elf[:6] = b"\x7fELF\x02\x01"
+                    struct.pack_into("<Q", elf, 32, 64)
+                    struct.pack_into("<HH", elf, 54, 56, 1)
+                    struct.pack_into("<IIQQQQQQ", elf, 64, 1, 5, 0, 0, 0, 120, 120, 16384)
+                    apk.writestr(f"lib/{value}/libfixture.so", elf)
             apks[architecture] = path
             elements.append({"outputFile": name, "versionName": "0.9.3", "versionCode": 9003,
                              "filters": [{"filterType": "ABI", "value": abi}] if abi else []})

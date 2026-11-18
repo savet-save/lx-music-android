@@ -27,6 +27,7 @@ import cn.toside.music.nativeapp.data.DownloadStatus
 import cn.toside.music.nativeapp.data.DownloadTask
 import cn.toside.music.nativeapp.data.Downloads
 import cn.toside.music.nativeapp.data.DownloadLyricStatus
+import cn.toside.music.nativeapp.data.DownloadCoverStatus
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -38,7 +39,7 @@ class DownloadsFragment : Fragment() {
 
         fun accepts(task: DownloadTask) = when (this) {
             ALL -> true
-            ACTIVE -> task.status in setOf(DownloadStatus.RESOLVING, DownloadStatus.QUEUED, DownloadStatus.RUNNING)
+            ACTIVE -> task.status in setOf(DownloadStatus.RESOLVING, DownloadStatus.QUEUED, DownloadStatus.RUNNING, DownloadStatus.CONVERTING)
             PAUSED -> task.status == DownloadStatus.PAUSED
             FAILED -> task.failed
             COMPLETE -> task.status == DownloadStatus.COMPLETE
@@ -194,6 +195,7 @@ class DownloadsFragment : Fragment() {
         DownloadStatus.RESOLVING -> getString(R.string.download_resolving)
         DownloadStatus.QUEUED -> getString(R.string.download_queued)
         DownloadStatus.RUNNING -> getString(R.string.download_active)
+        DownloadStatus.CONVERTING -> getString(R.string.bili_converting)
         DownloadStatus.PAUSED -> getString(when (task.reason) {
             DownloadManager.PAUSED_WAITING_FOR_NETWORK -> R.string.download_wait_network
             DownloadManager.PAUSED_QUEUED_FOR_WIFI -> R.string.download_wait_wifi
@@ -207,7 +209,7 @@ class DownloadsFragment : Fragment() {
     }
 
     private fun details(task: DownloadTask) {
-        val size = if (task.total > 0) getString(R.string.download_size_mib, task.total / (1024.0 * 1024)) else null
+        val size = getString(R.string.download_total_size, totalSize(task))
         val lyric = task.lyricStatus?.let { getString(when (it) {
             DownloadLyricStatus.PENDING -> R.string.download_lyric_pending
             DownloadLyricStatus.SAVED -> R.string.download_lyric_saved
@@ -215,8 +217,14 @@ class DownloadsFragment : Fragment() {
             DownloadLyricStatus.FAILED -> R.string.download_lyric_failed
         }) }
         val text = listOfNotNull(task.song.artist.takeIf { it.isNotBlank() }, status(task), task.quality?.let(::downloadQualityLabel),
-            size, task.fileName?.let { "${task.directory}$it" }, lyric,
-            task.lyricUri?.let { "${task.directory}${task.fileName?.substringBeforeLast('.')}.lrc" }).joinToString("\n")
+            size, task.sourceName, task.error, task.fileName?.let { "${task.directory}$it" }, lyric,
+            task.lyricUri?.let { "${task.directory}${task.fileName?.substringBeforeLast('.')}.lrc" },
+            task.coverStatus?.let { getString(when (it) {
+                DownloadCoverStatus.PENDING -> R.string.download_cover_pending
+                DownloadCoverStatus.SAVED -> R.string.download_cover_saved
+                DownloadCoverStatus.UNAVAILABLE -> R.string.download_cover_unavailable
+                DownloadCoverStatus.FAILED -> R.string.download_cover_failed
+            }) }, task.coverUri?.let { "${task.directory}${task.fileName?.substringBeforeLast('.')}.jpg" }).joinToString("\n")
         AlertDialog.Builder(requireContext()).setTitle(task.song.title).setMessage(text)
             .setNeutralButton(R.string.download_search_song) { _, _ -> host.searchDownloadedSong(task.song) }
             .setPositiveButton(android.R.string.ok, null).show()
@@ -260,6 +268,10 @@ class DownloadsFragment : Fragment() {
     }
 
     private fun dp(value: Int) = styles.dp(value)
+    private fun totalSize(task: DownloadTask): String {
+        val bytes = task.total.takeIf { it >= 0 } ?: task.bytes.takeIf { task.status == DownloadStatus.COMPLETE && it > 0 }
+        return bytes?.let { getString(R.string.download_size_mib, it / (1024.0 * 1024)) } ?: getString(R.string.download_size_unknown)
+    }
     private inner class TaskAdapter : BaseAdapter() {
         var items = emptyList<DownloadTask>()
         override fun getCount() = items.size
@@ -277,6 +289,7 @@ class DownloadsFragment : Fragment() {
         private val progress: TextView?
         private val state: TextView
         private val quality: TextView?
+        private val fileSize: TextView?
         private val primary = styles.icon(59653, "", 17f) { activate(task) }.apply { tag = "downloads-row-primary"; setTextColor(palette.primary) }
 
         init {
@@ -284,12 +297,14 @@ class DownloadsFragment : Fragment() {
             if (wide) {
                 number = tableCell(width = 36); name = tableCell(weight = 2.4f); artist = null
                 progress = tableCell(weight = .85f); state = tableCell(weight = 1.55f); quality = tableCell(width = 72)
+                state.maxLines = 2; fileSize = null
             } else {
                 number = null; progress = null; quality = null
                 val summary = LinearLayout(context).apply { orientation = VERTICAL; setPadding(dp(12), dp(5), 0, dp(5)) }
                 name = styles.label("", 14f).also { summary.addView(it) }
                 artist = styles.label("", 12f, palette.muted).also { summary.addView(it) }
                 state = styles.label("", 11f, palette.muted).apply { maxLines = 2 }.also { summary.addView(it) }
+                fileSize = styles.label("", 11f, palette.muted).apply { tag = "downloads-row-size" }.also { summary.addView(it) }
                 addView(summary, LayoutParams(0, -2, 1f))
             }
             addView(primary, LayoutParams(dp(44), dp(48)))
@@ -308,7 +323,9 @@ class DownloadsFragment : Fragment() {
             name.text = if (wide && song.artist.isNotBlank()) "${song.title} · ${song.artist}" else song.title
             artist?.apply { text = song.artist; visibility = if (song.artist.isBlank()) View.GONE else View.VISIBLE }
             progress?.text = percent; quality?.text = bitrate
-            state.text = if (wide) status(value) else "${status(value)} · $percent · $bitrate"
+            val size = totalSize(value)
+            state.text = if (wide) "${status(value)}\n$size" else "${status(value)} · $percent · $bitrate"
+            fileSize?.text = getString(R.string.download_total_size, size)
             primary.visibility = if (value.status == DownloadStatus.COMPLETE || value.failed && value.quality != null) View.VISIBLE else View.INVISIBLE
             primary.contentDescription = getString(if (value.status == DownloadStatus.COMPLETE) R.string.download_play else R.string.download_retry)
         }

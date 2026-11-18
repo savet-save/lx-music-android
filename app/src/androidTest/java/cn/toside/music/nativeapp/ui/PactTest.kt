@@ -28,7 +28,7 @@ class PactTest {
         val service = MainActivity::class.java.getDeclaredField("service").apply { isAccessible = true }
         val pact = MainActivity::class.java.getDeclaredField("pactDialog").apply { isAccessible = true }
         val incoming = MainActivity::class.java.getDeclaredField("incomingHandled").apply { isAccessible = true }
-        fun open() = instrumentation.startActivitySync(Intent(context, MainActivity::class.java).setAction(Intent.ACTION_VIEW)
+        fun open() = ForegroundTestActivities.start(Intent(context, MainActivity::class.java).setAction(Intent.ACTION_VIEW)
             .setData(Uri.parse("lxmusic://player/pause")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
         var activity: MainActivity? = null
         try {

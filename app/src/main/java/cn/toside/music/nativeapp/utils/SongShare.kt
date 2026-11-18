@@ -18,6 +18,7 @@ internal object SongShare {
         val data = JSONObject(song.sourceInfo ?: "{}")
         fun value(key: String) = Uri.encode(data.optString(key))
         return when (song.source) {
+            "bili" -> "https://www.bilibili.com/video/${value("bvid")}/"
             "kw" -> "https://www.kuwo.cn/play_detail/${value("songmid") }"
             "kg" -> "https://www.kugou.com/song/#hash=${value("hash")}&album_id=${value("albumId") }"
             "tx" -> "https://y.qq.com/n/yqq/song/${value("songmid")}.html"

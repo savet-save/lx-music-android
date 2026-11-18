@@ -1,0 +1,27 @@
+<resources>
+    <string name="comments_title">「%1$s」的评论</string>
+    <string name="comments_hot">热门</string>
+    <string name="comments_latest">最新</string>
+    <string name="comments_tab_count">%1$s（%2$d）</string>
+    <string name="comments_refresh">刷新评论</string>
+    <string name="comments_likes">%1$d 次点赞，仅展示</string>
+    <string name="comments_anonymous">匿名用户</string>
+    <string name="comments_empty">暂无评论</string>
+    <string name="comments_fallback">原平台暂无可用评论，当前来源：%1$s</string>
+    <string name="comments_view_replies">查看回复（%1$d）</string>
+    <string name="comments_image_title">图片详情</string>
+    <string name="comments_image_error">图片加载失败</string>
+    <string name="comments_image_gestures">双指缩放，放大后可上下左右拖动，双击恢复或放大</string>
+    <string name="comments_image_limit">评论图片加载上限</string>
+    <string name="comments_image_limit_hint">缩略图和图片详情共用此上限，默认 16 MiB。修改后重新加载图片生效。</string>
+    <string name="comments_image_size_error">图片为 %1$s MiB，超过设置的 %2$d MiB 上限。\n可在“设置 → 通用设置”中调整。</string>
+    <string name="comments_image_limit_error">图片超过设置的 %1$d MiB 大小上限。\n可在“设置 → 通用设置”中调整。</string>
+    <string name="comments_image_missing">图片不存在或已失效（HTTP %1$d）。</string>
+    <string name="comments_image_denied">图片服务器拒绝访问（HTTP %1$d）。</string>
+    <string name="comments_image_http_error">图片服务器返回错误（HTTP %1$d），请稍后重试。</string>
+    <string name="comments_image_timeout">图片请求超时，请检查网络后重试。</string>
+    <string name="comments_image_dns_error">无法解析图片服务器地址，请检查网络。</string>
+    <string name="comments_image_tls_error">图片安全连接失败，请检查网络或系统时间。</string>
+    <string name="comments_image_decode_error">图片内容损坏或格式不受支持，无法解码。</string>
+    <string name="comments_image_network_error">图片下载连接失败或已中断，请检查网络后重试。</string>
+</resources>

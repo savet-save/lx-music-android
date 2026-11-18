@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import re
+import runpy
 import shlex
 import shutil
 import subprocess
@@ -15,6 +16,7 @@ from urllib.parse import quote, urlsplit
 import zipfile
 
 ROOT = Path(__file__).resolve().parent.parent
+CHECK_NATIVE_APK = runpy.run_path(str(ROOT / "scripts/verify-native-libraries.py"))["check_apk"]
 TAG_PATTERN = re.compile(r"native-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")
 # Build Tools 37 adds scheme prefixes and SDK ranges to the signer certificate labels.
 SIGNER_SHA256_PATTERN = re.compile(
@@ -266,6 +268,8 @@ def verify_apks(version, code, apksigner):
             packaged = {name.split("/")[1] for name in apk.namelist() if name.startswith("lib/") and name.endswith(".so")}
         if (abi and packaged != {abi}) or (not abi and not {"armeabi-v7a", "arm64-v8a"}.issubset(packaged)):
             raise ValueError(f"Wrong native libraries in {name}: {sorted(packaged)}")
+        if architecture != "armv7":
+            CHECK_NATIVE_APK(path, verbose=False)
         verification = run([apksigner, "verify", "--verbose", "--print-certs", str(path)])
         signers = {digest.lower() for digest in SIGNER_SHA256_PATTERN.findall(verification)}
         if not signers:

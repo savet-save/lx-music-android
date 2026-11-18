@@ -19,6 +19,7 @@ import cn.toside.music.nativeapp.ui.MainActivity
 import cn.toside.music.nativeapp.ui.PlayerLyricScroll
 import cn.toside.music.nativeapp.ui.UiPalette
 import cn.toside.music.nativeapp.ui.SettingsFragment
+import cn.toside.music.nativeapp.ui.ForegroundTestActivities
 import cn.toside.music.nativeapp.online.PlaylistBrowserRepository
 import cn.toside.music.nativeapp.online.PlaylistBrowseQuery
 import cn.toside.music.nativeapp.online.OnlinePlaylist
@@ -27,8 +28,11 @@ import cn.toside.music.nativeapp.online.Board
 import cn.toside.music.nativeapp.online.ChartsRepository
 import cn.toside.music.nativeapp.online.NativeChartsRepository
 import cn.toside.music.nativeapp.utils.PermissionPolicy
+import cn.toside.music.nativeapp.MultiSourceAudioServer
+import cn.toside.music.nativeapp.source.UserSources
+import cn.toside.music.nativeapp.online.BilibiliAudio
+import cn.toside.music.nativeapp.online.BilibiliAudioProvider
 
-import android.app.Dialog
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.Intent
@@ -66,6 +70,10 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.collect
 import org.junit.Assert.*
 import org.junit.Assume.assumeFalse
 import org.junit.Test
@@ -108,7 +116,7 @@ class PlaybackSettingsTest {
         var activity = open()
         lateinit var player: PlaybackService
         val song = Song(id, Uri.fromFile(file), "settings test", "test artist", 30_000)
-        private fun open() = instrumentation.startActivitySync(Intent(context, MainActivity::class.java)
+        private fun open() = ForegroundTestActivities.start(Intent(context, MainActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
         suspend fun bind() {
             waitFor { !activity.isFinishing && activity.hasWindowFocus() && field(activity, "service") != null }
@@ -285,7 +293,7 @@ class PlaybackSettingsTest {
         val saved = if (catalog.baseFile.isFile) catalog.readFully() else null
         try {
             withPlayback { fixture ->
-                fixture.player.importSource("""/** @name source fallback test */
+                fixture.player.importExclusiveTestSource("""/** @name source fallback test */
                     lx.on(lx.EVENT_NAMES.request, ({source}) => source === 'kw' ? Promise.reject(new Error('unavailable')) : Promise.resolve('http://127.0.0.1/matched.mp3'));
                     lx.send(lx.EVENT_NAMES.inited, {sources: {
                       kw: {type: 'music', actions: ['musicUrl'], qualitys: ['128k']},
@@ -323,6 +331,10 @@ class PlaybackSettingsTest {
         } finally {
             catalog.delete(); if (saved != null) { val stream = catalog.startWrite(); stream.write(saved); catalog.finishWrite(stream) }
         }
+    }
+    private suspend fun PlaybackService.importExclusiveTestSource(script: String) {
+        importSource(script)
+        setEnabledSources(listOf(cn.toside.music.nativeapp.source.UserSourceLibrary.metadata(script).id))
     }
     private fun qualityScript(body: String) = """/** @name bitrate fallback fixture */
         let attempts = [];
@@ -456,6 +468,92 @@ class PlaybackSettingsTest {
         }
     }
 
+    private suspend fun bilibiliRetryFixture(failures: Int, urlFailures: Int = 0, backups: Boolean = false,
+        check: suspend (Fixture, Song, MultiSourceAudioServer) -> Unit) {
+        withQualityPlayback { fixture, reference ->
+            MultiSourceAudioServer().use { server ->
+                val song = reference.copy(source = "bili", sourceInfo = org.json.JSONObject(reference.sourceInfo!!)
+                    .put("cid", 1).put("bvid", "offline-fixture").toString())
+                val original = field(fixture.player, "userSource") as UserSources
+                val provider = object : BilibiliAudioProvider {
+                    var attempt = 0
+                    override suspend fun audioStreams(info: org.json.JSONObject): List<BilibiliAudio> {
+                        attempt++
+                        if (attempt <= urlFailures) throw java.io.IOException("Temporary playback URL failure")
+                        val url = server.url(if (attempt <= failures) "forbidden" else "good") + "?attempt=$attempt"
+                        return listOf(BilibiliAudio(url, 192000, "original", 30280, if (backups) listOf(server.url("good")) else emptyList()))
+                    }
+                }
+                val sources = UserSources(context, provider)
+                val sourceField = PlaybackService::class.java.getDeclaredField("userSource").apply { isAccessible = true }
+                sourceField.set(fixture.player, sources)
+                val native = fixture.player.sourceCatalog().entries.single { it.name == "B站音源" }
+                fixture.player.setEnabledSources(listOf(native.id))
+                Lyrics(context).cache(song, listOf(LyricLine(0, "retry fixture")))
+                try { check(fixture, song, server) }
+                finally {
+                    main { fixture.player.clearQueue(); sourceField.set(fixture.player, original) }
+                    sources.close(); AudioStreamCache.existing()?.remove(AudioStreamCache.key(song, "original"))
+                }
+            }
+        }
+    }
+
+    @Test fun bilibili403RefreshesTheSameSourceThreeTimesWithoutAnEarlyErrorAndThenPlays() = runBlocking {
+        bilibiliRetryFixture(3) { fixture, song, server ->
+            val states = java.util.concurrent.ConcurrentLinkedQueue<PlayerState>()
+            val observation = CoroutineScope(currentCoroutineContext()).launch(Dispatchers.Unconfined) { fixture.player.state.collect { states.add(it) } }
+            try {
+                main { fixture.player.play(listOf(song), 0) }
+                waitFor { fixture.player.state.value.playing || fixture.player.state.value.error != null }
+                assertTrue(fixture.player.state.value.playing); assertNull(fixture.player.state.value.error)
+                assertTrue(states.none { it.error != null })
+                assertEquals(4, server.requests.size)
+                assertEquals(4, server.requests.distinct().size)
+                assertTrue(server.requests.last().startsWith("/good"))
+                assertTrue(server.requestHeaders.all { "cookie" !in it && it["referer"] == "https://www.bilibili.com/" })
+            } finally { observation.cancel() }
+        }
+    }
+
+    @Test fun bilibili403ReportsOneFinalErrorOnlyAfterAllThreeAutomaticRetriesFail() = runBlocking {
+        bilibiliRetryFixture(Int.MAX_VALUE) { fixture, song, server ->
+            val observations = java.util.concurrent.ConcurrentLinkedQueue<Pair<Int, PlayerState>>()
+            val observation = CoroutineScope(currentCoroutineContext()).launch(Dispatchers.Unconfined) {
+                fixture.player.state.collect { observations.add(server.requests.size to it) }
+            }
+            try {
+                main { fixture.player.play(listOf(song), 0) }
+                waitFor { fixture.player.state.value.error != null }
+                assertEquals(4, server.requests.size)
+                assertTrue(observations.filter { it.first < 4 }.none { it.second.error != null })
+                assertTrue(fixture.player.state.value.error!!.contains("HTTP 403"))
+                assertTrue(fixture.player.state.value.error!!.contains("3"))
+                assertFalse(fixture.player.state.value.preparing)
+                delay(500); assertEquals(4, server.requests.size)
+            } finally { observation.cancel() }
+        }
+    }
+
+    @Test fun transientPlaybackUrlFailuresAreRetriedBeforeAnErrorIsPublished() = runBlocking {
+        bilibiliRetryFixture(0, urlFailures = 3) { fixture, song, server ->
+            main { fixture.player.play(listOf(song), 0) }
+            waitFor { fixture.player.state.value.playing || fixture.player.state.value.error != null }
+            assertTrue(fixture.player.state.value.error, fixture.player.state.value.playing)
+            assertEquals(1, server.requests.size)
+        }
+    }
+
+    @Test fun bilibiliUsesTheBackupCdnAfterA403InsteadOfRepeatingTheRejectedPrimary() = runBlocking {
+        bilibiliRetryFixture(Int.MAX_VALUE, backups = true) { fixture, song, server ->
+            main { fixture.player.play(listOf(song), 0) }
+            waitFor { fixture.player.state.value.playing || fixture.player.state.value.error != null }
+            assertTrue(fixture.player.state.value.error, fixture.player.state.value.playing)
+            assertEquals(2, server.requests.size)
+            assertTrue(server.requests.first().startsWith("/forbidden")); assertTrue(server.requests.last().startsWith("/good"))
+        }
+    }
+
     @Test fun threeRetriesAcrossPartialProgressClearOnlyTheFailedCacheAndShowTheReason() = runBlocking {
         withQualityPlayback { fixture, song ->
             val bytes = fixture.file.readBytes()
@@ -489,10 +587,24 @@ class PlaybackSettingsTest {
         }
     }
 
+    @Test fun cachedBilibiliAudioPlaysWithItsSourceDisabledWithoutFetchingVideoMetadata() = runBlocking {
+        withQualityPlayback { fixture, reference ->
+            val song=reference.copy(source="bili",sourceInfo="""{"bvid":"BV1xx411c7mD","songmid":"BV1xx411c7mD"}""")
+            val cache=cacheAudio(song,"original",Uri.parse("http://127.0.0.1:1/cached-bili.wav"),fixture.file.readBytes())
+            Lyrics(context).cache(song,listOf(LyricLine(0,"cached lyrics")))
+            try {
+                fixture.player.selectSource(null)
+                main { fixture.player.play(listOf(song),0) }
+                waitFor { fixture.player.state.value.playing || fixture.player.state.value.error != null }
+                assertNull(fixture.player.state.value.error)
+                assertTrue(fixture.player.state.value.playing)
+            } finally { main { fixture.player.clearQueue() };cache.remove(AudioStreamCache.key(song,"original")) }
+        }
+    }
     @Test fun failedMusicUrlLowersQualityByDefaultButDisabledAndDownloadsKeepTheirQuality() = runBlocking {
         withQualityPlayback { fixture, song ->
             assertTrue(AppPreferences(context).autoLowerQuality)
-            fixture.player.importSource(qualityScript("if (info.type !== '128k') throw new Error('unavailable ' + info.type); return Promise.resolve('http://127.0.0.1/' + attempts.join(','));"))
+            fixture.player.importExclusiveTestSource(qualityScript("if (info.type !== '128k') throw new Error('unavailable ' + info.type); return Promise.resolve('http://127.0.0.1/' + attempts.join(','));"))
             assertEquals("http://127.0.0.1/flac24bit,flac,320k,128k", fixture.player.resolveUrl(song))
             assertEquals("flac24bit", context.getSharedPreferences("player", 0).getString("quality", null))
             AppPreferences(context).set("player.autoLowerQuality", false)
@@ -547,7 +659,7 @@ class PlaybackSettingsTest {
     @Test fun httpAndDecoderFailuresLowerBitrateUseSeparateCachesAndStopWhenExhaustedOrDisabled() = runBlocking {
         withQualityPlayback { fixture, song ->
             QualityAudioServer(fixture.file.readBytes()).use { server ->
-                fixture.player.importSource(qualityScript("return Promise.resolve('${server.address}/' + info.type);"))
+                fixture.player.importExclusiveTestSource(qualityScript("return Promise.resolve('${server.address}/' + info.type);"))
                 main { fixture.player.play(listOf(song), 0) }
                 waitFor { fixture.player.state.value.playing }
                 assertEquals(listOf("flac24bit", "flac", "320k"), server.requests.distinct())
@@ -583,7 +695,7 @@ class PlaybackSettingsTest {
         withQualityPlayback { fixture, song ->
             QualityAudioServer(fixture.file.readBytes()).use { server ->
                 server.holdAudio = true
-                fixture.player.importSource(qualityScript("return Promise.resolve('${server.address}/' + info.type);"))
+                fixture.player.importExclusiveTestSource(qualityScript("return Promise.resolve('${server.address}/' + info.type);"))
                 main { fixture.player.play(listOf(song), 0) }
                 assertTrue(server.audioStarted.await(10, TimeUnit.SECONDS))
                 main { fixture.player.pause(); fixture.player.setPlaybackRate(1.25f); fixture.player.setVolume(.3f) }
@@ -615,7 +727,7 @@ class PlaybackSettingsTest {
                 main { fixture.player.clearQueue() }
                 cn.toside.music.nativeapp.source.PLAYBACK_QUALITIES.forEach { AudioStreamCache.existing()?.remove(AudioStreamCache.key(song, it)) }
                 server.holdAudio = true
-                fixture.player.importSource(qualityScript("return Promise.resolve('${server.address}/' + info.type);"))
+                fixture.player.importExclusiveTestSource(qualityScript("return Promise.resolve('${server.address}/' + info.type);"))
                 main { fixture.player.play(listOf(song), 0) }
                 assertTrue(server.audioStarted.await(10, TimeUnit.SECONDS))
                 main { fixture.player.play(listOf(fixture.song), 0) }
@@ -629,7 +741,7 @@ class PlaybackSettingsTest {
     }
     @Test fun sourceTimeoutLowersBitrateWhileCallerCancellationStopsTheRequest() = runBlocking {
         withQualityPlayback { fixture, song ->
-            fixture.player.importSource(qualityScript("if (info.type === 'flac24bit') return new Promise(() => {}); return Promise.resolve('http://127.0.0.1/' + attempts.join(','));"))
+            fixture.player.importExclusiveTestSource(qualityScript("if (info.type === 'flac24bit') return new Promise(() => {}); return Promise.resolve('http://127.0.0.1/' + attempts.join(','));"))
             assertEquals("http://127.0.0.1/flac24bit,flac", withTimeout(26_000) { fixture.player.resolveUrl(song) })
             val cancelled = kotlinx.coroutines.withTimeoutOrNull(150) { fixture.player.resolveUrl(song) }
             assertNull(cancelled)
@@ -706,7 +818,7 @@ class PlaybackSettingsTest {
             withPlayback { fixture ->
                 audioBytes.set(fixture.file.readBytes())
                 val base = "http://127.0.0.1:${server.localPort}"
-                fixture.player.importSource("""/** @name cover test */
+                fixture.player.importExclusiveTestSource("""/** @name cover test */
                     lx.on(lx.EVENT_NAMES.request, () => Promise.resolve('$base/audio'));
                     lx.send(lx.EVENT_NAMES.inited, {sources: {kw: {type: 'music', actions: ['musicUrl'], qualitys: ['128k']}}});
                 """.trimIndent())
@@ -740,15 +852,17 @@ class PlaybackSettingsTest {
                 waitFor { fixture.player.artworkState.value.bitmap != null }
 
                 val activity = fixture.activity
-                val heading = field(activity, "heading") as TextView
                 fun selectPage(tag: String) = main { activity.window.decorView.findViewWithTag<View>(tag).performClick() }
                 selectPage("navigation-1")
                 assertEquals(true, field(activity, "onlineMode"))
                 selectPage("navigation-local")
-                assertEquals(activity.getString(R.string.ui_33eeaa47c231), heading.text.toString())
+                assertEquals(activity.getString(R.string.ui_a9531e47b75d), (field(activity, "pageTitle") as TextView).text.toString())
+                assertFalse((field(activity, "pageTitle") as View).isClickable)
                 assertTrue((field(activity, "visibleSongs") as List<*>).all { (it as Song).source == "local" })
                 val favorites = Playlists(context).use { it.loveList() }
-                main { heading.performClick() }
+                selectPage("navigation-0")
+                waitFor { (field(activity, "activePlaylist") as? Playlist)?.id == favorites }
+                main { (field(activity, "pageTitle") as View).performClick() }
                 val favoriteTag = "playlist-choice-$favorites"
                 waitFor { activity.window.decorView.findViewWithTag<View>(favoriteTag)?.isShown == true }
                 assertNull(activity.window.decorView.findViewWithTag<View>("playlist-choice-local"))
@@ -882,7 +996,7 @@ class PlaybackSettingsTest {
                 main { restored.findViewWithTag<View>("playback-reset").performClick() }
                 assertEquals(1f, fixture.player.state.value.playbackRate, 0.01f)
                 assertEquals(1f, fixture.player.state.value.volume, 0.01f)
-                assertEquals(LyricAlignment.LEFT, settings.appearance(landscape).alignment)
+                assertEquals(LyricAlignment.CENTER, settings.appearance(landscape).alignment)
                 assertEquals(0, LyricOffsets(context).get(fixture.song))
             } finally { lrc.delete() }
         }
@@ -959,6 +1073,10 @@ class PlaybackSettingsTest {
         }
         withPlayback { fixture ->
             fixture.play(); val original = fixture.player
+            main {
+                MainActivity::class.java.getDeclaredMethod("openLocalPage", Boolean::class.javaPrimitiveType)
+                    .apply { isAccessible = true }.invoke(fixture.activity, false)
+            }
             for ((language, label) in listOf("en" to "Local music", "zh-TW" to "本地音樂")) {
                 // waitForMonitorWithTimeout removes the monitor after it receives one Activity.
                 val monitor = instrumentation.addMonitor(MainActivity::class.java.name, null, false)
@@ -976,9 +1094,9 @@ class PlaybackSettingsTest {
                     val notification = PlaybackService::class.java.getDeclaredMethod("notification").apply { isAccessible = true }.invoke(fixture.player) as android.app.Notification
                     assertEquals(if (language == "en") "Next song" else "下一首", notification.actions[2].title.toString())
                     invoke(fixture.activity, "showPlayerDetails")
-                    assertEquals(if (language == "en") "Repeat playlist" else "列表循環", (field(fixture.activity, "detailMode") as TextView).text.toString())
+                    assertEquals(if (language == "en") "Repeat playlist" else "列表循環", (field(fixture.activity, "detailMode") as TextView).contentDescription.toString())
                     screenshot("player-$language")
-                    main { (field(fixture.activity, "playerDialog") as Dialog).dismiss() }
+                    main { fixture.activity.closePlayerDetails() }
                 } finally { instrumentation.removeMonitor(monitor) }
             }
         }

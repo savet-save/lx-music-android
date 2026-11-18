@@ -3,14 +3,30 @@ package cn.toside.music.nativeapp.ui
 import cn.toside.music.nativeapp.data.AppPreferences
 
 import android.content.res.Configuration
+import android.graphics.Color
 import android.os.Build
 import android.view.View
 import android.view.Window
 import android.view.WindowInsets
 import android.view.WindowInsetsController
 import android.view.WindowManager
+import androidx.core.view.WindowInsetsControllerCompat
 
 internal object ScreenInsets {
+    @Suppress("DEPRECATION")
+    fun styleSystemBars(window: Window, dark: Boolean) {
+        window.statusBarColor = Color.TRANSPARENT
+        window.navigationBarColor = Color.TRANSPARENT
+        if (Build.VERSION.SDK_INT >= 29) {
+            window.isStatusBarContrastEnforced = false
+            window.isNavigationBarContrastEnforced = false
+        }
+        WindowInsetsControllerCompat(window, window.decorView).apply {
+            isAppearanceLightStatusBars = !dark
+            isAppearanceLightNavigationBars = !dark
+        }
+    }
+
     @Suppress("DEPRECATION")
     fun install(window: Window, root: View) {
         val landscape = root.resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE

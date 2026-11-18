@@ -29,6 +29,7 @@ internal class PlayerLyricScroll(
     private var downY = 0f
     private var initialScroll = 0
     private var followingIndex = -1
+    private var hasFollowed = false
 
     init {
         isVerticalScrollBarEnabled = false
@@ -41,6 +42,11 @@ internal class PlayerLyricScroll(
         val inset = MeasureSpec.getSize(heightMeasureSpec) / 2
         if (lines.paddingTop != inset) lines.setPadding(lines.paddingLeft, inset, lines.paddingRight, inset)
         super.onMeasure(widthMeasureSpec, heightMeasureSpec)
+    }
+
+    override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
+        super.onLayout(changed, left, top, right, bottom)
+        if (changed && !tracking) centerLine(followingIndex, animate = false)
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
@@ -97,9 +103,16 @@ internal class PlayerLyricScroll(
         if (tracking || !isShown) return
         doOnLayout {
             if (!tracking && isShown && row.parent === lines) {
-                smoothScrollTo(0, (row.top + row.height / 2 - height / 2).coerceAtLeast(0))
+                centerLine(index, animate = hasFollowed)
             }
         }
+    }
+
+    private fun centerLine(index: Int, animate: Boolean) {
+        val row = lines.getChildAt(index) ?: return
+        val target = (row.top + row.height / 2 - height / 2).coerceAtLeast(0)
+        if (animate) smoothScrollTo(0, target) else scrollTo(0, target)
+        hasFollowed = true
     }
 
     private fun centeredLine(): Int? {

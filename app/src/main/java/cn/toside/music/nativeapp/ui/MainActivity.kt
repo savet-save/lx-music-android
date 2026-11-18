@@ -44,6 +44,7 @@ import cn.toside.music.nativeapp.player.PlayerSettings
 import cn.toside.music.nativeapp.player.PlayerState
 import cn.toside.music.nativeapp.source.UserSourceEntry
 import cn.toside.music.nativeapp.source.UserSourceLibrary
+import cn.toside.music.nativeapp.source.SourceAudio
 import cn.toside.music.nativeapp.sync.BackgroundSyncSettings
 import cn.toside.music.nativeapp.sync.BackgroundSyncState
 import cn.toside.music.nativeapp.sync.SyncService
@@ -71,7 +72,6 @@ import android.os.Bundle
 import android.os.Parcelable
 import android.os.IBinder
 import android.app.AlertDialog
-import android.app.Dialog
 import android.net.Uri
 import android.text.Editable
 import android.text.TextWatcher
@@ -97,6 +97,7 @@ import android.widget.TextView
 import cn.toside.music.nativeapp.utils.ToastUtils
 import androidx.activity.OnBackPressedCallback
 import androidx.fragment.app.FragmentActivity
+import android.app.Dialog
 import androidx.fragment.app.FragmentContainerView
 import androidx.navigation.NavController
 import androidx.navigation.NavOptions
@@ -169,7 +170,7 @@ class MainActivity : FragmentActivity() {
     }
     private var restoreNavigation = false
     private var tableHeader: FrameLayout? = null
-    private var playerRestorePending = false
+    private var pendingPlayerOpen = false
     private var returnToPlayerFromSettings = false
     private var restoreDetailLyrics = false
     private var highlightedSong: String? = null
@@ -191,7 +192,8 @@ class MainActivity : FragmentActivity() {
     private var onlinePlaylistPage = 0
     private var selectedBoard: Board? = null
     private var boardPage = 0
-    private data class DownloadRequest(val song: Song, val quality: String, val retryKey: String? = null)
+    private data class DownloadRequest(val song: Song, val quality: String, val retryKey: String? = null,
+        val conversion: Boolean = false, val address: SourceAudio? = null)
     private var pendingDownload: DownloadRequest? = null
     private var waitingForDownloadSettings = false
     private var waitingForServiceDownload: DownloadRequest? = null
@@ -209,7 +211,7 @@ class MainActivity : FragmentActivity() {
     private var waitingForServicePlayback: AudioAction? = null
     private var searchSource = SearchCatalog.ALL
     private val platformPopup = PlatformPopup()
-    private var searchCatalog = SearchCatalog()
+    private var searchCatalog = SearchCatalog(songSearch = { provider,query,page -> OnlineSearch(applicationContext).search(query,page,provider) })
     private var playlistSearchMode = false
     private var playlistSearchResults = emptyList<OnlinePlaylist>()
     private var searchNextPages = emptyMap<String, Int>()
@@ -220,6 +222,7 @@ class MainActivity : FragmentActivity() {
     private lateinit var searchSourceButton: TextView
     private lateinit var searchClearButton: TextView
     private lateinit var headerSyncButton: View
+    private lateinit var headerListActions: LinearLayout
     private lateinit var listHeaderView: LinearLayout
     private lateinit var emptyIcon: TextView
     private lateinit var emptyHint: TextView
@@ -245,7 +248,7 @@ class MainActivity : FragmentActivity() {
     private lateinit var pageTitle: TextView
     private lateinit var lyric: TextView
     private lateinit var loadMore: TextView
-    private var playerDialog: Dialog? = null
+    private var detailContent: PlayerDetailContent? = null
     private var detailTitle: TextView? = null
     private var detailTime: TextView? = null
     private var detailSeek: SeekBar? = null
@@ -274,6 +277,7 @@ class MainActivity : FragmentActivity() {
     private var pendingPlaylistGridState: Parcelable? = null
     private var restoringSearchText = false
     private var suppressPageNavigation = false
+    private var homePageMemoryReady = false
     private var beforePlaylistSaved: Bundle? = null
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
@@ -304,6 +308,7 @@ class MainActivity : FragmentActivity() {
             handleIncomingIntent()
             settingsFragment()?.refreshSources()
             settingsFragment()?.refreshPlayback()
+            refreshBilibiliSearchAvailability()
         }
         override fun onServiceDisconnected(name: ComponentName?) { service = null; stateJob?.cancel(); lyricJob?.cancel(); artworkJob?.cancel(); sourceUpdateJob?.cancel() }
     }
@@ -333,7 +338,6 @@ class MainActivity : FragmentActivity() {
         startupPlayerPending = savedInstanceState == null && preferences.startupPlayer
         iconFont = Typeface.createFromAsset(assets, "fonts/icomoon.ttf")
         lx = LxStyles(this, palette, iconFont)
-        playerRestorePending = savedInstanceState?.getBoolean("player-open") == true
         returnToPlayerFromSettings = savedInstanceState?.getBoolean("settings-return-player") == true
         restoreDetailLyrics = savedInstanceState?.getBoolean("player-lyrics") == true
         pendingLyricSongId = savedInstanceState?.let { if (it.containsKey("lyricSongId")) it.getLong("lyricSongId") else null }
@@ -348,12 +352,14 @@ class MainActivity : FragmentActivity() {
         buildUi()
         initializeNavigation()
         if (preferences.bool("common.isAgreePact")) {
-            if (!restorePage(savedInstanceState)) { if (hasAudioPermission()) loadSongs() else showLocalPermissionPrompt() }
+            if (!restorePage(savedInstanceState)) openStartupPage()
+            homePageMemoryReady = true
             if (savedInstanceState?.getBoolean("playlist-drawer-open") == true) window.decorView.post {
                 if (navigation?.currentDestination?.id == R.id.music_page) showPlaylists()
             }
         } else pactDialog = showPact(this, scope) {
-            if (hasAudioPermission()) loadSongs() else showLocalPermissionPrompt()
+            openStartupPage()
+            homePageMemoryReady = true
             startAppServices()
         }
     }
@@ -404,8 +410,9 @@ class MainActivity : FragmentActivity() {
     override fun onPostResume() {
         super.onPostResume()
         pendingSettingsState?.let { saved -> pendingSettingsState = null; openSettings(state = saved) }
+        if (pendingPlayerOpen) { pendingPlayerOpen = false; showPlayerDetails() }
     }
-    override fun onDestroy() { pactDialog?.dismiss(); playerDialog?.dismiss(); downloadQualityDialog?.dismiss(); scope.cancel(); super.onDestroy() }
+    override fun onDestroy() { pactDialog?.dismiss(); downloadQualityDialog?.dismiss(); scope.cancel(); super.onDestroy() }
     override fun onSaveInstanceState(outState: Bundle) {
         val page = pageSnapshot()
         retainedPageState.page = page
@@ -414,7 +421,6 @@ class MainActivity : FragmentActivity() {
         saveMusicPage(page, outState)
         outState.putBundle("music-before-playlist", retainedPageState.beforePlaylist?.let { Bundle().apply { saveMusicPage(it, this) } } ?: beforePlaylistSaved)
         outState.putBoolean("incoming-handled", incomingHandled)
-        outState.putBoolean("player-open", playerDialog?.isShowing == true || playerRestorePending)
         outState.putBoolean("settings-return-player", returnToPlayerFromSettings)
         outState.putBoolean("player-lyrics", detailShowingLyrics)
         pendingLyricSongId?.let { outState.putLong("lyricSongId", it) }
@@ -460,7 +466,6 @@ class MainActivity : FragmentActivity() {
             try { search.setText(retained.query) } finally { restoringSearchText = false }
             suggestionJob?.cancel(); setSearchVisible(retained.searchVisible)
             updateListAction()
-            pageTitle.text = getString(when { boardMode -> R.string.ui_1ee95aa94712; onlinePlaylistMode -> R.string.ui_473e57b72072; onlineMode -> R.string.ui_44ce7ae909bb; activePlaylist != null -> R.string.ui_27c95ec6b766; else -> R.string.ui_a9531e47b75d })
             heading.text = when { boardMode -> "›   ${selectedBoard?.name.orEmpty()}"; onlinePlaylistMode -> "›   ${selectedOnlinePlaylist?.name.orEmpty()}"
                 onlineMode -> getString(R.string.ui_e07216a6d505, sourceLabel()); activePlaylist != null -> "›   ${activePlaylist!!.displayName}"; else -> getString(R.string.ui_33eeaa47c231) }
             if (preferences.saveScroll) { pendingScroll = retained.first to retained.top; pendingPlaylistGridState = retained.playlistGridState }
@@ -506,6 +511,34 @@ class MainActivity : FragmentActivity() {
             hasAudioPermission() -> loadSongs(); else -> showLocalPermissionPrompt() }
     }
 
+    private fun openStartupPage() {
+        val page = preferences.string("home.lastPage", "search")
+        openSearchPage(false)
+        when (page) {
+            "playlists" -> showOnlinePlaylists()
+            "charts" -> showBoards()
+            "my-lists" -> openMyLists()
+            "local" -> openLocalPage(false)
+        }
+    }
+
+    private fun rememberHomePage() {
+        if (!homePageMemoryReady || suppressPageNavigation) return
+        val page = when (navigation?.currentDestination?.id) {
+            R.id.playlist_browser -> "playlists"
+            R.id.charts_page -> "charts"
+            R.id.music_page, R.id.playlist_songs -> when {
+                boardMode -> "charts"
+                onlinePlaylistMode -> "playlists"
+                onlineMode -> "search"
+                activePlaylist != null -> "my-lists"
+                else -> "local"
+            }
+            else -> return
+        }
+        if (preferences.string("home.lastPage", "") != page) preferences.set("home.lastPage", page)
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent); setIntent(intent); incomingHandled = false
         if (intent.getBooleanExtra("open-player", false) && service != null) { intent.removeExtra("open-player"); showPlayerDetails() }
@@ -547,7 +580,8 @@ class MainActivity : FragmentActivity() {
         scope.launch {
             try {
                 val script = withContext(Dispatchers.IO) { contentResolver.openInputStream(uri)?.use { it.readBounded(2 * 1024 * 1024).toString(Charsets.UTF_8) } ?: error(getString(R.string.ui_5903b3b5a9ca)) }
-                (service ?: error(getString(R.string.ui_7ca47a28e695))).importSource(script); toast(getString(R.string.ui_18710cc58894))
+                val imported = (service ?: error(getString(R.string.ui_7ca47a28e695))).importSource(script)
+                toast(getString(if (imported.optBoolean("enabled")) R.string.ui_18710cc58894 else R.string.sources_import_disabled))
                 settingsFragment()?.refreshSources()
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) { toast(getString(R.string.ui_0874f11320ab, java.lang.String.valueOf(e.localizedMessage))) }
@@ -648,6 +682,9 @@ class MainActivity : FragmentActivity() {
         val navContainer = findViewById<FragmentContainerView>(R.id.main_nav_host)
             ?: FragmentContainerView(this).apply { id = R.id.main_nav_host }
         (navContainer.parent as? ViewGroup)?.removeView(navContainer)
+        val playerContainer = findViewById<FragmentContainerView>(R.id.player_host)
+            ?: FragmentContainerView(this).apply { id = R.id.player_host }
+        (playerContainer.parent as? ViewGroup)?.removeView(playerContainer)
         navigationDrawer?.close(false)
         navigationDrawer = null
         playlistDrawer?.close(false)
@@ -657,7 +694,7 @@ class MainActivity : FragmentActivity() {
         val foreground = palette.foreground
         val root = HomeNavigationLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            tag = if (uiLayout.expanded) "home-expanded" else "home-compact"
+            tag = "home-content"
             setBackgroundColor(palette.surface); fitsSystemWindows = true
             eligible = { y ->
                 val searchBounds = android.graphics.Rect()
@@ -695,11 +732,16 @@ class MainActivity : FragmentActivity() {
         val menu = lx.icon(59680, getString(R.string.ui_e35a36e26d52), 19f) { showNavigation() }
         pageTitle = lx.label(getString(R.string.ui_a9531e47b75d), 19f).apply {
             setPadding(dp(8), 0, dp(8), 0); setTypeface(null, Typeface.BOLD)
+            tag = "music-page-title"; gravity = Gravity.CENTER_VERTICAL; minHeight = dp(48)
+            maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END; isAccessibilityHeading = true
+            setOnClickListener { if (!onlineMode && activePlaylist != null) showPlaylists() }
         }
         if (!uiLayout.expanded && !preferences.menuOnRight) header.addView(menu, LinearLayout.LayoutParams(dp(48), dp(48)))
         header.addView(pageTitle, LinearLayout.LayoutParams(0, -2, 1f))
         searchTabs = buildSearchTabs()
         header.addView(searchTabs, LinearLayout.LayoutParams(-2, -2))
+        headerListActions = LinearLayout(this).apply { tag = "music-header-actions"; visibility = View.GONE }
+        header.addView(headerListActions, LinearLayout.LayoutParams(dp(48), dp(48)))
         headerSyncButton = lx.icon(59687, getString(R.string.ui_727036c7fc2a)) { showSyncSettings() }
         header.addView(headerSyncButton, LinearLayout.LayoutParams(dp(48), dp(48)))
         if (uiLayout.expanded || preferences.menuOnRight) header.addView(menu, LinearLayout.LayoutParams(dp(48), dp(48)))
@@ -719,7 +761,7 @@ class MainActivity : FragmentActivity() {
             text = getString(R.string.ui_33eeaa47c231); textSize = 14f; setTextColor(foreground); gravity = Gravity.CENTER_VERTICAL
             background = lx.touch(); isFocusable = true; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
             setPadding(dp(15), 0, dp(8), 0); setOnClickListener {
-                if (boardMode) showBoards() else if (onlinePlaylistMode) showOnlinePlaylists() else if (onlineMode) showSearchSources() else showPlaylists()
+                if (boardMode) showBoards() else if (onlinePlaylistMode) showOnlinePlaylists() else if (onlineMode) showSearchSources() else if (activePlaylist != null) showPlaylists()
             }
             setOnLongClickListener {
                 if ((boardMode || onlinePlaylistMode) && allSongs.isNotEmpty()) { saveCurrentOnlineList(); true } else false
@@ -731,7 +773,20 @@ class MainActivity : FragmentActivity() {
             background = lx.touch(); isFocusable = true
             setOnClickListener {
                 if (boardMode || onlinePlaylistMode) showOnlineListActions()
-                else setSearchVisible(search.visibility != View.VISIBLE)
+                else {
+                    if (!onlineMode) playlistDrawer?.close(false)
+                    val visible = search.visibility != View.VISIBLE
+                    setSearchVisible(visible)
+                    if (!onlineMode) {
+                        if (visible) {
+                            search.requestFocus()
+                            search.post {
+                                if (search.isShown && !onlineMode) (getSystemService(INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager)
+                                    .showSoftInput(search, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT)
+                            }
+                        } else { search.text.clear(); hidePageKeyboard() }
+                    }
+                }
             }
             setOnLongClickListener { showBatchSongs(); true }
         }
@@ -874,11 +929,18 @@ class MainActivity : FragmentActivity() {
         }
         root.addView(seek, LinearLayout.LayoutParams(-1, dp(18)))
         palette.background(root); palette.textStyle(root)
-        installHomeContent(root)
+        val screen = FrameLayout(this).apply {
+            tag = if (uiLayout.expanded) "home-expanded" else "home-compact"
+            setBackgroundColor(palette.surface)
+            addView(root, FrameLayout.LayoutParams(-1, -1))
+            addView(playerContainer, FrameLayout.LayoutParams(-1, -1))
+        }
+        installHomeContent(screen)
         activeMusicFragment()?.refreshContent()
         updateNavigationSelection()
         updateSearchChrome()
-        ScreenInsets.install(window, root)
+        ScreenInsets.install(window, screen)
+        ScreenInsets.styleSystemBars(window, palette.theme.dark)
         if (restoreNavigation) { root.post { navigationDrawer?.open(false) }; restoreNavigation = false }
         search.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
@@ -929,6 +991,7 @@ class MainActivity : FragmentActivity() {
         }
     }
     private fun selectSearchCategory(playlists: Boolean) {
+        if(playlists && searchSource == "bili") searchSource=SearchCatalog.ALL
         if (playlistSearchMode == playlists) return
         playlistSearchMode = playlists
         resetCatalogResults()
@@ -947,9 +1010,17 @@ class MainActivity : FragmentActivity() {
         hidden.visibility = View.GONE
         if (shown.emptyView !== resultsEmpty) shown.emptyView = resultsEmpty
         val compact = catalog && !uiLayout.expanded
+        val personal = !onlineMode
+        val actionsParent = if (personal) headerListActions else listHeaderView
+        if (listActionButton.parent !== actionsParent) {
+            (listActionButton.parent as? ViewGroup)?.removeView(listActionButton)
+            actionsParent.addView(listActionButton, LinearLayout.LayoutParams(dp(48), dp(48)))
+        }
+        headerListActions.visibility = if (personal) View.VISIBLE else View.GONE
+        updatePageTitle()
         searchTabs.visibility = if (catalog) View.VISIBLE else View.GONE
         headerSyncButton.visibility = if (compact) View.GONE else View.VISIBLE
-        listHeaderView.visibility = if (compact) View.GONE else View.VISIBLE
+        listHeaderView.visibility = if (personal || compact) View.GONE else View.VISIBLE
         searchTabLabels.forEach { (playlists, label) ->
             val selected = playlistSearchMode == playlists
             label.isSelected = selected; (label.parent as View).isSelected = selected
@@ -961,7 +1032,7 @@ class MainActivity : FragmentActivity() {
         searchSourceButton.visibility = if (compact) View.VISIBLE else View.GONE
         searchSourceButton.text = sourceLabel()
         searchSourceButton.contentDescription = "${getString(R.string.ui_9b980a0136e4)}: ${sourceLabel()}"
-        searchClearButton.visibility = if (catalog) View.VISIBLE else View.GONE
+        searchClearButton.visibility = if (catalog || personal) View.VISIBLE else View.GONE
         searchClearButton.isEnabled = search.text.isNotEmpty(); searchClearButton.alpha = if (searchClearButton.isEnabled) .8f else .35f
         search.background = if (compact) null else lx.shape(lx.panel, border = palette.divider)
         search.setPadding(if (compact) 0 else dp(16), dp(8), if (compact) 0 else dp(16), dp(8))
@@ -979,6 +1050,23 @@ class MainActivity : FragmentActivity() {
         emptyHint.setPadding(0, if (catalog) 0 else dp(16), 0, 0)
         tableHeader?.visibility = if (catalog && playlistSearchMode) View.GONE else View.VISIBLE
         status.visibility = if (compact && status.text.isBlank()) View.GONE else View.VISIBLE
+    }
+    private fun updatePageTitle() {
+        val playlist = activePlaylist.takeUnless { onlineMode }
+        val label = when {
+            boardMode -> getString(R.string.ui_1ee95aa94712)
+            onlinePlaylistMode -> getString(R.string.ui_473e57b72072)
+            onlineMode -> getString(R.string.ui_44ce7ae909bb)
+            playlist != null -> "${playlist.displayName} ▾"
+            else -> getString(R.string.ui_a9531e47b75d)
+        }
+        if (pageTitle.text.toString() != label) pageTitle.text = label
+        val selectable = playlist != null
+        if (pageTitle.isClickable != selectable || selectable && pageTitle.background == null) {
+            pageTitle.isClickable = selectable; pageTitle.isFocusable = selectable
+            pageTitle.background = if (selectable) lx.touch() else null
+        }
+        pageTitle.contentDescription = playlist?.let { "${it.displayName}, ${getString(R.string.playlist_switch)}" }
     }
     private fun setCatalogStatus(message: CharSequence) {
         status.setTextColor(palette.muted); status.contentDescription = null; status.text = message
@@ -1032,7 +1120,10 @@ class MainActivity : FragmentActivity() {
             val row = LinearLayout(this@MainActivity).apply {
                 gravity = Gravity.CENTER_VERTICAL; background = lx.touch(); minimumHeight = dp(56)
                 setPadding(dp(12), dp(4), dp(12), dp(4)); isFocusable = true
-                setOnClickListener { navigationDrawer?.close(); click() }
+                setOnClickListener {
+                    if (label != R.string.ui_38844b135cf7) navigationDrawer?.close()
+                    click()
+                }
             }
             val icon = if (label == R.string.ui_b0d269c8707c) ImageView(this@MainActivity).apply {
                 setImageResource(android.R.drawable.ic_lock_power_off); imageTintList = ColorStateList.valueOf(palette.muted)
@@ -1043,6 +1134,7 @@ class MainActivity : FragmentActivity() {
             val text = lx.label(getString(label), 16f, palette.muted).apply { maxLines = 2; setPadding(dp(8), 0, 0, 0) }
             row.addView(text, LinearLayout.LayoutParams(0, -2, 1f))
             if (page != null) { navigationItems[page] = text; row.tag = if (page == PAGE_LOCAL) "navigation-local" else "navigation-$page" }
+            if (label == R.string.ui_38844b135cf7) row.tag = "navigation-more"
             parent.addView(row, LinearLayout.LayoutParams(-1, -2))
         }
         val items = LinearLayout(this@MainActivity).apply {
@@ -1086,7 +1178,15 @@ class MainActivity : FragmentActivity() {
         entry(59655, R.string.settings_title) { showSettings() }
         entry(59659, R.string.ui_788db1cfec2a) { openSettings("theme") }
         addView(ScrollView(this@MainActivity).apply { isVerticalScrollBarEnabled = false; addView(items) }, LinearLayout.LayoutParams(-1, 0, 1f))
-        addView(lx.icon(59680, getString(R.string.ui_e35a36e26d52), 19f) { showNavigation() }, LinearLayout.LayoutParams(-1, dp(48)))
+        val more = LinearLayout(this@MainActivity).apply {
+            tag = "navigation-more"; gravity = Gravity.CENTER_VERTICAL
+            background = lx.touch(); isFocusable = true; contentDescription = getString(R.string.ui_38844b135cf7)
+            setOnClickListener { showNavigation() }
+            addView(lx.label(59680.toChar().toString(), 19f, palette.muted).apply {
+                typeface = iconFont; gravity = Gravity.CENTER; importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            }, LinearLayout.LayoutParams(dp(40), dp(48)))
+        }
+        addView(more, LinearLayout.LayoutParams(-1, dp(48)))
     }
     private fun updateNavigationSelection() {
         val current = when { navigation?.currentDestination?.id == R.id.downloads_page -> 4; navigation?.currentDestination?.id == R.id.playlist_browser -> 3; navigation?.currentDestination?.id == R.id.charts_page -> 2; boardMode -> 2; onlinePlaylistMode -> 3; onlineMode -> 1; activePlaylist != null -> 0; else -> PAGE_LOCAL }
@@ -1128,10 +1228,14 @@ class MainActivity : FragmentActivity() {
     private fun showNavigationActions() {
         val labels = mutableListOf(getString(R.string.ui_a9531e47b75d), getString(R.string.ui_27c95ec6b766), getString(R.string.ui_87a2113eb66f), getString(R.string.ui_1ee95aa94712), getString(R.string.ui_259597bf6ca7), getString(R.string.ui_3158c8d56b7b), getString(R.string.ui_a5cd0a9169e8), getString(R.string.ui_3facd3e00be5), getString(R.string.ui_599818eb56df), getString(R.string.ui_727036c7fc2a), getString(R.string.ui_2a3ec620e12c), getString(R.string.ui_8c38525734c0), getString(R.string.ui_486b54a7b0af), getString(R.string.ui_6e763b71e69c), getString(R.string.ui_f01b6815d826), getString(R.string.ui_cad84b75d661), getString(R.string.ui_426744e26e7e), getString(R.string.ui_ac7aa03a458f), getString(R.string.settings_title), getString(R.string.ui_788db1cfec2a), getString(R.string.ui_4fd38bc4f6d4), getString(R.string.ui_bb1d19b85634))
         labels.add(getString(R.string.download_page))
-        if (preferences.showBack) labels.add(getString(R.string.ui_f75a93326a3c))
-        if (preferences.showExit) labels.add(getString(R.string.ui_b0d269c8707c))
+        if (uiLayout.expanded && preferences.showBack) labels.add(getString(R.string.ui_f75a93326a3c))
+        if (uiLayout.expanded && preferences.showExit) labels.add(getString(R.string.ui_b0d269c8707c))
+        // Keep the original action IDs when filtering so each remaining label dispatches correctly.
+        val repeated = setOf(0, 1, 2, 3, 4, 8, 18, 22) + if (uiLayout.expanded) setOf(9, 19) else emptySet()
+        val actions = labels.indices.filterNot { it in repeated }
         val anchor = navigationMenuAnchor() ?: return
-        choicesPopup.show(anchor, labels.indices.map(Int::toString), labels, "", palette, alignEnd = preferences.menuOnRight) { id ->
+        choicesPopup.show(anchor, actions.map(Int::toString), actions.map { labels[it] }, "", palette, alignEnd = preferences.menuOnRight) { id ->
+            navigationDrawer?.close(false)
             val which = id.toInt()
             if (labels[which] == getString(R.string.download_page)) { showDownloads(); return@show }
             if (labels[which] == getString(R.string.ui_f75a93326a3c)) { moveTaskToBack(true); return@show }
@@ -1167,6 +1271,7 @@ class MainActivity : FragmentActivity() {
         }
     }
     private fun navigationMenuAnchor(): View? {
+        window.decorView.findViewWithTag<View>("navigation-more")?.takeIf { it.isShown }?.let { return it }
         fun find(view: View): View? {
             if (!view.isShown) return null
             if (view.contentDescription == getString(R.string.ui_e35a36e26d52)) return view
@@ -1184,7 +1289,7 @@ class MainActivity : FragmentActivity() {
             pendingScroll = null
         }
         onlineMode = false; boardMode = false; onlinePlaylistMode = false; activePlaylist = null
-        updateListAction(); pageTitle.text = getString(R.string.ui_a9531e47b75d); loadMore.visibility = View.GONE
+        updateListAction(); loadMore.visibility = View.GONE
         heading.text = getString(R.string.ui_33eeaa47c231); search.text.clear(); setSearchVisible(false)
         if (hasAudioPermission()) {
             filterSongs()
@@ -1197,7 +1302,7 @@ class MainActivity : FragmentActivity() {
     private fun openSearchPage(showTools: Boolean = true) {
         playlistDrawer?.close(false)
         showMusicPage()
-        onlineMode = true; boardMode = false; onlinePlaylistMode = false; updateListAction(); pageTitle.text = getString(R.string.ui_44ce7ae909bb); activePlaylist = null; heading.text = getString(R.string.ui_e07216a6d505, sourceLabel()); loadMore.visibility = View.GONE
+        onlineMode = true; boardMode = false; onlinePlaylistMode = false; updateListAction(); activePlaylist = null; heading.text = getString(R.string.ui_e07216a6d505, sourceLabel()); loadMore.visibility = View.GONE
         search.text.clear(); setSearchVisible(true); resetCatalogResults()
         if (showTools && preferences.hotSearch && uiLayout.expanded) showSearchTools()
     }
@@ -1270,11 +1375,12 @@ class MainActivity : FragmentActivity() {
             activePlaylist = updated; heading.text = "›   ${updated.displayName}"
             allSongs = songs; filterSongs()
         }
+        updateListAction()
     }
     private fun showPlaybackQuality() = openSettings("playback")
     private fun showPlaybackSettings() {
-        if (playerDialog?.isShowing == true) {
-            returnToPlayerFromSettings = true; restoreDetailLyrics = detailShowingLyrics; playerDialog?.dismiss()
+        if (playerFragment() != null) {
+            returnToPlayerFromSettings = true; restoreDetailLyrics = detailShowingLyrics; closePlayerDetails()
         }
         openSettings("playback")
     }
@@ -1367,7 +1473,7 @@ class MainActivity : FragmentActivity() {
                 val lyrics = restoreDetailLyrics
                 window.decorView.post {
                     showPlayerDetails()
-                    if (lyrics && !uiLayout.splitPlayer) toggleDetailPage()
+                    if (lyrics != detailShowingLyrics) toggleDetailPage()
                 }
             }
             if (destination.id != R.id.music_page) playlistDrawer?.close(false)
@@ -1380,6 +1486,7 @@ class MainActivity : FragmentActivity() {
                 restorePage(saved, restartLoads = reload)
             }
             updateDestinationChrome()
+            rememberHomePage()
         }
         onBackPressedDispatcher.addCallback(this, playlistDrawerBack)
         updateDestinationChrome()
@@ -1420,6 +1527,7 @@ class MainActivity : FragmentActivity() {
     }
     internal fun refreshSettingsPreferences() {
         service?.refreshPreferences(); filterSongs(); service?.state?.value?.let(::renderPlayer)
+        refreshBilibiliSearchAvailability()
     }
     internal fun closeSettings() {
         if (!supportFragmentManager.isStateSaved) navigation?.popBackStack()
@@ -1477,7 +1585,7 @@ class MainActivity : FragmentActivity() {
         status.text = previousStatus; loadMore.visibility = moreVisibility; updateSearchChrome()
         service?.state?.value?.let(::renderPlayer); updateArtwork()
         settingsFragment()?.applyTheme()
-        window.statusBarColor = palette.surface; window.navigationBarColor = palette.surface
+        ScreenInsets.styleSystemBars(window, theme.dark)
         if (Build.VERSION.SDK_INT >= 30) {
             val light = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
             window.insetsController?.setSystemBarsAppearance(if (theme.dark) 0 else light, light)
@@ -1517,39 +1625,55 @@ class MainActivity : FragmentActivity() {
         dialog.show(); list.setSelection(snapshot.index)
     }
     private fun showSourceActions(anchor: View, entry: UserSourceEntry, changed: () -> Unit = {}) {
-        val actions = arrayOf(getString(R.string.ui_f4f0ead1116b), getString(R.string.ui_0fd5cd79a1b5), getString(R.string.ui_ba9a8defba4e, java.lang.String.valueOf(if (entry.allowUpdateAlert) getString(R.string.ui_3fd47edce45b) else getString(R.string.ui_8da97ddda990))), getString(R.string.ui_2f9daa828907))
-        choicesPopup.show(anchor, actions.indices.map(Int::toString), actions.toList(), "", palette) { id ->
-            val index = id.toInt()
-            when (index) {
-                0 -> scope.launch {
-                    try { service?.selectSource(entry.id); changed(); toast(getString(R.string.ui_032d025aff70)) }
-                    catch (e: CancellationException) { throw e }
-                    catch (e: Exception) { toast(getString(R.string.ui_ced3fddd61e0, java.lang.String.valueOf(e.localizedMessage))) }
+        scope.launch {
+            val player = service ?: return@launch
+            val catalog = player.sourceCatalog()
+            val index = catalog.enabled.indexOf(entry.id)
+            val ids = mutableListOf("toggle")
+            val labels = mutableListOf(getString(if (index >= 0) R.string.sources_disable else R.string.sources_enable))
+            if (index > 0) { ids.add("up"); labels.add(getString(R.string.sources_move_up)) }
+            if (index >= 0 && index < catalog.enabled.lastIndex) { ids.add("down"); labels.add(getString(R.string.sources_move_down)) }
+            ids.addAll(listOf("export", "updates", "delete"))
+            labels.addAll(listOf(getString(R.string.ui_0fd5cd79a1b5),
+                getString(R.string.ui_ba9a8defba4e, getString(if (entry.allowUpdateAlert) R.string.ui_3fd47edce45b else R.string.ui_8da97ddda990)),
+                getString(R.string.ui_2f9daa828907)))
+            val disabled = if (withContext(Dispatchers.IO) { UserSourceLibrary(applicationContext).isBundled(entry.id) }) setOf("delete") else emptySet()
+            choicesPopup.show(anchor, ids, labels, "", palette, disabled = disabled) { action ->
+                when (action) {
+                    "toggle", "up", "down", "updates" -> scope.launch {
+                        try {
+                            when (action) {
+                                "toggle" -> player.setSourceEnabled(entry.id, index < 0)
+                                "up" -> player.moveSource(entry.id, -1)
+                                "down" -> player.moveSource(entry.id, 1)
+                                else -> player.allowSourceUpdates(entry.id, !entry.allowUpdateAlert)
+                            }
+                            refreshBilibiliSearchAvailability(); changed()
+                        } catch (e: CancellationException) { throw e }
+                        catch (e: Exception) { toast(e.localizedMessage.orEmpty()) }
+                    }
+                    "export" -> {
+                        pendingSourceExportId = entry.id
+                        @Suppress("DEPRECATION")
+                        startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                            addCategory(Intent.CATEGORY_OPENABLE); type = "application/javascript"
+                            putExtra(Intent.EXTRA_TITLE, entry.name.replace(Regex("[\\\\/:*?\"<>|]"), "_").take(80) + ".js")
+                        }, REQUEST_SOURCE_EXPORT)
+                    }
+                    "delete" -> AlertDialog.Builder(this@MainActivity).setMessage(getString(R.string.ui_852174674832, entry.name))
+                        .setNegativeButton(getString(R.string.ui_2cd0f3be8738), null)
+                        .setPositiveButton(getString(R.string.ui_2f9daa828907)) { _, _ -> scope.launch {
+                            try { player.removeSource(entry.id); changed() }
+                            catch (e: CancellationException) { throw e }
+                            catch (e: Exception) { toast(e.localizedMessage.orEmpty()) }
+                        } }.show()
                 }
-                1 -> {
-                    pendingSourceExportId = entry.id
-                    @Suppress("DEPRECATION")
-                    startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
-                        addCategory(Intent.CATEGORY_OPENABLE); type = "application/javascript"
-                        putExtra(Intent.EXTRA_TITLE, entry.name.replace(Regex("[\\\\/:*?\"<>|]"), "_").take(80) + ".js")
-                    }, REQUEST_SOURCE_EXPORT)
-                }
-                2 -> scope.launch {
-                    try { service?.allowSourceUpdates(entry.id, !entry.allowUpdateAlert); changed(); toast(getString(R.string.ui_5c73d0fff5e2)) }
-                    catch (e: CancellationException) { throw e }
-                    catch (e: Exception) { toast(getString(R.string.ui_749d84b5fa76, java.lang.String.valueOf(e.localizedMessage))) }
-                }
-                3 -> AlertDialog.Builder(this).setMessage(getString(R.string.ui_852174674832, java.lang.String.valueOf(entry.name))).setNegativeButton(getString(R.string.ui_2cd0f3be8738), null)
-                    .setPositiveButton(getString(R.string.ui_2f9daa828907)) { _, _ -> scope.launch {
-                        try { service?.removeSource(entry.id); changed(); toast(getString(R.string.ui_a1bfd178ab34)) }
-                        catch (e: CancellationException) { throw e }
-                        catch (e: Exception) { toast(getString(R.string.ui_57deb333c04b, java.lang.String.valueOf(e.localizedMessage))) }
-                    } }.show()
             }
         }
     }
     private fun updateListAction() {
         updateNavigationSelection()
+        rememberHomePage()
         if (::searchRow.isInitialized && ::emptyHint.isInitialized && ::status.isInitialized) updateSearchChrome()
         val menu = boardMode || onlinePlaylistMode
         listActionButton.text = (if (menu) 59667 else 59660).toChar().toString()
@@ -1593,7 +1717,7 @@ class MainActivity : FragmentActivity() {
         }
         val more = append && onlinePlaylistMode && selectedOnlinePlaylist == playlist && onlinePlaylistPage > 0
         val page = if (more) onlinePlaylistPage + 1 else 1
-        onlineMode = true; boardMode = false; onlinePlaylistMode = true; updateListAction(); pageTitle.text = getString(R.string.ui_473e57b72072); activePlaylist = null
+        onlineMode = true; boardMode = false; onlinePlaylistMode = true; updateListAction(); activePlaylist = null
         selectedOnlinePlaylist = playlist; heading.text = "›   ${playlist.name}"; setSearchVisible(false)
         if (!more) { allSongs = emptyList(); visibleSongs = emptyList(); list.adapter = null; onlinePlaylistPage = 0 }
         loadJob?.cancel(); loadMore.visibility = View.GONE; status.text = getString(R.string.ui_aed6f82d382c)
@@ -1618,7 +1742,7 @@ class MainActivity : FragmentActivity() {
         showMusicPage()
         val more = append && boardMode && selectedBoard == board && boardPage > 0
         val page = if (more) boardPage + 1 else 1
-        onlineMode = true; boardMode = true; onlinePlaylistMode = false; updateListAction(); pageTitle.text = getString(R.string.ui_1ee95aa94712); activePlaylist = null
+        onlineMode = true; boardMode = true; onlinePlaylistMode = false; updateListAction(); activePlaylist = null
         selectedBoard = board; heading.text = "›   ${board.name}"; setSearchVisible(false)
         if (!more) { allSongs = emptyList(); visibleSongs = emptyList(); list.adapter = null; boardPage = 0 }
         loadJob?.cancel(); loadMore.visibility = View.GONE; status.text = getString(R.string.ui_4760ac1e18cc)
@@ -1635,49 +1759,52 @@ class MainActivity : FragmentActivity() {
     }
     private fun sourceLabel(): String = sourceLabel(searchSource)
     private fun sourceLabel(source: String): String = if (source == SearchCatalog.ALL) getString(R.string.search_all_sources) else UiPreferences.sourceName(this, source)
+    private suspend fun availableSearchSources(): List<String> {
+        val enabled = withContext(Dispatchers.IO) { UserSourceLibrary(applicationContext).bilibiliEnabled() }
+        if (!enabled && searchSource == "bili") {
+            searchSource = SearchCatalog.ALL
+            if (isCatalogPage) {
+                heading.text = getString(R.string.ui_e07216a6d505, sourceLabel())
+                resetCatalogResults()
+            }
+        }
+        return PlatformPopup.sources + (if (enabled) listOf("bili") else emptyList()) + SearchCatalog.ALL
+    }
+    private fun refreshBilibiliSearchAvailability() {
+        scope.launch { availableSearchSources() }
+    }
     private fun showSearchSources() {
-        val ids = PlatformPopup.sources + SearchCatalog.ALL
-        val anchor = if (searchSourceButton.isShown) searchSourceButton else heading
-        platformPopup.show(anchor, ids, ids.map(::sourceLabel), searchSource, palette) { selected ->
-            searchSource = selected
-            heading.text = getString(R.string.ui_e07216a6d505, sourceLabel())
-            resetCatalogResults()
-            if (search.text.isNotBlank()) searchOnline()
+        scope.launch {
+            val ids = availableSearchSources()
+            val anchor = if (searchSourceButton.isShown) searchSourceButton else heading
+            platformPopup.show(anchor, ids, ids.map(::sourceLabel), searchSource, palette) { selected ->
+                searchSource = selected
+                if(selected == "bili") playlistSearchMode=false
+                heading.text = getString(R.string.ui_e07216a6d505, sourceLabel())
+                resetCatalogResults()
+                if (search.text.isNotBlank()) searchOnline()
+            }
         }
     }
     private fun showPlayerDetails() {
-        val state = service?.state?.value ?: return
-        if (playerDialog?.isShowing == true) return
-        val primary = palette.primary
-        val dialog = Dialog(this)
-        playerDialog = dialog
-        val content = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL; setBackgroundColor(palette.surface); fitsSystemWindows = true
-            tag = if (uiLayout.splitPlayer) "player-expanded" else "player-compact"
-        }
-        val header = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
-        header.addView(TextView(this).apply {
-            text = "‹"; textSize = 32f; gravity = Gravity.CENTER; setTextColor(palette.foreground); contentDescription = getString(R.string.ui_572cf45ba436)
-            setOnClickListener { dialog.dismiss() }
-        }, LinearLayout.LayoutParams(dp(48), dp(48)))
-        detailTitle = TextView(this).apply { textSize = 17f; setTextColor(palette.foreground); maxLines = 1; gravity = Gravity.CENTER_VERTICAL }
-        header.addView(detailTitle, LinearLayout.LayoutParams(0, dp(48), 1f))
-        detailPageToggle = TextView(this).apply {
-            text = getString(R.string.ui_9dbfa9b42bb3); textSize = 14f; gravity = Gravity.CENTER; setTextColor(primary)
-            visibility = if (uiLayout.splitPlayer) View.GONE else View.VISIBLE; background = lx.touch()
-            setOnClickListener { toggleDetailPage() }
-        }
-        header.addView(detailPageToggle, LinearLayout.LayoutParams(dp(56), dp(48)))
-        header.addView(lx.icon(59655, getString(R.string.ui_8c38525734c0)) { showPlaybackSettings() }, LinearLayout.LayoutParams(dp(48), dp(48)))
-        content.addView(header)
-        val splitBody = if (uiLayout.splitPlayer) LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL } else null
-        val playerArea = if (splitBody != null) LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL; setPadding(dp(16), 0, dp(16), dp(16))
-        } else content
-        if (splitBody != null) {
-            content.addView(splitBody, LinearLayout.LayoutParams(-1, 0, 1f))
-            splitBody.addView(playerArea, LinearLayout.LayoutParams(0, -1, .45f))
-        }
+        if (service == null || playerFragment()?.isAdded == true) return
+        if (supportFragmentManager.isStateSaved) { pendingPlayerOpen = true; return }
+        hidePageKeyboard(); playlistDrawer?.close(false)
+        val fragment = PlayerDetailFragment()
+        supportFragmentManager.beginTransaction().setReorderingAllowed(true)
+            .setCustomAnimations(R.animator.player_enter, R.animator.player_exit, R.animator.player_enter, R.animator.player_exit)
+            .add(R.id.player_host, fragment, PlayerDetailFragment.TAG)
+            .setPrimaryNavigationFragment(fragment)
+            .addToBackStack(PlayerDetailFragment.TAG).commit()
+        supportFragmentManager.executePendingTransactions()
+    }
+    internal fun playerFragment() = supportFragmentManager.findFragmentByTag(PlayerDetailFragment.TAG) as? PlayerDetailFragment
+    internal fun closePlayerDetails() {
+        if (!supportFragmentManager.isStateSaved) supportFragmentManager.popBackStackImmediate(PlayerDetailFragment.TAG,
+            androidx.fragment.app.FragmentManager.POP_BACK_STACK_INCLUSIVE)
+    }
+    internal fun playerLyricsVisible() = detailShowingLyrics
+    internal fun createPlayerDetailView(showLyrics: Boolean?): View {
         val scroll = PlayerLyricScroll(this, lx.selected, {
             service?.state?.value?.let(::renderDetailTime)
         }, { index ->
@@ -1689,89 +1816,52 @@ class MainActivity : FragmentActivity() {
             } else detailScroll?.follow(detailActiveLine.coerceAtLeast(0))
         }).apply {
             lines.setPadding(dp(24), 0, dp(24), 0)
-            if (splitBody == null) {
+            if (!uiLayout.splitPlayer) {
                 contentDescription = getString(R.string.ui_ccbb5ee62b1a)
                 setOnClickListener { toggleDetailPage() }
             }
         }
-        detailScroll = scroll
-        val page = FrameLayout(this)
-        detailCover = AlbumCoverLayout(this).apply { setOnClickListener { if (!uiLayout.splitPlayer) toggleDetailPage() } }
-        val coverSize = dp(240)
-        val album = FrameLayout(this).apply {
-            background = lx.shape(palette.placeholder, 10); clipToOutline = true
-        }
-        album.addView(TextView(this).apply { text = "LX"; textSize = 58f; gravity = Gravity.CENTER; setTextColor(primary) }, FrameLayout.LayoutParams(-1, -1))
-        detailCoverImage = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER_CROP; visibility = View.GONE }
-        album.addView(detailCoverImage, FrameLayout.LayoutParams(-1, -1))
-        detailCover?.addView(album, FrameLayout.LayoutParams(coverSize, coverSize, Gravity.CENTER))
-        page.addView(detailCover, FrameLayout.LayoutParams(-1, -1))
-        if (splitBody == null) page.addView(scroll, FrameLayout.LayoutParams(-1, -1))
-        else {
-            splitBody.addView(View(this).apply { setBackgroundColor(palette.divider) }, LinearLayout.LayoutParams(dp(1), -1).apply { setMargins(0, dp(24), 0, dp(24)) })
-            splitBody.addView(scroll, LinearLayout.LayoutParams(0, -1, .55f))
-        }
-        detailShowingLyrics = uiLayout.splitPlayer; scroll.visibility = if (uiLayout.splitPlayer) View.VISIBLE else View.GONE
-        playerArea.addView(page, LinearLayout.LayoutParams(-1, 0, 1f))
-        detailTime = TextView(this).apply { textSize = 12f; gravity = Gravity.CENTER; setTextColor(palette.muted) }
-        playerArea.addView(detailTime)
-        detailSeek = SeekBar(this).apply {
-            progressTintList = ColorStateList.valueOf(primary); thumbTintList = ColorStateList.valueOf(primary)
-            contentDescription = getString(R.string.ui_fc16e2a0fca6)
-            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(bar: SeekBar?, progress: Int, fromUser: Boolean) = Unit
-                override fun onStartTrackingTouch(bar: SeekBar?) { detailSeeking = true }
-                override fun onStopTrackingTouch(bar: SeekBar?) { detailSeeking = false; service?.seekTo(bar?.progress ?: 0) }
-            })
-        }
-        playerArea.addView(detailSeek, LinearLayout.LayoutParams(-1, dp(if (uiLayout.compactPlayer) 32 else 40)).apply { setMargins(dp(12), 0, dp(12), 0) })
-        val controls = LinearLayout(this).apply { gravity = Gravity.CENTER; orientation = LinearLayout.HORIZONTAL }
-        fun button(code: Int, label: String, click: () -> Unit) = TextView(this).apply {
-            text = code.toChar().toString(); typeface = iconFont; textSize = 28f; gravity = Gravity.CENTER
-            setTextColor(primary); contentDescription = label; background = lx.touch(); isFocusable = true; setOnClickListener { click() }
-        }
-        controls.addView(button(59668, getString(R.string.ui_8c747908bf69)) { service?.previous() }, LinearLayout.LayoutParams(dp(72), dp(64)))
-        detailToggle = button(59653, getString(R.string.ui_c3396195e91c)) { togglePlayback() }
-        detailToggle?.background = lx.touch(lx.selected, 32)
-        controls.addView(detailToggle, LinearLayout.LayoutParams(dp(72), dp(64)))
-        controls.addView(button(59654, getString(R.string.ui_486e42475adb)) { service?.next() }, LinearLayout.LayoutParams(dp(72), dp(64)))
-        playerArea.addView(controls)
-        val options = LinearLayout(this).apply { gravity = Gravity.CENTER; orientation = LinearLayout.HORIZONTAL }
-        detailMode = lx.label("", 13f, palette.muted).apply {
-            gravity = Gravity.CENTER; background = lx.touch()
-            setOnClickListener { service?.cycleMode() }
-        }
-        options.addView(detailMode, LinearLayout.LayoutParams(0, dp(48), 1f))
-        options.addView(lx.label(getString(R.string.ui_7afda7dc6745), 13f, palette.muted).apply {
-            gravity = Gravity.CENTER; background = lx.touch()
-            setOnClickListener { showSleepTimer() }
-        }, LinearLayout.LayoutParams(0, dp(48), 1f))
-        options.addView(lx.label(getString(R.string.ui_f01b6815d826), 13f, palette.muted).apply {
-            gravity = Gravity.CENTER; background = lx.touch()
-            setOnClickListener { showPlaybackQueue() }
-        }, LinearLayout.LayoutParams(0, dp(48), 1f))
-        playerArea.addView(options)
+        val content = PlayerDetailContent(this, uiLayout, palette, iconFont, scroll, PlayerDetailActions(
+            close = ::closePlayerDetails, lyrics = ::toggleDetailPage,
+            previous = { service?.previous() }, play = ::togglePlayback, next = { service?.next() },
+            mode = { service?.cycleMode() }, queue = ::showPlaybackQueue, sleep = ::showSleepTimer,
+            settings = ::showPlaybackSettings,
+            collect = { service?.state?.value?.song?.let(::choosePlaylistForSong) },
+            comments = { service?.state?.value?.song?.takeIf { it.source != "local" }?.let { showComments(this, it) } },
+            more = { anchor -> service?.state?.value?.song?.let { song -> showSongActionsFor(anchor, song, null, allowConversion = true, play = ::togglePlayback) } },
+        ))
+        detailContent = content
+        detailTitle = content.title; detailTime = content.time; detailSeek = content.seek
+        detailToggle = content.toggle; detailMode = content.mode; detailScroll = scroll
+        detailCover = content.cover; detailCoverImage = content.coverImage; detailPageToggle = content.pageToggle
+        detailShowingLyrics = showLyrics ?: uiLayout.splitPlayer
+        content.showLyrics(detailShowingLyrics)
+        detailSeek?.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(bar: SeekBar?, progress: Int, fromUser: Boolean) = Unit
+            override fun onStartTrackingTouch(bar: SeekBar?) { detailSeeking = true }
+            override fun onStopTrackingTouch(bar: SeekBar?) { detailSeeking = false; service?.seekTo(bar?.progress ?: 0) }
+        })
         palette.background(content); palette.textStyle(content)
-        dialog.setContentView(content)
-        dialog.window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(palette.surface))
-        dialog.setOnDismissListener {
-            playerDialog = null; detailTitle = null; detailTime = null; detailSeek = null; detailToggle = null; detailMode = null
-            detailScroll = null; detailCover = null; detailCoverImage = null; detailPageToggle = null
-            detailRenderedLines = null; detailActiveLine = -1; detailSeeking = false
-        }
-        dialog.show()
-        dialog.window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
-        dialog.window?.let { ScreenInsets.install(it, content) }
+        // Theme artwork may contain transparent pixels. The player must cover the
+        // browsing page, just as the old Dialog window's opaque surface did.
+        content.background = android.graphics.drawable.LayerDrawable(arrayOf(
+            android.graphics.drawable.ColorDrawable(palette.surface), requireNotNull(content.background)))
+        content.isClickable = true
         updateArtwork()
-        renderDetails(state)
+        service?.state?.value?.let(::renderDetails)
+        return content
+    }
+    internal fun releasePlayerDetailView(view: View?) {
+        if (detailContent !== view) return
+        detailScroll?.cancelPreview()
+        detailContent = null; detailTitle = null; detailTime = null; detailSeek = null; detailToggle = null; detailMode = null
+        detailScroll = null; detailCover = null; detailCoverImage = null; detailPageToggle = null
+        detailRenderedLines = null; detailActiveLine = -1; detailSeeking = false
     }
     private fun toggleDetailPage() {
-        if (uiLayout.splitPlayer) return
         detailShowingLyrics = !detailShowingLyrics
         detailScroll?.cancelPreview()
-        detailCover?.visibility = if (detailShowingLyrics) View.GONE else View.VISIBLE
-        detailScroll?.visibility = if (detailShowingLyrics) View.VISIBLE else View.GONE
-        detailPageToggle?.text = if (detailShowingLyrics) getString(R.string.ui_ccbb5ee62b1a) else getString(R.string.ui_9dbfa9b42bb3)
+        detailContent?.showLyrics(detailShowingLyrics)
         detailActiveLine = -1
         service?.state?.value?.let { renderDetails(it) }
     }
@@ -1798,11 +1888,17 @@ class MainActivity : FragmentActivity() {
         val preview = detailScroll?.previewIndex?.let(lyricLines::getOrNull)
         val position = preview?.let { LyricTiming.seekPosition(it.timeMs, lyricDelayMs, state.duration) } ?: state.position
         detailTime?.text = "${formatTime(position)} / ${formatTime(state.duration)}"
+        detailContent?.elapsed?.text = formatTime(position)
+        detailContent?.duration?.text = formatTime(state.duration)
     }
 
     private fun renderDetails(state: PlayerState) {
-        if (playerDialog?.isShowing != true) return
-        detailTitle?.text = state.song?.let { "${it.title}  ·  ${it.artist}" } ?: getString(R.string.ui_f518674b61f6)
+        if (detailContent == null) return
+        detailContent?.renderSong(state.song)
+        detailContent?.status?.apply {
+            text = state.error.orEmpty()
+            visibility = if (state.error.isNullOrBlank()) View.GONE else View.VISIBLE
+        }
         renderDetailTime(state)
         detailSeek?.apply { max = state.duration.coerceAtLeast(0); if (!detailSeeking) progress = state.position }
         detailToggle?.apply {
@@ -1810,7 +1906,16 @@ class MainActivity : FragmentActivity() {
             contentDescription = if (state.playing) getString(R.string.ui_8d12fc0d4eb2) else getString(R.string.ui_c3396195e91c)
             isEnabled = state.song != null && !state.preparing
         }
-        detailMode?.text = state.mode.localized(this)
+        detailMode?.apply {
+            text = when (state.mode) {
+                cn.toside.music.nativeapp.player.PlayMode.LIST_LOOP -> 59649
+                cn.toside.music.nativeapp.player.PlayMode.ORDER -> 59651
+                cn.toside.music.nativeapp.player.PlayMode.SINGLE -> 59652
+                cn.toside.music.nativeapp.player.PlayMode.SHUFFLE -> 59650
+            }.toChar().toString()
+            contentDescription = state.mode.localized(this@MainActivity)
+            tooltipText = contentDescription
+        }
         val scroll = detailScroll ?: return
         val container = scroll.lines
         val newLyrics = detailRenderedLines !== lyricLines
@@ -1999,11 +2104,11 @@ class MainActivity : FragmentActivity() {
             if (!suppressPageNavigation) pendingScroll = null
         }
         onlineMode = false; boardMode = false; onlinePlaylistMode = false; activePlaylist = playlist
-        updateListAction(); pageTitle.text = getString(R.string.ui_27c95ec6b766)
+        updateListAction()
         loadMore.visibility = View.GONE
         heading.text = "›   ${playlist.displayName}"
         search.text.clear()
-        if (switching) filterSongs()
+        if (switching) { setSearchVisible(false); filterSongs() }
         loadJob = scope.launch {
             try { allSongs = playlists.songs(playlist.id); filterSongs() }
             catch (e: CancellationException) { throw e }
@@ -2181,7 +2286,7 @@ class MainActivity : FragmentActivity() {
     private fun showSongActions(anchor: View, song: Song) =
         showSongActionsFor(anchor, song, activePlaylist) { playListedSong(song) }
 
-    private fun showSongActionsFor(anchor: View, song: Song, selected: Playlist?, play: () -> Unit) {
+    private fun showSongActionsFor(anchor: View, song: Song, selected: Playlist?, allowConversion: Boolean = false, play: () -> Unit) {
         val actions = buildList {
             add(R.string.ui_c3396195e91c)
             add(R.string.ui_94ca0a7bf933)
@@ -2193,6 +2298,7 @@ class MainActivity : FragmentActivity() {
             add(R.string.ui_732807e9a807)
             add(R.string.ui_804151aa3e97)
             add(R.string.song_source_details)
+            if (allowConversion) add(R.string.mp3_convert)
             if (song.source == "local") add(R.string.metadata_edit) else {
                 add(R.string.song_clear_cache)
                 add(R.string.ui_9be60bb7ddeb)
@@ -2202,6 +2308,7 @@ class MainActivity : FragmentActivity() {
             add(R.string.ui_f655b3c8a2b6)
             add(R.string.song_copy_name)
             add(R.string.ui_792336bc0bbf)
+            add(R.string.lyrics_download)
             add(R.string.ui_9c2f512b6594)
             if (selected != null) {
                 add(R.string.ui_de23dedafe75)
@@ -2216,6 +2323,8 @@ class MainActivity : FragmentActivity() {
 
     private fun runSongAction(action: Int, song: Song, selected: Playlist?, play: () -> Unit) {
         when (action) {
+            R.string.mp3_convert -> requestDownload(DownloadRequest(song, "mp3", conversion = true))
+            R.string.lyrics_download -> startActivityForResult(LyricsDownloadActivity.intent(this,song),REQUEST_LYRICS_DOWNLOAD)
             R.string.ui_c3396195e91c -> play()
             R.string.metadata_edit -> startActivityForResult(MetadataActivity.intentFor(this, song), REQUEST_METADATA)
             R.string.song_copy_name -> { (getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager).setPrimaryClip(android.content.ClipData.newPlainText(song.title, "${song.title} - ${song.artist}")) }
@@ -2256,7 +2365,7 @@ class MainActivity : FragmentActivity() {
                 } catch (e: CancellationException) { throw e }
                 catch (e: Exception) { toast(getString(R.string.ui_f6baa7a2ba08, java.lang.String.valueOf(e.localizedMessage))) }
             }
-            R.string.ui_07f73642e525 -> showComments(this, scope, song)
+            R.string.ui_07f73642e525 -> showComments(this, song)
             R.string.ui_9b3d69ae09ce -> showDislikeChoices(song)
             R.string.ui_94ca0a7bf933, R.string.ui_f655b3c8a2b6 -> {
                 service?.enqueue(listOf(song), action == R.string.ui_94ca0a7bf933); toast(getString(R.string.ui_51a4e2f9dea0))
@@ -2305,13 +2414,44 @@ class MainActivity : FragmentActivity() {
     }
     private fun chooseDownloadQuality(song: Song) {
         if (downloadQualityDialog?.isShowing == true) return
+        if (song.source == "bili") {
+            var target = song
+            var prepared = emptyMap<String, SourceAudio>()
+            downloadQualityDialog = showBilibiliDownloadQuality(this, song, palette, lx, scope,
+                cached = {
+                    withContext(Dispatchers.IO) {
+                        val cache = AudioStreamCache.get(applicationContext)
+                        cache.completeAudios(song).map { (quality, audio) ->
+                            val duration = audio.durationMs ?: song.duration
+                            val rate = audio.bitrate?.let { "${(it + 500) / 1000} kbps" }
+                                ?: if (duration > 0) "≈${audio.length * 8 / duration} kbps" else getString(R.string.download_bitrate_unknown)
+                            BilibiliDownloadOption(quality, getString(R.string.download_original_cached, rate))
+                        }
+                    }
+                },
+                remote = {
+                    val player = service ?: error(getString(R.string.ui_7ca47a28e695))
+                    check(player.bilibiliEnabled()) { "请在设置 → 自定义音源中启用 B站音源" }
+                    target = if (org.json.JSONObject(song.sourceInfo ?: "{}").optLong("cid") <= 0)
+                        cn.toside.music.nativeapp.online.BilibiliApi(applicationContext).firstPart(song) else song
+                    val choices = player.bilibiliDownloadOptions(target)
+                    prepared = choices.associateBy { it.quality }
+                    choices.map { audio ->
+                        val rate = audio.bitrate?.let { "${(it + 500) / 1000} kbps" } ?: getString(R.string.download_bitrate_unknown)
+                        BilibiliDownloadOption(audio.quality, getString(R.string.download_original_bitrate, rate))
+                    }
+                },
+                dismissed = { if (downloadQualityDialog === it) downloadQualityDialog = null }
+            ) { quality -> requestDownload(DownloadRequest(target, quality, address = prepared[quality])) }
+            return
+        }
         downloadQualityDialog = showDownloadQuality(this, song, palette, lx, scope,
             probe = { quality, progress ->
                 val cached = withContext(Dispatchers.IO) { AudioStreamCache.get(applicationContext).completeAudio(song, quality) != null }
                 if (cached) progress(DownloadProbe.MAX_BYTES)
                 else {
                     val player = service ?: error(getString(R.string.ui_7ca47a28e695))
-                    DownloadProbe().check(player.resolveDownloadUrl(song, quality), progress)
+                    player.probeDownload(song, quality, progress)
                 }
             },
             dismissed = { if (downloadQualityDialog === it) downloadQualityDialog = null }
@@ -2319,7 +2459,7 @@ class MainActivity : FragmentActivity() {
     }
     internal fun retryDownload(task: DownloadTask) {
         val quality = task.quality ?: return
-        requestDownload(DownloadRequest(task.song, quality, task.key))
+        requestDownload(DownloadRequest(task.song, quality, task.key, conversion = task.isConversion))
     }
     private fun requestDownload(request: DownloadRequest) {
         val permission = PermissionPolicy.downloadWrite(Build.VERSION.SDK_INT)
@@ -2344,15 +2484,29 @@ class MainActivity : FragmentActivity() {
     }
     private fun downloadRequestToBundle(request: DownloadRequest) = songToBundle(request.song).apply {
         putString("download-quality", request.quality); putString("download-retry", request.retryKey)
+        putBoolean("download-conversion", request.conversion)
     }
     private fun downloadRequestFromBundle(bundle: Bundle) = DownloadRequest(songFromBundle(bundle),
-        bundle.getString("download-quality") ?: "128k", bundle.getString("download-retry"))
+        bundle.getString("download-quality") ?: "128k", bundle.getString("download-retry"), bundle.getBoolean("download-conversion"))
 
     private fun downloadSong(request: DownloadRequest) {
+        if (request.conversion) {
+            scope.launch {
+                try {
+                    val downloads = Downloads(applicationContext)
+                    val queued = request.retryKey?.let { downloads.retryMp3Conversion(it) } ?: downloads.startMp3Conversion(request.song)
+                    toast(getString(if (queued) R.string.mp3_conversion_queued else R.string.mp3_conversion_pending))
+                } catch (e: CancellationException) { throw e }
+                catch (e: Exception) { toast(e.localizedMessage.orEmpty()) }
+            }
+            return
+        }
         val player = service ?: run { waitingForServiceDownload = request; return }
         scope.launch {
             try {
-                if (Downloads(applicationContext).start(request.song, request.quality, request.retryKey, player::resolveDownloadUrl)) {
+                if (Downloads(applicationContext).startWithSources(request.song, request.quality, request.retryKey) { song, quality, excluded ->
+                        request.address?.takeIf { excluded.isEmpty() } ?: player.resolveDownloadAddress(song, quality, excluded)
+                    }) {
                     toast(getString(R.string.ui_6b7ce36f8aa9))
                 }
             } catch (e: CancellationException) { throw e }
@@ -2362,6 +2516,7 @@ class MainActivity : FragmentActivity() {
     @Deprecated("Deprecated in Android")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if(requestCode == REQUEST_LYRICS_DOWNLOAD) { if(resultCode == RESULT_OK) service?.reloadLyrics(); return }
         if (requestCode == REQUEST_METADATA) {
             if (resultCode == RESULT_OK && data != null) {
                 val song = Song(data.getLongExtra("id", -1), Uri.parse(data.getStringExtra("uri")), data.getStringExtra("title").orEmpty(), data.getStringExtra("artist").orEmpty(), data.getLongExtra("duration", 0), "local", data.getStringExtra("info"))
@@ -2437,8 +2592,8 @@ class MainActivity : FragmentActivity() {
                             ?: error(getString(R.string.ui_2dcda639f980))
                     }
                     val player = service ?: error(getString(R.string.ui_7ca47a28e695))
-                    player.importSource(script)
-                    toast(getString(R.string.ui_18710cc58894))
+                    val imported = player.importSource(script)
+                    toast(getString(if (imported.optBoolean("enabled")) R.string.ui_18710cc58894 else R.string.sources_import_disabled))
                 } catch (e: CancellationException) { throw e }
                 catch (e: Exception) { toast(getString(R.string.ui_0874f11320ab, java.lang.String.valueOf(e.localizedMessage))) }
             }
@@ -2716,10 +2871,6 @@ class MainActivity : FragmentActivity() {
         if (!changingSeek) seek.progress = state.position
         time.text = "${formatTime(state.position)} / ${formatTime(state.duration)}"
         renderDetails(state)
-        if (playerRestorePending) {
-            playerRestorePending = false; showPlayerDetails()
-            if (restoreDetailLyrics && !uiLayout.splitPlayer) toggleDetailPage()
-        }
         if (startupPlayerPending && song != null) { startupPlayerPending = false; showPlayerDetails() }
     }
     private fun updateMiniPlayerVisibility(song: Song?) {
@@ -2736,6 +2887,6 @@ class MainActivity : FragmentActivity() {
         return "%02d:%02d".format(seconds / 60, seconds % 60)
     }
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
-    companion object { private const val PAGE_LOCAL = 5; private const val REQUEST_AUDIO = 1; private const val REQUEST_LYRIC = 3; private const val REQUEST_SOURCE = 4; private const val REQUEST_BACKUP = 5; private const val REQUEST_DOWNLOAD = 6; private const val REQUEST_EXPORT = 7; private const val REQUEST_SYNC_NOTIFICATION = 8; private const val REQUEST_SOURCE_EXPORT = 9; private const val REQUEST_LOG_EXPORT = 10; private const val REQUEST_METADATA = 11 }
+    companion object { private const val PAGE_LOCAL = 5; private const val REQUEST_AUDIO = 1; private const val REQUEST_LYRIC = 3; private const val REQUEST_SOURCE = 4; private const val REQUEST_BACKUP = 5; private const val REQUEST_DOWNLOAD = 6; private const val REQUEST_EXPORT = 7; private const val REQUEST_SYNC_NOTIFICATION = 8; private const val REQUEST_SOURCE_EXPORT = 9; private const val REQUEST_LOG_EXPORT = 10; private const val REQUEST_METADATA = 11; private const val REQUEST_LYRICS_DOWNLOAD = 12 }
 }
 

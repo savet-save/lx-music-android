@@ -457,3 +457,212 @@ adb pull /sdcard/Android/data/cn.toside.music.nativeapp/files/adaptive-validatio
 - Android 9 的 `getPackageArchiveInfo` 仅在包含 `GET_SIGNATURES` 时收集 APK 证书；解析时额外传入该标志，仍通过 `SigningInfo` 严格验证签名、包名和版本，没有放宽安装校验。[Android 9 框架实现](https://android.googlesource.com/platform/frameworks/base/+/android-9.0.0_r61/core/java/android/content/pm/PackageManager.java)
 
 本地 Debug/测试 APK 构建、14 项 JVM 单元测试、Debug Lint（0 错误、53 警告）和 `bash -n scripts/device-regression.sh` 均通过。API 28 与 API 35 的完整设备回归结果以本次修复提交对应的 Native Android Actions 运行为准；本地 Android 12 设备不能替代 Android 9 的兼容性验收。
+
+## 本地音乐与歌单顶栏调整（2026-11-11）
+
+本地音乐和「我的列表」移除重复的第二行标题，搜索入口移入顶栏；当前歌单名称显示在顶栏并可点击切换，本地音乐标题不再打开歌单抽屉。搜索支持筛选当前列表、清空和收起，主题重建保留筛选。顶栏仅在内容或交互状态变化时更新，避免干扰在线歌单分页的滚动位置恢复。
+
+Debug/测试 APK 构建、48 项 JVM 单元测试和 Debug Lint 通过。Android 12（API 31）平板上的独立验证包通过首次授权流程，以及 `LocalNavigationTest`、`SearchPageTest`、`PlatformPopupTest` 的全部 17 项回归。覆盖 360×800、1024×768 dp 的顶栏布局、歌单切换、页内搜索、页面重建、平台弹层和在线歌单分页。日志保存在 `build/header-validation/permission-tests.txt`、`build/header-validation/final-all-tests.txt`。
+
+原生 View 截图位于 `build/header-validation/final-screens/`；手机尺寸预览来自平板窗口的布局绘制，不是手机硬件截图。本轮未运行 API 28/35 设备回归，也未推送或发布。
+
+## 侧栏「更多」对齐与菜单去重（2026-11-12）
+
+平板侧栏底部的「更多」改为与导航条目相同的 40 dp 图标列，整行保持可点击。菜单移除当前侧栏或手机抽屉已有的页面入口，合并指向播放设置页的重复项；手机的返回桌面和退出入口保留在抽屉底部。过滤菜单后继续使用原始动作 ID，点击设置项仍进入对应分类。
+
+Debug/测试 APK 构建、48 项 JVM 单元测试和 Debug Lint 通过。Android 12 盒子的独立验证包执行 `PlatformPopupTest`、`PhoneNavigationDrawerTest` 和 `LocalNavigationTest`：12 项通过，1 项因真实窗口不是手机尺寸跳过。覆盖 600/1024 dp 左右侧栏图标中心对齐、360 dp 左右抽屉菜单去重、弹层边界和菜单动作分发。日志及截图位于 `build/menu-validation/`；原生 View 测量截图不等同于手机硬件截图。
+
+使用原正式签名构建 32 位 ARM 包，覆盖更新盒子上的 0.9.14，并实际打开左下角菜单确认对齐及去重效果。盒子截图为 `build/menu-validation/box-menu-open.png`，安装包和签名核对记录为 `build/menu-validation/verified-update.json`。
+
+## 内置酷我 320 kbps 与盒子升级（2026-11-13）
+
+0.9.16 新增内置 OIAPI 酷我音源。音源目录升级到版本 3，仅补充新增的酷我脚本，保留当前选择、停用状态、更新提醒偏好以及此前删除的野花；新目录写入后删除酷我也不会在重启时恢复。新安装仍默认选择野花，可在设置中切换到酷我。
+
+同签名 Release ARMv7 包在 YYA-H618（Android 12 / API 31）从 0.9.14 原位覆盖到 0.9.16 / 9016，首次安装时间保持不变。Release 构建、48 项 JVM 单元测试和 Release Lint 通过。最终音源库/在线导入设备回归报告为 `OK (16 tests)`，旧野花联网检查未开启。验证新增源初始化、旧版目录和单脚本迁移、禁用、删除、去重与原偏好保留；一次实时取链出现 DNS 失败，检查连通后重试通过，未更改系统 DNS。
+
+使用显式开启联网的 `BuiltinKuwoPlaybackTest` 调用正式应用的播放服务和下载管理流程，验证《茶花开了》—王睿卓（酷我 ID `442087398`）。播放设置为 320k，自动降低音质关闭，实际 Media3 解码格式为 320,000 bit/s / 44.1 kHz，进度在 6 秒内正常推进，无播放错误。随后应用完整下载成功，下载页显示 100%、下载完成、320K。Android MediaExtractor 检测文件为 320,000 bit/s，时长 270,027 ms，总长 10,802,282 字节。
+
+拉取盒子实际下载的文件并核对 SHA-256，顺序扫描全部 10,338 个 MP3 帧，码率均为 320 kbps / 44.1 kHz，末尾保留 128 字节标签，无截断帧。SHA-256 为 `72bee22ac28b0d2b264b99525726a3277494ffacc3c2af6ac8164bc17c968414`。
+
+该联网测试默认跳过，显式执行命令为：
+
+```powershell
+adb shell am instrument -w -e class cn.toside.music.nativeapp.source.UserSourceLibraryTest -e liveKuwoSource true cn.toside.music.nativeapp.test/cn.toside.music.nativeapp.NativeTestRunner
+adb shell am instrument -w -e class cn.toside.music.nativeapp.player.BuiltinKuwoPlaybackTest -e liveKuwoPlayback true cn.toside.music.nativeapp.test/cn.toside.music.nativeapp.NativeTestRunner
+```
+
+本轮使用与正式包相同证书的 Release 测试包，没有卸载目标应用。播放/下载测试会实际播放示例歌曲、插入队列并保留完成的下载；成功后保留酷我音源、320k 和关闭自动降质的设置并暂停播放。设备生成的报告位于应用外部文件目录 `verification-320.json`；本地独立核验报告及下载页截图分别为 `build/source-diagnostics/box-320-verification.json`、`build/source-diagnostics/box-download-complete.png`。结果仅覆盖该歌曲和本次接口状态。
+
+## 播放页手机和平板参考样式（2026-11-13）
+
+按提供的两张参考图调整播放详情：手机为歌名/歌手分行、大封面、进度两端时间、大播放按钮及歌词/收藏/模式/评论图标；平板为左侧封面和三行歌曲信息、右侧居中渐隐歌词，进度、工具栏和右侧播放控制固定在整页底部。移除分栏分隔线和播放按钮圆形底色，使用已有 LX 字体图标。保留主题、歌词拖动定位、收藏、评论、队列、定时、模式和播放设置入口；歌词默认居中，显式设置的左/右对齐仍保留。重建页面或从设置返回时保留歌词显示状态。
+
+修复检查中发现的歌词绘制越过内容区域问题，保证不覆盖底部工具栏；首次布局和尺寸改变时立即将当前歌词居中，再对正常播放中的换行平滑滚动。进度条使用主题色及浅色细轨道。手机采用独立的当前时间与总时长，平板保留底部合并时间。
+
+Release/设备测试 APK 构建、48 项 JVM 单元测试、Release Lint 通过。Android 12 / API 31（YYA-H618）13 项设备检查全部通过：`PlayerDetailLayoutTest`、`AdaptiveLayoutTest`、`PlayerDetailTest`、`ScreenInsetsTest`、`PlayerSettingsTest`，以及 `PlaybackSettingsTest` 的设置/歌词校准和英文/繁体切换检查。验证 360×780、360×640、600×800、1024×700、844×390 dp 的控件边界和遮挡，另含深色、1.3 倍字体及页面重建。
+
+已保留数据覆盖安装盒子上的本地验证包，实际打开播放页检查平板效果；未更改版本号、创建提交或推送远程。手机尺寸图片是在盒子上测量并绘制真实 Android View 的预览，不是手机硬件窗口、状态栏或输入法实测。
+
+验证日志为 `build/player-style-validation/final-device-tests.txt`；手机封面页为 `build/player-style-validation/final-rendered/360x800-cover.png`，平板渲染图为 `build/player-style-validation/final-rendered/1024x700-cover.png`，实际盒子截图为 `build/player-style-validation/box-player-final.png`。其他尺寸和歌词页预览在同一 `final-rendered/` 目录中。
+
+## 最多三个音源与顺序接续（2026-11-16）
+
+自定义音源页将已启用和未启用分区，最多同时启用 3 个；已启用区支持上移、下移和停用，顺序持久保存。达到上限时新导入脚本保存在未启用区。音源库升级到 v4，从旧版仅迁移原先选中的音源为启用，保留脚本、删除记录及更新提示偏好。
+
+每个启用脚本使用独立 QuickJS 运行时，按顺序解析所选音质。取链失败、无效地址、HTTP/解码播放失败时尝试后续启用脚本；播放只有在自动降低音质开启时，才在该音质全部音源失败后尝试较低音质。下载保持原音质，系统下载失败或中断后由 DownloadCompleteReceiver 和 DownloadFallbackJob 自动接续，保存已尝试音源及任务记录；应用重启后可继续，全部失败则停止，手动重试重新开始。删除任务后不会被切换过程重新创建。
+
+验证使用 YYA-H618 / Android 12 / API 31 上的独立 `.multisourcecheck` 包，正式应用及歌单数据未覆盖。最终专项报告 `device-final.txt` 为 14 项全部通过，包含 13 项新增测试及修正后的在线导入回归；结合受影响功能回归，去重后 50 项设备测试通过，2 项第三方联网检查按默认设置跳过，无剩余失败。覆盖三源上限、排序和重启、旧版迁移、独立脚本状态、取消、320k 请求不降为 128k、无效链接、播放器实际失败、真实系统下载失败/中断、自动后台接续、全部失败和删除防恢复，以及缓存下载、音质回退、设置页面布局和导入。
+
+48 项 JVM 单元测试通过；Debug/正式签名 Release APK 构建和两种配置 Lint 均无错误。手机 360×800 dp 和平板 1024×768 dp 使用真实 Android View 在盒子上测量并绘制，未作为手机硬件窗口实测。本轮音频为本地 HTTP 静音 PCM 样本，未重新验证第三方歌曲的真实码率或服务可用性。
+
+记录位于忽略目录 `build/multi-source-validation/`：`verification.json` 汇总去重结果，`device-first.txt`、`device-regression.txt` 和 `device-final.txt` 保留原始日志（中间回归中的旧单选断言已修正并通过最终复测）；`build-final.txt` 记录构建和 Lint。最终分区截图为 `screenshots/multi-source-validation/360-sources.png` 和 `1024-sources.png`。测试包验证后移除，本轮版本号仍为 0.9.17，代码修改保留在工作区。
+
+## B站搜索、MP3 转码与歌词下载（2026-11-16）
+
+新增独立的 B站视频搜索入口及原生 B站音源。音源库升级为 v5，向已有库补入未启用的 B站入口，保留最多三个已启用音源及其顺序、停用与更新偏好。接口参考 bilibili-plugins/bilibili-api-collect（本轮读取提交 cfc5fddcc8a94b74d91970bb5b4eaeb349addc47），实现匿名 Cookie、WBI 参数签名、视频信息与可访问 AAC 音轨解析，当前只处理多 P 视频的第 1 P。B站上传者独立标记为 UP，不作为歌词歌手。已有下载和完整缓存仍优先使用，缓存播放不依赖启用音源或重新请求视频信息。
+
+B站下载先由系统下载管理器写入应用私有临时目录，再经 Android MediaCodec 解码与 LAME 编码生成真正的 MP3，最终 MP3 和匹配到的同名 UTF-8 LRC 写入 Download/LX Music/。编码设置为 320 kbps，不将重新编码描述为提升原始音质。转码完成前检查实际音频时长，任务删除或取消时清理未发布的输出，后台任务可在进程恢复后继续。歌词在五个音乐平台按歌名、歌手、版本和不超过 5 秒的时长差匹配，并拒绝时间轴明显超出音频的结果；兼容两种歌名/歌手顺序并复用搜索结果。找不到歌词时保留音频并显示无歌词。歌曲菜单新增搜索并下载歌词，本地歌曲也可核对元数据后通过系统文件选择器保存 LRC，同时缓存到应用供播放使用。
+
+设置页新增 B站 SESSDATA 页面，验证账户后使用 Android Keystore 加密保存，不回填到密码输入框，不提供给自定义脚本或音频 CDN。清除凭据会取消正在验证的操作，并对写入/清除串行处理，避免迟到的验证结果重新写入。登录接口使用独立请求客户端且不跟随重定向。
+
+MP3 编码使用两个独立共享库 libmp3lame.so 与 liblxmp3.so。JNI 在 JNI_OnLoad 中通过 RegisterNatives 注册，配合 Keep 与导出映射，仅导出 JNI_OnLoad 入口，不使用 Java_ 静态绑定符号。NDK 27.2.12479018 / CMake 3.22.1 使用 max-page-size=16384 和 common-page-size=16384；构建了 ARMv7、ARM64、x86、x86_64。修复通用包混入 x86 QuickJS 却缺少相应编码器的问题，保留 ARMv7 / ARM64 / 通用三个发布文件，通用包完整包含四个 ABI。新增脚本在 CI 和发布前检查编码器 ABI 一致性、全部 64 位 ELF LOAD 段和未压缩库的 ZIP 对齐；最终 Debug/Release 校验及 zipalign -c -P 16 -v 4 通过。LAME 源码固定提交、重建方式和 LGPL 许可见 app/src/main/cpp/lame/UPSTREAM.md，许可也包含在 APK 的关于页面。
+
+独立 .bilicheck 包在 YYA-H618 / Android 12 / API 31 上，合并去重后 56 项设备测试通过，2 项原有第三方联网检查默认跳过。覆盖 WBI 例子、搜索解析、音轨筛选、账户加密与清除取消、歌词时长/版本/标题顺序、本地下载界面、系统下载到后台转码及同名 LRC、流请求 Referer/User-Agent 且无 Cookie、缓存离线重播、v4 迁移、三音源管理和旧搜索/设置回归。音频端到端用例使用本地 HTTP 静音 PCM，产出由 MediaExtractor 确认为 audio/mpeg，时长与 12 秒输入相符，检查 MPEG-1 Layer III 的 320 kbps 帧头及 LRC 时间标签。
+
+48 项 JVM 单元测试、41 项 Python 脚本测试通过，Debug/正式签名 Release 构建与两种 Lint 均无错误。四个 ABI 的动态符号检查只发现 JNI_OnLoad 入口；ARM64/x86_64 的 MP3、LAME 和 QuickJS 库均通过 16 KB ELF 与 APK 检查。盒子实际 PAGE_SIZE 为 4096，没有 16 KB 页设备运行验证。本轮正式应用及数据未覆盖，验证结束移除独立测试包；版本仍为 0.9.17，改动保留在本地工作区。
+
+真实匿名 B站搜索在本机及盒子均收到 code=0、data.v_voucher 的验证要求，应用会显示验证错误。用户选择稍后自行登录，因此真实 B站歌曲播放、MP3 下载与歌词匹配未计入已通过项目；BilibiliLiveTest 保留为显式 liveBilibili=true 的后续验收入口。原始首次失败、修复复测、最终构建、对齐和符号记录在忽略的 build/bilibili-validation/ 目录；verification.json 汇总结果，device-regression.txt / device-final.txt / device-complete.txt / device-lyrics-final.txt 为最终设备记录，build-delivery.txt 与 python-complete.txt 为最终构建和脚本记录，native-delivery.txt 为对齐及导出记录。
+
+## 指定手机 ARM64 与页大小核验（2026-11-16）
+
+设备 9dd0fd82 为 M2007J17C，Android 12 / API 31，内核 4.19.113-perf-gd70e19d0749a；getconf PAGE_SIZE 返回 4096。该系统使用 4 KB 页，不能作为真正 16 KB 页环境的运行验证。
+
+在独立 .bilicheck 包中安装 ARM64 APK，系统确认 primaryCpuAbi=arm64-v8a。BilibiliMp3Test 的系统下载到 MP3 转码与同名 LRC、流播放请求两项，以及 UserSourceTest 的 QuickJS 初始化和异步请求一项全部通过（OK (3 tests)）。音频使用本地 HTTP 静音 PCM，转码检查实际 MP3、320 kbps 帧头及输出时长；没有进行真实 B站登录或联网歌曲验收。
+
+本轮重新检查 ARM64 Debug 与正式签名 Release APK：liblxmp3.so、libmp3lame.so、libquickjs-android-wrapper.so 均通过 16 KB ELF LOAD 段与 APK 存储对齐检查，Debug 包另经 zipalign -c -P 16 -v 4 验证通过。静态对齐与 4 KB 手机上的 ARM64 功能检查均通过，真正 16 KB 页运行仍待 PAGE_SIZE=16384 的设备或模拟器验证。测试后仅移除本轮新建的两个独立测试包，原有正式应用及数据未覆盖；记录位于 build/page-size-validation-9dd0fd82/。
+
+## 播放详情全屏 Fragment 与系统栏（2026-11-16）
+
+播放详情从原生 Dialog 迁移为 PlayerDetailFragment，由 MainActivity 的独立 FragmentContainerView 覆盖整个浏览区域及迷你播放栏，加入 Activity 的 Fragment 返回栈并设为主导航 Fragment。关闭只弹出播放页，保留原浏览目的地和播放服务；手机歌词/封面状态由 Fragment 保存，重建及从播放设置返回时恢复。View 销毁时释放歌词和封面引用。根 FrameLayout 统一处理状态栏、导航栏、刘海及键盘 Insets，不在播放内容重复加留白；系统栏透明且图标明暗随主题，取消系统对比度遮罩。透明主题图片下补充不透明底色，避免下层列表透出。
+
+MainActivity 显式启用 OnBackInvokedCallback，播放 Fragment 的进入、返回采用 Animator 属性动画，交由 AndroidX FragmentManager 处理手势进度、取消和提交，未添加抢占返回的播放页回调。[Android 官方文档](https://developer.android.com/guide/fragments/animate#predictive-back) 要求预测返回 Fragment 动画运行于 Android 14 及以上；本地手机和盒子都是 Android 12，因此新增的左右边缘取消/提交测试按系统版本跳过，尚无 Android 14+ 真机或模拟器的跟手动画验收。
+
+独立 .playercheck 包在 M2007J17C（9dd0fd82，ARM64 / API 31）去重后 14 项通过、2 项跳过；YYA-H618（ARMv7 / API 31）15 项通过、1 项跳过，无剩余失败。共同跳过预测返回动画，手机另跳过仅横屏适用的状态栏预留测试。覆盖播放页与 Activity 共用窗口、Insets 只应用一次、重复打开不叠加、返回不弹出下层下载页、设置往返保留歌词页、重建恢复、真实播放与歌词拖动，以及 360/600/1024 dp 等布局、深色背景、英文和 1.3 倍字体。背景不透明修复后，手机和盒子各复测主题、Insets 和开关三项，均通过；真实手机和盒子截图已检查，状态栏和底部控制显示完整，背景不再透出列表。
+
+48 项 JVM 单元测试通过；最终 Debug/正式签名 Release APK 构建、Debug/Release Lint 均无错误，ARM64 与通用包的 16 KB 原生库检查通过。手机首次安装需要手动确认；MIUI 拦截测试器从后台启动 Activity，回归时通过 ADB 显式将测试应用切到前台完成验证，未修改系统权限。最初超时记录保留在 phone-initial-tests.txt，不计入最终结果。
+
+按用户要求保留手机上的 cn.toside.music.nativeapp.playercheck 和 .playercheck.test，后续使用相同包名覆盖更新；盒子独立测试包已清理，两端正式应用及数据均未覆盖。版本仍为 0.9.17，本轮修改未提交或推送。日志、verification.json 和最终构建记录位于 build/player-fragment-validation/；phone-regression.txt、phone-final-tests.txt、box-tests.txt、box-final-tests.txt 为最终回归记录，phone-final-screens/ 和 box-screens/ 包含系统栏的真实设备截图。
+
+## B站登录主题统一、扫码登录与版本目录（2026-11-16）
+
+BilibiliLoginActivity 改用与主界面相同的 NativeThemes、UiPalette、LxStyles、字体和语言设置，包含返回顶栏、主题色操作、滚动内容及最大 640 dp 的表单宽度。使用统一 ScreenInsets 处理状态栏、刘海、导航栏和键盘，不再显示默认灰色系统栏及系统按钮；背景图下保留不透明底色。手动 SESSDATA 收入可展开区域，仍禁用密码输入框的状态保存和自动填充。
+
+新增本地生成二维码和 B站客户端扫码确认流程，参考[扫码接口文档](https://github.com/bilibili-plugins/bilibili-api-collect/blob/master/docs/login/login_action/QR.md)。二维码请求和轮询仅访问官方 passport HTTPS 接口，不发送现有账户 Cookie，也不跟随 SSO 重定向；成功后提取 SESSDATA，验证账户再用原 Android Keystore 加密存储。处理未扫码、已扫描待确认、成功、过期、网络失败及手动刷新；有效期按 180 秒限制，每两秒查询，页面进入后台暂停轮询。刷新、手动验证或清除会取消旧操作，并检查取消状态及当前二维码身份，阻止迟到结果写回。
+
+本轮调用官方匿名接口发现二维码页面已返回 account.bilibili.com/h5/account-h5/auth/scan-web，已与旧 passport.bilibili.com/h5-app/passport/login/scan 地址同时兼容，并核对返回密钥匹配。二维码由 ZXing 3.5.4 在本地编码，不经过图片服务；许可随包提供并在「关于」展示。Android 10+ 使用 MediaStore 保存到 Pictures/LX Music，供 B站扫一扫从相册识别；Android 9 使用系统文件选择器保存 PNG，不额外申请广泛写入权限。Android 9 的文件选择器路径本轮仅完成构建检查，未进行该系统的设备验收。
+
+M2007J17C（9dd0fd82，ARM64 / API 31）12 项、YYA-H618（ARMv7 / API 31）13 项专项回归全部通过，无跳过或剩余失败。包含真实匿名二维码生成和待扫码查询；模拟确认结果验证账户校验、加密保存、输入框不回填、旧二维码刷新/清除后的迟到结果、过期重试、相册 PNG 实际保存并解码为原登录 URL，以及旧手动输入、本地歌词、许可展开和深色/英文/1.3 倍字号、360/600/1024 dp 布局。截图专项在两端另各执行两项并通过，等待系统入场动画结束后核对状态栏和内容。真实账户扫码确认及认证后的 B站搜索、播放与下载未计入已通过结果，仍由用户稍后自行登录验收；测试凭据均为假数据，原有凭据在测试结束后恢复。
+
+48 项 JVM 单元测试通过，Debug 与正式签名 Release 构建及两种 Lint 无错误。ARM64、通用包的 16 KB 原生库和 APK 对齐检查通过，Release 签名 SHA-256 保持 91333f72261757beb2ec9d1eff01713cacd3db76ee863f59ca37b086678c5f84。Gradle 插件和库统一迁入 gradle/libs.versions.toml，核对原有 12 个依赖和 2 个插件版本均未变化，仅新增 ZXing。
+
+MIUI 对测试器直接启动内部 Activity 的限制，通过仅测试代码的 foregroundTestHost 参数处理：先显式打开测试应用主界面，再由已在前台的 Activity 按实际用户路径启动登录页，不修改系统权限。初始启动超时及修正前的布局断言日志保留，不计入最终回归。手机 .playercheck 主包和测试组件继续保留，盒子独立测试包已移除，两端正式应用均未覆盖。版本仍为 0.9.17，本轮未提交或推送。记录位于 build/bili-login-validation/，phone-tests.txt / box-tests.txt 为最终专项，*-screenshot-tests.txt 为截图复测，phone-screens/ / box-screens/ 包含使用假二维码的浅色、深色真机截图，build-final.txt 和 build-screenshots.txt 为最终构建与 Lint。
+
+## 顶栏返回按钮统一与居中（2026-11-16）
+
+B站登录、播放详情和设置统一使用 LxStyles.backButton：相同字体图标、24 sp 图标大小、48×48 dp 点击区域、主题色、无字体额外留白和水平/垂直居中。三个顶栏统一左侧 4 dp 留白并关闭基线对齐；设置页移除 Unicode ‹ 字符，标题也取消字体额外留白，解决返回按钮看起来靠下的问题。平板播放页顶栏提高到 56 dp，完整容纳一致的触控区域；手机播放页继续容纳歌名和歌手两行内容。
+
+手机 M2007J17C（ARM64 / API 31）6 项、盒子 YYA-H618（ARMv7 / API 31）6 项回归全部通过。覆盖三处主题色、设置页返回与标题的垂直中心、播放页 48 dp 触控区域及顶栏居中、360/600/1024 dp 等布局、平板及短横屏、深色、英文和 1.3 倍字号。未新增纯样式测试类，检查加入既有的播放布局、设置布局和登录页回归。Debug/正式签名 Release 构建、两种 Lint 及最终 16 KB 原生库/APK 对齐检查通过。
+
+预览已检查：登录页与深色播放页为包含系统栏的设备截图；360 dp 设置页和播放页为原生 View 测量绘制，使用设备当前歌曲文本，封面未加载时显示占位图。本轮未重新验证真实 B站账户登录或音频下载。手机测试包及测试组件按要求覆盖更新并保留，盒子独立测试包已清理，两端正式应用未覆盖，版本仍为 0.9.17，改动未提交或推送。记录位于 build/back-button-validation/；phone-main-tests.txt / phone-login-tests.txt / box-tests.txt 为测试日志，phone-screens/ / box-screens/ 为预览，build.txt 为构建和 Lint，native-alignment.txt 为对齐检查。
+
+## B站原始 AAC 下载、码率选择及手动 MP3 转换（2026-11-16）
+
+B站下载弹窗按实际返回的 AAC 音轨列出码率，使用稳定音轨 ID 解析所选音频，直接保存 M4A，不再自动转码。已有完整缓存时先显示离线选项，点击「查看其他可用码率」才查询其他音轨。下载仍先检查完整缓存，再补充第 1 P 信息及解析链接；播放缓存记录音轨 ID、码率和时长，相同音轨的原始播放缓存可用于指定码率下载，不跨音轨误用缓存。旧缓存没有码率元数据时显示近似平均码率。
+
+手机及平板播放页提供「更多 → 转换为 MP3」。转换使用本地下载文件或完整缓存导出的 M4A，另建持久化转换任务，生成 MP3 后保留原文件及缓存；移除转换任务仅移除新输出，失败可独立重试。转码时按输入文件的实际时长校验输出，避免视频标题或旧元数据时长导致误判。旧版本已经排队的自动 MP3 任务保留兼容处理。音源脚本原文及其指纹未修改，设置页单独更新原生 B站音源说明。
+
+手机 M2007J17C（9dd0fd82 / ARM64 / API 31）新增 AAC 数据用例 5 项、码率浮窗及播放更多入口 2 项均通过：真实 AAC/M4A 样本由设备编码器生成；验证离线缓存导出无需视频信息或音频请求、MediaPlayer 直接播放、低码率只使用对应缓存、显式音轨复用同一原始播放缓存、系统直接下载 M4A、不自动转码、转换输入持久化、失败重试及原文件字节不变。B站解析 10 项、旧 MP3 2 项、普通下载浮窗及播放布局复测通过；普通缓存下载、下载管理和音源管理回归也有通过记录。两项旧界面测试改用项目已有 ForegroundTestActivities，以适配 MIUI 前台启动限制。
+
+仍有 1 项未通过：MultiSourceDownloadsTest.interruptedTransferUsesNextSourceAfterHistoryReloadAndKeepsQuality 在该手机上多次等待 90 秒超时，最后启用 runDownloadJobs=true 后仍复现；未把它计为通过，原因尚未确定。日志保留在 build/aac-conversion-phone-regression.txt、build/aac-conversion-phone-final.txt、build/aac-conversion-phone-complete.txt。新增功能专项均通过，但本轮没有验证真实 B站账号及联网歌曲，未将模拟的码率列表或本地 AAC 样本描述为真实 B站端到端验收。
+
+48 项 JVM 单元测试通过，Debug、测试包和正式签名 Release 构建通过；Debug Lint 为 0 errors / 262 warnings，Release Lint Vital 通过，apksigner 验签及 zipalign 16 KB 对齐检查通过。构建记录为 build/aac-conversion-final.txt，码率浮窗预览为 build/aac-bitrate-options.png。正式 APK 为 app/build/outputs/apk/release/lx-music-native-v0.9.17-all.apk；版本保持 0.9.17 / 9017。只覆盖更新手机上的独立 .playercheck 测试包，正式应用未覆盖，未提交或推送。
+
+用户随后要求覆盖手机正式版：2026-11-16 18:06:27（Asia/Shanghai）通过 adb install -r 将上述 release 安装到手机 9dd0fd82 的 cn.toside.music.nativeapp，保留应用数据。安装返回 Success，版本仍为 0.9.17 / 9017，primaryCpuAbi=arm64-v8a；正式 MainActivity 冷启动返回 Status: ok，进程存活。已安装 base.apk 与构建产物 SHA-256 一致（86e16d00689970acfdf527439907022703153c291c365bda28b5d5be677f24f0）。记录为 build/aac-release-phone-update.txt；本次没有更新盒子。
+
+## B站真实音频 403 与统一三次自动重试（2026-11-16）
+
+用户反馈正式版「【Hi-Res】绅士-薛之谦」无法播放。手机日志确认音频 CDN 返回 HTTP 403。对同一公开视频 BV1VaWu61E1g / CID 43468915745 的新取链结果进行手机端对照：三个主/备用地址均在 Android 浏览器 UA 下返回 403；桌面浏览器 UA 的普通 GET 返回 200，Range 请求返回 206。新地址的有效期仍约两小时，调整 Range 或视频 Referer 无法修复 Android UA 的 403。BilibiliApi 统一改用网页音频兼容的桌面 UA，仍发送 B站 Referer，不向 CDN 发送账户 Cookie。
+
+播放请求的取链、地址刷新和 HTTP 续传共用首次尝试后最多三次重试，避免重建播放器后重复获得额度。401/403/404/410 转由服务刷新链接，解析主/备用 CDN 并避开已拒绝的地址；B站允许在有限额度内重新使用同一原生音源。重试期间保持准备状态、error=null，全部失败才显示一次最终提示。刷新地址清除 Media3 旧跳转元数据，相同 B站音轨保留有效分片；不同音轨或脚本编码不混用。B站原生音频适配器提取接口，专项通过注入实际原生适配路径的测试替身验证，不依赖不支持 original 音质的自定义脚本模拟。
+
+52 项 JVM 测试、28 项手机专项全部通过。覆盖三次 403 后第四次成功、四次均失败后才提示、取链前三次失败后成功、拒绝主 CDN 后播放备用地址、续传共享额度、失败缓存定向清理、旧重定向失效、音轨变更、原有换源及 AAC 下载/转换；包含公开音轨 CDN 请求对照。早期模拟脚本的三项失败日志保留在 build/bili-playback-retry-phone-tests.txt，不计为通过；最终记录为 build/bili-playback-retry-phone-complete.txt 和 build/bili-cdn-probe-final.json。Debug/测试包/正式签名 Release 构建、Debug Lint（0 errors / 263 warnings）、Release Lint Vital、apksigner 及 16 KB zipalign 检查通过。前一轮系统下载中断换源超时用例本轮未重跑，不视为已修复。
+
+2026-11-16 18:42:07（Asia/Shanghai）保留数据覆盖手机正式版，仍为 0.9.17 / 9017。直接播放用户原来失败的同一歌曲：正式进程 AudioTrack 于 18:42:32 开始输出，播放状态为 PLAYING，18:44:47 验证后暂停，实际播放位置为 135156 ms，界面显示 02:15 / 04:50，无播放错误。该结果仅代表这条公开视频的真实验收。已安装 APK 与本次 release 的 SHA-256 一致：705057cc44fc83ee56e3ec93fafe55c64c91e51b5700251455e5dcd81c0434f2。构建、安装、播放状态和汇总分别见 build/bili-playback-retry-final-build.txt、build/bili-playback-retry-release-install-final.txt、build/bili-playback-retry-real-song-paused.txt、build/bili-playback-retry-verification.json。诊断不保存账号 Cookie、完整签名 URL 或音频内容；未更新盒子，改动尚未提交或推送。
+
+## 下载总大小与封面保存（2026-11-16）
+
+下载列表的手机行新增独立总大小信息，宽屏状态栏使用第二行显示大小，详情同步显示；总大小尚未获取时显示未知。下载完成后独立后台任务保存同名 JPG 到 Download/LX Music/，优先读取封面缓存，旧任务缺少封面字段时自动加入补齐队列。本地歌曲先读内嵌封面，再读下载的 JPG；封面保存后刷新正在播放的本地歌曲。B站图片地址在网络请求时升级为 HTTPS 并使用 B站图片请求头，已有缓存键保持可复用。
+
+封面网络失败最多尝试 3 次，后台退避重试，音频完成状态和原始文件均不受影响；移除下载会移除其封面，保存过程中移除任务不会产生迟到文件。独立 MP3 转换保留原始音频及 JPG，为新 MP3 保存各自的 JPG。
+
+M2007J17C（API 31）独立测试包中 18 项下载回归通过，包含 6 项新增封面测试：旧记录迁移及离线缓存复用、503 后重试成功、三次失败后停止且保留音频、保存中删除无残留、真实后台 Job 与 MP3 转换文件独立性、系统下载 URI 的封面读取；同时覆盖 AAC 原样保存、所选音轨缓存、LRC 和下载页面总大小断言。旧页面用例显式选择所导入的测试音源，适配多音源优先级；AAC 播放用例按实际进度等待，移除设备上不稳定的固定 200 ms 假设。最终日志为 build/download-cover-device-tests.txt；早期失败不计为通过。52 项 JVM 测试、Debug 和正式三架构构建、两种 Lint（0 errors）、签名与 16 KB zipalign 检查通过，最终构建记录为 build/native-v0.9.18-final-build.txt。版本递增至 0.9.18 / 9018，并补齐自上一个 tag 后的更新摘要。
+
+2026-11-16 19:22:03（Asia/Shanghai）保留数据覆盖手机正式版为 0.9.18 / 9018，安装包 SHA-256 与本地 ARM64 正式包一致：c23b9565c8041aa526244a3d904661b67bdc95d8fa666794913ec5a700d2c80b。用户原有「生僻字」下载显示 5.62 MiB，详情确认同名 JPG 已自动补齐。真实播放旧下载时发现 DownloadProvider 的 DISPLAY_NAME 返回歌名而非文件名，已改为优先按原始下载 URI 关联封面，保留文件名匹配供媒体库 URI 使用；最终冷启动后同一本地歌曲正确显示保存的封面，播放停留在试听后的 00:34。截图见 build/native-v0.9.18-download-size.png 与 build/native-v0.9.18-local-playback.png。
+
+首次远程完整回归（Actions 43857248673）构建检查通过，设备回归发现旧测试前提尚未跟随本批功能调整：语言重建用例仍假定默认进入本地页、平台弹窗仍按 6 个选项计数、Android 9 用例调用了 API 29 的 WindowInspector、预测返回用例在 CI 全局关闭 Animator 时验证动画。分别改为显式打开本地页再验证重建、新增 B站后的 7 个搜索选项、直接读取应用弹窗，以及仅在动画专项临时恢复 Animator 时长并在 finally 还原；保留原断言。手机上相关的语言、平台菜单、AAC 码率及独立转换 4 项复测通过，记录为 build/native-v0.9.18-ci-fixes-phone-tests.txt；Android 14+ 的预测返回仍由远程 API 35 回归验证。
+
+第二轮完整回归中 Android 28 已通过，Android 35 仅剩预测返回的手势中 Fragment 标签查询断言失败。对照 AndroidX 官方 FragmentAnimatorTest 的动画与取消用例，改为手势中检查原视图仍附着且动画随进度变化，取消后等待同一 Fragment 恢复 RESUMED，并检查回退栈、主导航 Fragment 和播放服务仍保持；提交手势仍要求播放器关闭而 Activity 与服务保留。该调整验证实际可见行为与取消恢复状态，不依赖过渡期间的标签索引。
+
+第三轮 Android 28 继续通过，Android 35 的手势中视图与动画断言通过，但取消恢复等待仍失败。将取消后的视图检查改为 Fragment 当前视图，允许框架重建视图，同时增加失败时的 Fragment、生命周期、当前视图附着和回退栈诊断，以进一步区分视图重建与恢复异常。
+
+详细诊断确认 Android 35 取消手势后，同一播放器已恢复 RESUMED、当前视图仍附着、回退栈为 1，但 alpha 停留在 0.27300477，属于实际界面恢复缺陷。PlayerDetailFragment.onResume 现在显式将透明度、横纵缩放还原为 1；回归同时验证左右两侧取消后的透明度、缩放、同一 Fragment、主导航与服务，以及完成手势后的退出行为。Android 15 验收继续以远程 API 35 结果为准。
+
+补丁后的 5 项手机播放器回归、52 项 JVM 测试、正式三架构构建与 Debug/Release Lint 均通过；手机测试覆盖返回只关闭播放器、设置返回歌词页、系统栏布局、AAC 码率与独立 MP3 菜单，记录为 build/native-v0.9.18-player-final-phone-tests.txt。20:20:26 保留数据覆盖手机正式版，最终 ARM64 APK 与手机安装包 SHA-256 一致：24308f12b942db32e0f746ee823b7512912325b98c1d7398f23d96e71deb9791；正式签名保持不变，三个 APK 的 16 KB zipalign 通过。
+
+## bilibili 搜索与歌词偏好、内置音源删除限制（2026-11-17）
+
+搜索平台显示名称改为 bilibili，仅在内置「B站音乐」启用时提供，停用当前选中的 bilibili 后回到聚合搜索并清除旧结果。自定义音源页增加 bilibili 歌词方式及说明，默认优先匹配歌词，可改为优先视频字幕；两种方式支持回退、分别缓存，切换后重载当前 bilibili 歌词，手动导入的 LRC 优先。仅内置音源的删除菜单项变灰不可点击，导入音源保持可删除。
+
+52 项 JVM 测试、Debug 应用及测试包构建通过，Debug Lint 为 0 errors / 268 warnings。在线 YYA-H618（Android 12 / API 31）使用独立 `.bilisettingscheck` 包完成 29 项设备测试：BilibiliLyricsTest 7 项、BilibiliSettingsUiTest 2 项、BilibiliTest 11 项、SearchPageTest 8 项、MultiSourceSettingsTest 1 项；设置界面 2 项在第二轮再次通过。覆盖字幕时间轴及空隙、字幕语言与人工轨道优先级、两种歌词方式的首选与失败回退、取消请求、缓存隔离与手动导入优先、内置脚本识别、搜索入口随启用状态变化、设置持久化、删除项的禁用状态与灰色，以及原搜索分页/切换/主题和音源排序回归。
+
+记录为 build/bilibili-settings-build.txt、build/bilibili-settings-checks.txt、build/bilibili-settings-device-tests.txt 和 build/bilibili-settings-regression.txt。字幕接口按公开实现接入，本轮使用固定数据验证解析与选择逻辑，未使用真实 B站账号验证联网字幕。正式应用未覆盖，版本仍为 0.9.18 / 9018，未提交或推送。
+
+## 评论独立页面与平台回退（2026-11-17）
+
+评论入口迁移到非浮动的 CommentsActivity，包含热门/最新、刷新、分页、头像、日期、正文、仅展示的灰色点赞数，以及带相同信息的缩进回复行。查看完整回复也打开普通 Activity，删除原 CommentsDialog。返回保留原搜索输入，重建保留 ViewModel、所选标签和列表位置；界面适配窄屏、宽屏、深色主题和大字号。
+
+原音乐平台请求失败或评论为空时，按现有歌曲匹配规则尝试其他音乐平台，并显示实际来源；后续分页和回复固定来源，刷新重新尝试原平台。bilibili 始终读取当前视频，使用用户指定镜像文档的 WBI 主评论和回复接口，不加入跨平台回退。所有评论读取路径均不包含点赞、发布或追加回复操作。
+
+收到仅使用手机 9dd0fd82 的限制后，后续安装与测试全部指定该序列号，使用独立的 cn.toside.music.nativeapp.commentscheck 包；未覆盖正式应用，也未继续操作另一台设备。最终 28 项设备检查通过，其中 26 项持久化回归覆盖六平台解析、头像/引用/大 ID、WBI 模式与游标、回退与来源固定、失败重试、取消隔离、计数切源清理、只读点赞、完整窗口触摸分发下的分页和回复入口、返回与重建、窄/宽屏和深色英文大字号；另外 2 项临时联网检查验证公开接口及真实页面。
+
+真实联网结果：酷我 Monsters 热门 20 条、最新 20 条、下一页 20 条，首屏 17 条带头像；bilibili 公开视频 BV1GJ411x7h7 热门 20 条、最新 18 条、下一页 20 条、楼中楼 20 条，首屏 20 条带头像。bilibili 使用隔离包的匿名状态，本轮未验证登录账号或受限视频。跨平台回退使用固定数据验证，联网检查分别读取酷我与 bilibili，不将其视为真实跨平台切换验收。
+
+52 项 JVM 测试、Debug 应用及测试包构建、Debug Lint（0 errors / 284 warnings）通过。最初触控用例被手机系统拒绝跨应用事件注入，已改为从应用窗口派发 MotionEvent 并验证完整视图分发，最终 28 项全部通过；早期失败不计为通过。最终记录为 build/comments-final-build.txt、build/comments-touch-build.txt、build/comments-final-phone-tests.txt 和 build/comments-phone-validation/live-comments.json；真实页面截图为同目录的 phone-live-kw.png、phone-live-bili.png。临时联网用例和隔离构建设置仅保存在忽略的 build/ 下，不加入日常离线回归。当前版本仍为 0.9.19 / 9019，本批改动尚未提交或推送。
+
+## 评论单行标题、缩略图与图片详情（2026-11-17）
+
+评论和回复标题最多一行，超长省略；刷新移至标题右侧，回复页整行隐藏热门/最新，消除空白工具栏。配图显示为可换行的页内缩略图，点击打开非导出的独立 CommentImageActivity，不再调用浏览器或图片 Dialog。
+
+详情页默认按可用区域完整、等比居中显示，支持原生双指缩放、超出视口后的四向拖动、双击放大或恢复。能够完整显示的方向始终居中，超出的方向限制在图片边界内。重建页面保留同一图片 ViewModel、缩放倍数和可见中心，返回原评论 Activity。缩略图使用 256 px 解码上限，普通封面沿用 512 px 与原缓存键，详情使用独立缓存、4096 px 长边和 800 万像素解码上限；沿用有界网络读取、bilibili 图片请求头及失败重试。
+
+60 项 JVM 测试通过，含 8 项新增 ImageViewport 测试，覆盖横/长/小图适配、焦点缩放、四边拖动约束、单轴居中、倍数边界、尺寸变化和无效输入。仅在手机 9dd0fd82 的独立 .commentscheck 包验证，另一台设备及正式应用未操作。31 项设备综合运行中的 27 项评论/标题检查及其他图片检查通过，最初图片手势断言错误地要求未超出视口的方向也能移动；随后按设备实际缩放启动阈值重复手势，明确放大到两轴均超出后验证拖动。最终单独复测的 4 项图片检查全部通过，覆盖尺寸缓存隔离及离线复用、缩略图到内部页面及返回、双指缩放/拖动/重建/双击恢复、加载失败重试及无效 URL 排除。早期综合运行整体失败，不记为整轮通过；当前 31 项各项均已有通过记录。
+
+Debug 与测试包构建、Debug Lint（0 errors / 287 warnings）通过。记录为 build/comment-images-final-build.txt、build/comment-images-gesture-build.txt、build/comment-images-final-phone-tests.txt 和 build/comment-images-gesture-phone-tests.txt。已目视核对单行回复标题、缩略图、默认适配和放大后的截图，保存于 build/comment-images-validation/；截图图片为本地 HTTP 测试素材。本轮未新增真实平台联网验收，版本保持 0.9.19 / 9019，改动尚未提交。
+
+## 评论图片大小设置与失败原因（2026-11-17）
+
+手机截图确认问题来自张雨生《大海》（BV1pP4y1G7hU）第二页热门评论中的第三张海边照片，而非之前《悟空》的配图。手机上三张原图均返回 HTTP 200、JPEG，实际响应大小分别为 5,926,862、5,957,955、8,839,771 字节；第三张约 8.43 MiB，超过原来复用封面加载器的 8 MiB 限制，缩略图和详情均抛出“文件或响应内容过大”。评论 API 的 img_size 小于实际 CDN 响应，不用该字段代替真实下载限制。原始证据为 build/comment-image-current-before-fix.json；最初未找到评论的诊断尝试不计为成功，之后已按游标定位到对应条目。
+
+通用设置新增「评论图片加载上限」，选项为 1、2、4、8、16、32 MiB，默认 16 MiB，缩略图和详情共用，重试重新读取偏好。普通封面下载仍保持 8 MiB。已知 Content-Length 超限时提前终止，未知长度仍有流式读取上限；缓存解码、下载大小与解码像素限制分开。图片详情保留 4096 px 长边、800 万像素上限。错误状态携带类型与状态码，使用本地化文案说明大小超限、HTTP、超时、DNS、安全连接、解码或连接中断；文案多行居中，限制宽度，四周保留 24 dp 间距。
+
+60 项 JVM 测试、Debug 应用/测试包构建及 Debug Lint（0 errors / 287 warnings）通过。仅在手机 9dd0fd82 的隔离 .commentscheck 包完成 14 项检查：7 项评论页面、6 项图片/设置，以及 1 项临时真实配图诊断。新增回归使用超过 8 MiB 的有效 PNG，验证普通封面仍受限、缩略图按所选 32 MiB 成功、详情在用户选择 8 MiB 时显示实际大小与居中提示、调高至 16 MiB 后重试成功，以及设置菜单的偏好持久化。原 HTTP 503 重试用例同步检查具体状态码，原缩放/拖动/重建和标题检查通过。
+
+修复后，原第三张图片在手机上成功加载为 252×189 缩略图和 2016×1512 详情图，真实 HTTP 状态与结果保存于 build/comment-image-current-after-fix.json。最终构建与设备日志为 build/comment-image-settings-build.txt、build/comment-image-settings-phone-tests.txt；居中错误示例已目视核对，保存于 build/comment-image-settings-validation/comment-image-size-error-centered.png，该示例使用本地测试图。未继续操作另一台设备，正式应用未覆盖；当前版本仍为 0.9.19 / 9019，改动尚未提交。
+
+图片加载上限默认值按用户要求调整为 16 MiB，同步偏好回退、设置页默认选项、三种语言说明与文档，保留已有手动选择。60 项 JVM 测试、Debug/测试包构建及 Lint 通过；手机 9dd0fd82 隔离包的设置专项复测通过，包含独立空偏好下的 16 MiB 默认读取与设置保存断言。记录为 build/comment-image-default16-build.txt 和 build/comment-image-default16-phone-tests.txt，本次调整合并到最近一次本地提交。
+
+## 0.9.20 发布前检查（2026-11-17）
+
+版本更新为 0.9.20 / 9020，新增 doc/release-notes/native-v0.9.20.md，概述评论独立页面、跨平台回退、bilibili 评论、缩略图与缩放详情、默认 16 MiB 上限及居中失败说明。60 项 JVM 单元测试、Debug Lint（0 errors / 287 warnings）、正式三架构 APK 构建及 Release Lint Vital 通过；包名、版本、ABI、与现有正式版一致的证书及 16 KB zipalign 校验通过。记录为 build/native-v0.9.20-local-build.txt 和 build/native-v0.9.20-apk-checks.json。
+
+本地 Python 应用别名未能启动，发布脚本测试未在本地执行，不记为通过；该检查由随后远程 Native Android 工作流执行。按用户要求先推送 dev，等待分支及现有 PR 的完整 Actions 回归成功，再为经过检查的提交创建 native-v0.9.20；发布前尚未创建 tag。本轮不安装或操作 adb 设备。

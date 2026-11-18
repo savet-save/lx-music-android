@@ -38,6 +38,7 @@ class DownloadLyricsJob : JobService() {
     companion object {
         private const val ID = 0x4c584c52
         fun schedule(context: Context) { runCatching {
+            DownloadCoverJob.schedule(context)
             val scheduler = context.getSystemService(JobScheduler::class.java) ?: return
             scheduler.schedule(JobInfo.Builder(ID, ComponentName(context, DownloadLyricsJob::class.java))
                 .setMinimumLatency(0).setBackoffCriteria(30_000, JobInfo.BACKOFF_POLICY_EXPONENTIAL).build())
@@ -49,6 +50,10 @@ class DownloadCompleteReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != DownloadManager.ACTION_DOWNLOAD_COMPLETE) return
         val id = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1)
-        if (id >= 0 && Downloads(context).ownsSystemId(id)) DownloadLyricsJob.schedule(context)
+        if (id >= 0 && Downloads(context).ownsSystemId(id)) {
+            DownloadLyricsJob.schedule(context)
+            DownloadFallbackJob.schedule(context)
+            Mp3ConversionJob.schedule(context)
+        }
     }
 }

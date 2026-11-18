@@ -5,6 +5,7 @@ package cn.toside.music.nativeapp.player
 import android.net.Uri
 import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.cache.ContentMetadataMutations
+import androidx.media3.datasource.cache.ContentMetadata
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Assert.*
@@ -14,6 +15,27 @@ import java.io.File
 
 @RunWith(AndroidJUnit4::class)
 class AudioStreamCacheTest {
+    @Test fun refreshedUrlsDropStaleRedirectsWhileOnlyChangedAudioTracksDiscardCachedBytes() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val directory = File(context.cacheDir, "audio-refresh-test-${System.nanoTime()}")
+        val cache = AudioStreamCache(context, directory)
+        val key = "bili:fixture::original"
+        try {
+            cache.remember(key, Uri.parse("https://old.example/audio"), 192000, 12000, 30280)
+            val hole = cache.cache.startReadWrite(key, 0, 32)
+            try {
+                val file = cache.cache.startFile(key, 0, 32); file.writeBytes(ByteArray(32)); cache.cache.commitFile(file, 32)
+            } finally { cache.cache.releaseHoleSpan(hole) }
+            val metadata = ContentMetadataMutations()
+            ContentMetadataMutations.setRedirectedUri(metadata, Uri.parse("https://expired.example/audio"))
+            cache.cache.applyContentMetadataMutations(key, metadata)
+            cache.remember(key, Uri.parse("https://fresh.example/audio"), 192000, 12000, 30280)
+            assertNull(ContentMetadata.getRedirectedUri(cache.cache.getContentMetadata(key)))
+            assertEquals(32L, cache.bytes)
+            cache.remember(key, Uri.parse("https://fresh.example/lower"), 64000, 12000, 30216)
+            assertEquals(0L, cache.bytes)
+        } finally { cache.close(); directory.deleteRecursively() }
+    }
     @Test fun readsCachedAudioOfflineAndEvictsLeastRecentlyUsedSpansWhenLimitChanges() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val directory = File(context.cacheDir, "audio-cache-test-${System.nanoTime()}")

@@ -13,15 +13,24 @@ import java.util.concurrent.atomic.AtomicInteger
 import kotlin.concurrent.thread
 
 /** Unique URLs with full 512 px decoded images, large enough to exceed the cover LRU on tablets. */
-internal class CoverHttpFixture : AutoCloseable {
+internal class CoverHttpFixture(width: Int = 512, height: Int = 512, noisy: Boolean = false) : AutoCloseable {
     private val server = ServerSocket(0, 32, InetAddress.getByName("127.0.0.1"))
     private val sockets = ConcurrentHashMap.newKeySet<Socket>()
     val requests = AtomicInteger()
+    val failuresRemaining = AtomicInteger()
     val address = "http://127.0.0.1:${server.localPort}"
-    private val body = Bitmap.createBitmap(512, 512, Bitmap.Config.ARGB_8888).let { bitmap ->
-        Canvas(bitmap).apply { drawColor(Color.rgb(46, 133, 173)); drawText("COVER", 60f, 270f, Paint().apply { color = Color.WHITE; textSize = 90f }) }
+    private val body = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888).let { bitmap ->
+        if (noisy) {
+            val random = java.util.Random(42)
+            bitmap.setPixels(IntArray(width * height) { android.graphics.Color.BLACK or random.nextInt(0x1000000) }, 0, width, 0, 0, width, height)
+        }
+        Canvas(bitmap).apply {
+            if (!noisy) drawColor(Color.rgb(46, 133, 173))
+            drawText("COVER", 60f, 270f, Paint().apply { color = Color.WHITE; textSize = 90f })
+        }
         ByteArrayOutputStream().use { output -> bitmap.compress(Bitmap.CompressFormat.PNG, 100, output); bitmap.recycle(); output.toByteArray() }
     }
+    val imageByteCount get() = body.size
     private val worker = thread(isDaemon = true, name = "cover-fixture") {
         while (!server.isClosed) {
             val socket = try { server.accept() } catch (_: Exception) { break }
@@ -32,9 +41,11 @@ internal class CoverHttpFixture : AutoCloseable {
                     if (input.readLine() == null) return@use
                     while (!input.readLine().isNullOrEmpty()) { }
                     requests.incrementAndGet()
+                    val fail = failuresRemaining.getAndUpdate { remaining -> (remaining - 1).coerceAtLeast(0) } > 0
                     it.getOutputStream().apply {
-                        write("HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: image/png\r\nContent-Length: ${body.size}\r\n\r\n".toByteArray())
-                        write(body); flush()
+                        write("HTTP/1.1 ${if (fail) "503 Unavailable" else "200 OK"}\r\nConnection: close\r\nContent-Type: image/png\r\nContent-Length: ${if (fail) 0 else body.size}\r\n\r\n".toByteArray())
+                        if (!fail) write(body)
+                        flush()
                     }
                 } } catch (_: Exception) { /* Test teardown closes sockets. */ }
                 finally { sockets.remove(socket) }

@@ -1,6 +1,7 @@
 package cn.toside.music.nativeapp.lyrics
 
 import cn.toside.music.nativeapp.data.Song
+import cn.toside.music.nativeapp.data.AppPreferences
 import cn.toside.music.nativeapp.utils.readBounded
 
 import android.content.Context
@@ -50,29 +51,32 @@ object LrcParser {
 
 class Lyrics(private val context: Context) {
     private fun file(songId: Long, source: String): File {
-        require(source in setOf("local", "kg", "kw", "tx", "wy", "mg"))
+        require(source in setOf("local", "kg", "kw", "tx", "wy", "mg", "bili"))
         return File(context.filesDir, if (source == "local") "lyrics/$songId.lrc" else "lyrics/${source}_$songId.lrc")
     }
-    suspend fun load(songId: Long, source: String): List<LyricLine> = withContext(Dispatchers.IO) {
+    private fun cacheFile(original: File, source: String, preferSubtitles: Boolean): File =
+        File(original.parentFile, original.nameWithoutExtension + (if (source == "bili" && preferSubtitles) "_subtitle" else "") + ".json")
+    suspend fun load(songId: Long, source: String, preferSubtitles: Boolean = AppPreferences(context).preferBilibiliSubtitles): List<LyricLine> = withContext(Dispatchers.IO) {
         val file = file(songId, source)
         if (file.isFile) LrcParser.parse(file.readText(Charsets.UTF_8)) else {
-            val cached = File(file.parentFile, file.nameWithoutExtension + ".json")
+            val cached = cacheFile(file, source, preferSubtitles)
             if (!cached.isFile) emptyList() else runCatching {
                 decode(cached.inputStream().use { it.readBounded(MAX_SIZE) }.toString(Charsets.UTF_8))
             }.getOrDefault(emptyList())
         }
     }
-    suspend fun cache(song: Song, lines: List<LyricLine>) = withContext(Dispatchers.IO) {
+    suspend fun cache(song: Song, lines: List<LyricLine>, preferSubtitles: Boolean = AppPreferences(context).preferBilibiliSubtitles) = withContext(Dispatchers.IO) {
         if (lines.isEmpty()) return@withContext
         val original = file(song.id, song.source)
-        val target = File(original.parentFile, original.nameWithoutExtension + ".json")
+        val target = cacheFile(original, song.source, preferSubtitles)
         val bytes = encode(lines).toByteArray(Charsets.UTF_8)
         require(bytes.size <= MAX_SIZE) { "歌词数据过大" }
         writeAtomic(target, bytes)
     }
     suspend fun clearOnlineCache(song: Song) = withContext(Dispatchers.IO) {
         val original = file(song.id, song.source)
-        File(original.parentFile, original.nameWithoutExtension + ".json").delete()
+        cacheFile(original, song.source, false).delete()
+        if (song.source == "bili") cacheFile(original, song.source, true).delete()
     }
     suspend fun import(songId: Long, source: String, uri: Uri) = withContext(Dispatchers.IO) {
         val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBounded(MAX_SIZE) }

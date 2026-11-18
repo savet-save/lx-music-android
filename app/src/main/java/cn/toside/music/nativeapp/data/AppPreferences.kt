@@ -1,13 +1,26 @@
 package cn.toside.music.nativeapp.data
 
+import cn.toside.music.nativeapp.utils.StoreHelper
+
 import android.content.Context
 
 internal class AppPreferences(context: Context, name: String = "app-settings") {
     private val preferences = context.getSharedPreferences(name, Context.MODE_PRIVATE)
-    fun bool(key: String, fallback: Boolean = false): Boolean = preferences.all[key] as? Boolean ?: fallback
-    fun set(key: String, value: Boolean) { preferences.edit().putBoolean(key, value).apply() }
-    fun string(key: String, fallback: String): String = preferences.all[key] as? String ?: fallback
-    fun set(key: String, value: String) { preferences.edit().putString(key, value).apply() }
+    // Preserve explicitly scoped contexts while ordinary application settings use the shared cache API.
+    private val usesDefaultStore = name == "app-settings" &&
+        preferences === StoreHelper.getSP()
+    fun bool(key: String, fallback: Boolean = false): Boolean = if (usesDefaultStore) {
+        runCatching { StoreHelper.getBool(key, fallback) }.getOrDefault(fallback)
+    } else preferences.all[key] as? Boolean ?: fallback
+    fun set(key: String, value: Boolean) {
+        if (usesDefaultStore) StoreHelper.putBool(key, value) else preferences.edit().putBoolean(key, value).apply()
+    }
+    fun string(key: String, fallback: String): String = if (usesDefaultStore) {
+        runCatching { StoreHelper.getString(key, fallback) }.getOrDefault(fallback)
+    } else preferences.all[key] as? String ?: fallback
+    fun set(key: String, value: String) {
+        if (usesDefaultStore) StoreHelper.putString(key, value) else preferences.edit().putString(key, value).apply()
+    }
     val showSource get() = bool("list.isShowSource", true)
     val showAlbum get() = bool("list.isShowAlbumName")
     val showDuration get() = bool("list.isShowInterval", true)
@@ -25,6 +38,9 @@ internal class AppPreferences(context: Context, name: String = "app-settings") {
     val startupPlayer get() = bool("player.startupPushPlayDetailScreen")
     val searchHistory get() = bool("search.isShowHistorySearch", true)
     val hotSearch get() = bool("search.isShowHotSearch")
+    val preferBilibiliSubtitles get() = string("bilibili.lyricsMode", "match") == "subtitle"
+    val commentImageLimitMiB get() = string("common.commentImageMaxSize", "16").toIntOrNull()?.coerceIn(1, 32) ?: 16
+    val commentImageMaxBytes get() = commentImageLimitMiB * 1024 * 1024
     val recordHistory get() = bool("player.recordHistory", true)
     val autoCleanQueue get() = bool("player.isAutoCleanPlayedList")
     val autoLowerQuality get() = bool("player.autoLowerQuality", true)

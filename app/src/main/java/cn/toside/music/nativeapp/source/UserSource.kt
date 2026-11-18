@@ -107,7 +107,7 @@ class UserSource(private val context: Context) {
     }
     fun dismissUpdate() { mutableUpdate.value = null }
 
-    private suspend fun load(script: String): JSONObject {
+    internal suspend fun load(script: String): JSONObject {
         val initialized = withContext(dispatcher) {
             reset()
             val entry = UserSourceLibrary.metadata(script)
@@ -184,6 +184,16 @@ class UserSource(private val context: Context) {
     internal suspend fun supports(source: String, action: String): Boolean = withContext(dispatcher) {
         val actions = sourceInfo.optJSONObject("sources")?.optJSONObject(source)?.optJSONArray("actions") ?: return@withContext false
         (0 until actions.length()).any { actions.optString(it) == action }
+    }
+    internal suspend fun hasQuality(quality: String): Boolean = withContext(dispatcher) {
+        val sources = sourceInfo.optJSONObject("sources") ?: return@withContext false
+        sources.keys().asSequence().any { source ->
+            val info = sources.optJSONObject(source) ?: return@any false
+            val actions = info.optJSONArray("actions") ?: return@any false
+            val qualities = info.optJSONArray("qualitys") ?: JSONArray()
+            (0 until actions.length()).any { actions.optString(it) == "musicUrl" } &&
+                ((0 until qualities.length()).any { qualities.optString(it) == quality } || qualities.length() == 0 && quality == "128k")
+        }
     }
     internal suspend fun sourceRequest(source: String, action: String, info: JSONObject, quality: String = "128k", exactQuality: Boolean = false): JSONObject {
         val result = withContext(dispatcher) {

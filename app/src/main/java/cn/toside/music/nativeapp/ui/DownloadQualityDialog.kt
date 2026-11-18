@@ -36,9 +36,10 @@ import org.json.JSONObject
 import java.util.Locale
 
 internal fun downloadQualityLabel(code: String): String = when (code) {
+    "original" -> "AAC / M4A"
     "flac24bit" -> "24-bit FLAC"
     "flac" -> "FLAC"
-    else -> code.uppercase(Locale.ROOT)
+    else -> if (code.startsWith("aac-")) "AAC / M4A" else code.uppercase(Locale.ROOT)
 }
 
 internal fun showDownloadQuality(activity: Activity, song: Song, palette: UiPalette, styles: LxStyles,
@@ -116,7 +117,7 @@ internal fun showDownloadQuality(activity: Activity, song: Song, palette: UiPale
         work.launch {
             val usable = try {
                 permits.withPermit {
-                    withTimeout(20_000) {
+                    withTimeout(120_000) {
                         probe(code) { bytes -> work.launch { progress.isIndeterminate = false; progress.progress = bytes } }
                     }
                 }

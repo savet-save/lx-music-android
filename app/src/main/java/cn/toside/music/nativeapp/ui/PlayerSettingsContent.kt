@@ -118,9 +118,9 @@ internal class PlayerSettingsContent(
                 try {
                     setRate(1f); setVolume(1f)
                     settings.setFontSize(if (landscape) 22 else 21, landscape)
-                    settings.setAlignment(LyricAlignment.LEFT)
+                    settings.setAlignment(LyricAlignment.CENTER)
                     rate.progress = 100; volume.progress = 100; font.progress = if (landscape) 22 else 21
-                    alignment.check(choices.getValue(LyricAlignment.LEFT).id)
+                    alignment.check(choices.getValue(LyricAlignment.CENTER).id)
                     changeOffset(0); appearanceChanged()
                 } catch (e: RuntimeException) { ToastUtils.show(activity, e.localizedMessage ?: activity.getString(R.string.ui_3a89dbc96a55)) }
             }

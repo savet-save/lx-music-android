@@ -26,6 +26,8 @@ import cn.toside.music.nativeapp.data.PlaylistCredentials
 import cn.toside.music.nativeapp.player.PlaybackService
 import cn.toside.music.nativeapp.source.OnlineSourceImport
 import cn.toside.music.nativeapp.source.UserSourceEntry
+import cn.toside.music.nativeapp.source.UserSourceCatalog
+import cn.toside.music.nativeapp.source.UserSourceLibrary
 import cn.toside.music.nativeapp.source.UserSourceUpdate
 import cn.toside.music.nativeapp.sync.BackgroundSyncState
 import cn.toside.music.nativeapp.update.NativeReleases
@@ -134,9 +136,9 @@ internal class SettingsPage(
     internal fun createContent(): View {
         tabs.clear(); tabStrip = null
         val root = column().apply { tag = "settings-root"; setBackgroundColor(palette.surface) }
-        val header = LinearLayout(activity).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(dp(8), dp(4), dp(12), dp(4)) }
-        header.addView(button("‹") { onClose() }.apply { contentDescription = text(R.string.ui_3fd47edce45b); textSize = 30f; setPadding(0, 0, 0, 0) }, LinearLayout.LayoutParams(dp(48), dp(48)))
-        header.addView(label(text(R.string.settings_title), 21f).apply { setTypeface(null, Typeface.BOLD) }, LinearLayout.LayoutParams(0, -2, 1f))
+        val header = LinearLayout(activity).apply { tag = "settings-header"; gravity = Gravity.CENTER_VERTICAL; isBaselineAligned = false; setPadding(dp(4), dp(4), dp(12), dp(4)) }
+        header.addView(styles.backButton { onClose() }, LinearLayout.LayoutParams(dp(48), dp(48)))
+        header.addView(label(text(R.string.settings_title), 21f).apply { tag = "settings-title"; includeFontPadding = false; gravity = Gravity.CENTER_VERTICAL; setTypeface(null, Typeface.BOLD) }, LinearLayout.LayoutParams(0, -2, 1f))
         root.addView(header); divider(root)
         val body = LinearLayout(activity).apply { orientation = if (layout.expanded) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL }
         val nav = LinearLayout(activity).apply {
@@ -231,6 +233,8 @@ internal class SettingsPage(
         note(text(R.string.settings_apply_hint))
         choice(R.string.interface_language, "common.langId", arrayOf(text(R.string.language_system), "简体中文", "繁體中文", "English"), arrayOf("", "zh-CN", "zh-TW", "en"), "")
         choice(R.string.ui_6089721beb10, "common.fontScale", arrayOf("80%", "90%", "100%", "110%", "120%", "130%", "150%"), arrayOf("0.8", "0.9", "1.0", "1.1", "1.2", "1.3", "1.5"), "1.0")
+        choice(R.string.comments_image_limit, "common.commentImageMaxSize", arrayOf("1 MiB", "2 MiB", "4 MiB", "8 MiB", "16 MiB", "32 MiB"), arrayOf("1", "2", "4", "8", "16", "32"), "16")
+        note(text(R.string.comments_image_limit_hint))
         toggle(R.string.ui_11c5a044b748, "common.showBackBtn")
         toggle(R.string.ui_c9edbe7646fb, "common.showExitBtn", true)
         choice(R.string.ui_d715550e650d, "common.drawerLayoutPosition", arrayOf(text(R.string.ui_6a24b14f33c7), text(R.string.ui_1cf1d4d0b24b)), arrayOf("left", "right"), "left")
@@ -281,7 +285,18 @@ internal class SettingsPage(
 
     private fun sources() {
         sourceNotice = column().apply { tag = "settings-source-update"; content.addView(this) }
-        note(text(R.string.settings_source_hint)); section(text(R.string.settings_source_online))
+        note(text(R.string.sources_fallback_hint))
+        section(text(R.string.bili_settings))
+        action(text(R.string.bili_login), text(R.string.bili_account_settings)) {
+            activity.startActivity(android.content.Intent(activity,BilibiliLoginActivity::class.java))
+        }.tag = "settings-bilibili-login"
+        choice(R.string.bili_lyrics_mode, "bilibili.lyricsMode",
+            arrayOf(text(R.string.bili_lyrics_subtitle), text(R.string.bili_lyrics_match)),
+            arrayOf("subtitle", "match"), "match")
+        note(text(R.string.bili_lyrics_mode_hint))
+        section(text(R.string.settings_source_installed))
+        sourceList = column().apply { tag = "settings-source-list"; content.addView(this) }
+        section(text(R.string.settings_source_online))
         val fieldLabel = label(text(R.string.settings_source_url), 13f, palette.muted).also { content.addView(it) }
         sourceInput = EditText(activity).apply {
             id = View.generateViewId(); tag = "settings-source-url"; hint = "https://example.com/source.js"
@@ -300,8 +315,6 @@ internal class SettingsPage(
         sourceStatus = note(sourceMessage.orEmpty()).apply { tag = "settings-source-status"; accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE }
         updateImportState()
         localImport = action(text(R.string.ui_3158c8d56b7b)) { if (importJob?.isActive != true) actions.importLocal() }.apply { tag = "settings-source-local-import" }
-        section(text(R.string.settings_source_installed))
-        sourceList = column().apply { tag = "settings-source-list"; content.addView(this) }
         updateImportState()
         refreshSources()
     }
@@ -315,7 +328,7 @@ internal class SettingsPage(
                 val script = OnlineSourceImport(activity).download(sourceUrl)
                 sourceMessage = text(R.string.settings_source_validating); updateImportState()
                 service.importSource(script)
-                sourceMessage = text(R.string.settings_source_success); sourceUrl = ""; sourceInput?.text?.clear(); refreshSources()
+                sourceMessage = text(if (player()?.sourceCatalog()?.enabled?.contains(UserSourceLibrary.metadata(script).id) == true) R.string.settings_source_success else R.string.sources_import_disabled); sourceUrl = ""; sourceInput?.text?.clear(); refreshSources()
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) { sourceMessage = activity.getString(R.string.ui_03f6f90cdb7a, e.localizedMessage.orEmpty()) }
             finally { importJob = null; updateImportState() }
@@ -353,24 +366,68 @@ internal class SettingsPage(
             try {
                 val service = player() ?: return@launch
                 val catalog = service.sourceCatalog(); list.removeAllViews()
-                action(text(R.string.ui_98e96c39ccf6), if (catalog.selected == null) text(R.string.ui_7f1c18aeb640) else "", list) {
-                    if (importJob?.isActive == true) return@action
-                    scope.launch { try { service.selectSource(null); refreshSources() } catch (e: CancellationException) { throw e } catch (e: Exception) { sourceMessage = e.localizedMessage; updateImportState() } }
-                }
-                if (catalog.entries.isEmpty()) list.addView(noteView(text(R.string.settings_source_no_sources)))
-                catalog.entries.forEach { entry ->
-                    val details = listOf(if (entry.id == catalog.selected) text(R.string.settings_selected) else "", entry.version, entry.author).filter { it.isNotBlank() }.joinToString(" · ")
-                    lateinit var row: LinearLayout
-                    row = action(entry.name, details, list) { if (importJob?.isActive != true) actions.sourceActions(row, entry, ::refreshSources) }
-                    if (entry.description.isNotBlank()) list.addView(noteView(entry.description))
-                    if (entry.homepage.startsWith("https://") || entry.homepage.startsWith("http://")) action(text(R.string.ui_3e0d676d2d85), parent = list) {
-                        runCatching { activity.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(entry.homepage))) }
-                    }
-                }
+                renderSourceRows(list, service, catalog)
                 updateImportState()
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) { list.removeAllViews(); list.addView(noteView(activity.getString(R.string.ui_b0f9363c052f, e.localizedMessage.orEmpty()))) }
         }
+    }
+
+    private fun renderSourceRows(list: LinearLayout, service: PlaybackService, catalog: UserSourceCatalog) {
+        fun heading(value: String, tagName: String) {
+            list.addView(label(value, 15f, palette.primary).apply {
+                tag = tagName; isAccessibilityHeading = true; setPadding(0, dp(18), 0, dp(10))
+            })
+        }
+        fun change(action: suspend () -> Unit) {
+            if (importJob?.isActive == true) return
+            scope.launch {
+                try { action(); refresh(); refreshSources() }
+                catch (e: CancellationException) { throw e }
+                catch (e: Exception) { sourceMessage = e.localizedMessage; updateImportState(); refreshSources() }
+            }
+        }
+        fun entry(entry: UserSourceEntry, position: Int?) {
+            val active = position != null
+            val details = listOf(
+                if (position == 0) text(R.string.settings_selected) else if (active) text(R.string.sources_enabled) else text(R.string.sources_disabled),
+                position?.let { activity.getString(R.string.sources_priority, it + 1) }.orEmpty(), entry.version, entry.author,
+            ).filter { it.isNotBlank() }.joinToString(" · ")
+            lateinit var row: LinearLayout
+            row = action(entry.name, details, list) { if (importJob?.isActive != true) actions.sourceActions(row, entry, ::refreshSources) }
+            row.tag = "source-row-${entry.id}"
+            row.removeViewAt(row.childCount - 1)
+            if (active) {
+                listOf(-1 to "↑", 1 to "↓").forEach { (delta, glyph) ->
+                    row.addView(label(glyph, 22f, palette.muted).apply {
+                        tag = "source-move-${entry.id}-$delta"; gravity = Gravity.CENTER
+                        contentDescription = text(if (delta < 0) R.string.sources_move_up else R.string.sources_move_down)
+                        background = styles.touch(); isFocusable = true
+                        isEnabled = if (delta < 0) position!! > 0 else position!! < catalog.enabled.size - 1
+                        alpha = if (isEnabled) 1f else .25f
+                        setOnClickListener { change { service.moveSource(entry.id, delta) } }
+                    }, LinearLayout.LayoutParams(dp(40), dp(48)))
+                }
+            }
+            @Suppress("UseSwitchCompatOrMaterialCode")
+            val toggle = Switch(activity).apply {
+                tag = "source-enabled-${entry.id}"; contentDescription = entry.name
+                isChecked = active; isEnabled = active || catalog.enabled.size < UserSourceLibrary.MAX_ENABLED
+                thumbTintList = ColorStateList.valueOf(if (active) palette.primary else palette.muted)
+                minHeight = dp(48)
+                setOnCheckedChangeListener { _, checked -> change { service.setSourceEnabled(entry.id, checked) } }
+            }
+            row.addView(toggle, LinearLayout.LayoutParams(dp(52), dp(48)))
+            val description = if (UserSourceLibrary(activity).isBilibili(entry.id)) text(R.string.bili_source_description) else entry.description
+            if (description.isNotBlank()) list.addView(noteView(description))
+        }
+        heading(activity.getString(R.string.sources_enabled_count, catalog.enabled.size), "sources-enabled-heading")
+        if (catalog.enabled.isEmpty()) list.addView(noteView(text(R.string.sources_none_enabled)))
+        catalog.enabledEntries.forEachIndexed { index, source -> entry(source, index) }
+        heading(text(R.string.sources_disabled), "sources-disabled-heading")
+        if (catalog.enabled.size == UserSourceLibrary.MAX_ENABLED) list.addView(noteView(text(R.string.sources_limit)))
+        if (catalog.disabledEntries.isEmpty()) list.addView(noteView(text(R.string.sources_none_disabled)))
+        catalog.disabledEntries.forEach { entry(it, null) }
     }
 
     private fun themes() {

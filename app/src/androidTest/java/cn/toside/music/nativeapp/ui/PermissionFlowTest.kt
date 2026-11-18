@@ -55,11 +55,14 @@ class PermissionFlowTest {
         val context = instrumentation.targetContext
         val permission = PermissionPolicy.audio(Build.VERSION.SDK_INT)
         assumeTrue(context.checkSelfPermission(permission) != PackageManager.PERMISSION_GRANTED)
-        val activity = instrumentation.startActivitySync(Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
+        val activity = ForegroundTestActivities.start(Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
         val preferences = context.getSharedPreferences("permission-history", 0)
         val hadHistory = preferences.contains("audio-requested")
         val oldHistory = preferences.getBoolean("audio-requested", false)
         try {
+            instrumentation.runOnMainSync {
+                MainActivity::class.java.getDeclaredMethod("openLocalPage", Boolean::class.javaPrimitiveType).apply { isAccessible = true }.invoke(activity, false)
+            }
             val field = MainActivity::class.java.getDeclaredField("status").apply { isAccessible = true }
             val status = field.get(activity) as TextView
             assertTrue(status.text.toString().contains("点击这里"))
@@ -70,13 +73,12 @@ class PermissionFlowTest {
             assertEquals(context.packageName, instrumentation.uiAutomation.rootInActiveWindow?.packageName?.toString())
             // Ensure the first-use path is exercised without changing the device's permission flags.
             preferences.edit().remove("audio-requested").commit()
-            val heading = MainActivity::class.java.getDeclaredField("heading").apply { isAccessible = true }.get(activity) as TextView
-            instrumentation.runOnMainSync { heading.performClick() }
+            val title = MainActivity::class.java.getDeclaredField("pageTitle").apply { isAccessible = true }.get(activity) as TextView
+            instrumentation.runOnMainSync { assertTrue(!title.isClickable); title.performClick() }
             instrumentation.waitForIdleSync()
             assertNull("歌单列表不应重复显示本地音乐入口", activity.window.decorView.findViewWithTag<View>("playlist-choice-local"))
             assertEquals(PackageManager.PERMISSION_DENIED, context.checkSelfPermission(permission))
             instrumentation.runOnMainSync {
-                MainActivity::class.java.getDeclaredMethod("showPlaylists").apply { isAccessible = true }.invoke(activity)
                 if (activity.window.decorView.findViewWithTag<View>("home-drawer-host") != null) {
                     MainActivity::class.java.getDeclaredMethod("showNavigation").apply { isAccessible = true }.invoke(activity)
                 }

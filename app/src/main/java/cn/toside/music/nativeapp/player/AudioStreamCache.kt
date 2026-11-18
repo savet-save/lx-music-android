@@ -31,14 +31,16 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
 /** One process-wide cache avoids overlapping SimpleCache directory locks across service restarts. */
-internal class AudioStreamCache(context: Context, directory: File = context.cacheDir.resolve("audio-stream")) : AutoCloseable {
+internal class AudioStreamCache(private val context: Context, directory: File = context.cacheDir.resolve("audio-stream")) : AutoCloseable {
     private val evictor = AdjustableLruEvictor(AppPreferences(context).audioCacheBytes)
     private val database = StandaloneDatabaseProvider(context)
     internal val cache = SimpleCache(directory, evictor, database)
-    private val upstream = DefaultDataSource.Factory(context, OkHttpDataSource.Factory(OkHttpClient.Builder()
+    private val httpClient = OkHttpClient.Builder()
         .connectTimeout(13, java.util.concurrent.TimeUnit.SECONDS).readTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
-        .retryOnConnectionFailure(false).build()))
-    fun dataSource(): CacheDataSource.Factory = CacheDataSource.Factory().setCache(cache).setUpstreamDataSourceFactory(upstream)
+        .retryOnConnectionFailure(false).build()
+    private val upstream = DefaultDataSource.Factory(context, OkHttpDataSource.Factory(httpClient))
+    fun dataSource(headers: Map<String, String> = emptyMap()): CacheDataSource.Factory = CacheDataSource.Factory().setCache(cache).setUpstreamDataSourceFactory(
+        if(headers.isEmpty()) upstream else DefaultDataSource.Factory(context, OkHttpDataSource.Factory(httpClient).setDefaultRequestProperties(headers)))
         .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
     fun updateLimit(bytes: Long) = synchronized(cache) { evictor.update(cache, bytes) }
     fun clear() { cache.keys.toList().forEach { cache.removeResource(it) } }
@@ -61,12 +63,35 @@ internal class AudioStreamCache(context: Context, directory: File = context.cach
         if (cache.getCachedSpans(key).isEmpty()) return null
         return cache.getContentMetadata(key).get("native_uri", "")?.takeIf { it.isNotBlank() }?.let(Uri::parse)
     }
-    fun remember(key: String, uri: Uri) { cache.applyContentMetadataMutations(key, ContentMetadataMutations().set("native_uri", uri.toString())) }
-    internal data class CompleteAudio(val key: String, val uri: Uri, val length: Long)
+    fun remember(key: String, uri: Uri, bitrate: Long? = null, durationMs: Long? = null, trackId: Long? = null) {
+        val previous = cache.getContentMetadata(key)
+        if (trackId != null && previous.get("native_audio_track", trackId) != trackId) remove(key)
+        val metadata = ContentMetadataMutations().set("native_uri", uri.toString())
+        if (previous.get("native_uri", "") != uri.toString()) ContentMetadataMutations.setRedirectedUri(metadata, null)
+        bitrate?.takeIf { it > 0 }?.let { metadata.set("native_bitrate", it) }
+        durationMs?.takeIf { it > 0 }?.let { metadata.set("native_duration", it) }
+        trackId?.takeIf { it > 0 }?.let { metadata.set("native_audio_track", it) }
+        cache.applyContentMetadataMutations(key, metadata)
+    }
+    internal data class CompleteAudio(val key: String, val uri: Uri, val length: Long, val bitrate: Long? = null, val durationMs: Long? = null)
     internal fun completeAudio(song: Song, quality: String): CompleteAudio? {
-        val key = key(song, quality)
+        val requested = key(song, quality)
+        // Playback uses "original"; explicit downloads use the stable Bilibili audio track ID.
+        val original = key(song, "original")
+        val trackId = quality.removePrefix("aac-").toLongOrNull()
+        val key = if (song.source == "bili" && quality.startsWith("aac-") && trackId != null && cachedUri(requested) == null &&
+            cache.getContentMetadata(original).get("native_audio_track", 0L) == trackId) original else requested
         val uri = cachedUri(key) ?: return null
-        return CompleteAudio(key, uri, ContentMetadata.getContentLength(cache.getContentMetadata(key)))
+        val metadata = cache.getContentMetadata(key)
+        return CompleteAudio(key, uri, ContentMetadata.getContentLength(metadata),
+            metadata.get("native_bitrate", 0L).takeIf { it > 0 }, metadata.get("native_duration", 0L).takeIf { it > 0 })
+    }
+    internal fun completeAudios(song: Song): List<Pair<String, CompleteAudio>> {
+        val prefix = key(song, "")
+        return cache.keys.filter { it.startsWith(prefix) }.sorted().mapNotNull { key ->
+            val quality = key.removePrefix(prefix)
+            completeAudio(song, quality)?.let { quality to it }
+        }
     }
     /** Cache spans are fragments, not standalone audio files. Never fetch missing bytes here. */
     internal suspend fun copyComplete(audio: CompleteAudio, output: OutputStream): Boolean = withContext(Dispatchers.IO) {
