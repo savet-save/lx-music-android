@@ -16,4 +16,18 @@
     <string name="playback_settings_error">無法套用播放設定：%1$s</string>
     <string name="playback_open_error">無法開啟音訊：%1$s</string>
     <string name="playback_queue_error">儲存播放佇列失敗：%1$s</string>
+    <string name="playback_queue_current">目前歌曲</string>
+    <string name="playback_history_empty">目前沒有播放紀錄</string>
+    <string name="playback_history_clear_error">無法清空播放紀錄</string>
+    <string name="equalizer_title">等化器</string>
+    <string name="equalizer_gain_chart">頻段增益曲線</string>
+    <string name="equalizer_unavailable">此裝置不支援應用程式內的等化器</string>
+    <string name="equalizer_offload_hint">開啟等化器時暫停音訊卸載。</string>
+    <string name="equalizer_band">%1$s 頻段增益</string>
+    <string name="equalizer_reset">重設各頻段</string>
+    <string name="equalizer_error">無法套用等化器設定</string>
+    <string name="equalizer_hz">%1$s Hz</string>
+    <string name="equalizer_khz">%1$s kHz</string>
+    <string name="equalizer_gain">%1$.1f dB</string>
+    <string name="equalizer_gain_positive">%1$+.1f dB</string>
 </resources>

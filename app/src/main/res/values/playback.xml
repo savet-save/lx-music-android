@@ -16,4 +16,18 @@
     <string name="playback_settings_error">无法应用播放设置：%1$s</string>
     <string name="playback_open_error">无法打开音频：%1$s</string>
     <string name="playback_queue_error">保存播放队列失败：%1$s</string>
+    <string name="playback_queue_current">当前歌曲</string>
+    <string name="playback_history_empty">暂无播放历史</string>
+    <string name="playback_history_clear_error">清空播放历史失败</string>
+    <string name="equalizer_title">均衡器</string>
+    <string name="equalizer_gain_chart">频段增益曲线</string>
+    <string name="equalizer_unavailable">当前设备不支持应用内均衡器</string>
+    <string name="equalizer_offload_hint">开启均衡器时暂停音频卸载。</string>
+    <string name="equalizer_band">%1$s 频段增益</string>
+    <string name="equalizer_reset">重置各频段</string>
+    <string name="equalizer_error">无法应用均衡器设置</string>
+    <string name="equalizer_hz">%1$s Hz</string>
+    <string name="equalizer_khz">%1$s kHz</string>
+    <string name="equalizer_gain">%1$.1f dB</string>
+    <string name="equalizer_gain_positive">%1$+.1f dB</string>
 </resources>

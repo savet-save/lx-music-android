@@ -22,7 +22,9 @@ import androidx.media3.datasource.okhttp.OkHttpDataSource
 import okhttp3.OkHttpClient
 import java.util.TreeSet
 import java.io.File
+import java.io.IOException
 import java.io.OutputStream
+import java.nio.file.Files
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
@@ -52,7 +54,9 @@ internal class AudioStreamCache(private val context: Context, directory: File = 
             ContentMetadataMutations.setRedirectedUri(it, null)
         })
     }
-    internal fun removeSong(prefix: String) { cache.keys.filter { it.startsWith(prefix) }.forEach { cache.removeResource(it) } }
+    internal fun removeSong(prefix: String) {
+        cache.keys.filter { it.startsWith(prefix) || it.startsWith("karaoke:$prefix") }.forEach(cache::removeResource)
+    }
     fun cachedUri(key: String): Uri? {
         val metadata = cache.getContentMetadata(key)
         val length = ContentMetadata.getContentLength(metadata)
@@ -94,7 +98,11 @@ internal class AudioStreamCache(private val context: Context, directory: File = 
         }
     }
     /** Cache spans are fragments, not standalone audio files. Never fetch missing bytes here. */
-    internal suspend fun copyComplete(audio: CompleteAudio, output: OutputStream): Boolean = withContext(Dispatchers.IO) {
+    internal suspend fun copyComplete(
+        audio: CompleteAudio,
+        output: OutputStream,
+        onCopied: ((Long) -> Unit)? = null,
+    ): Boolean = withContext(Dispatchers.IO) {
         val reader = CacheDataSource.Factory().setCache(cache).setUpstreamDataSourceFactory(null)
             .setCacheWriteDataSinkFactory(null).createDataSource()
         try {
@@ -105,12 +113,73 @@ internal class AudioStreamCache(private val context: Context, directory: File = 
                 currentCoroutineContext().ensureActive()
                 val count = reader.read(buffer, 0, minOf(buffer.size.toLong(), audio.length - copied).toInt())
                 if (count < 0) break
-                output.write(buffer, 0, count); copied += count
+                output.write(buffer, 0, count)
+                copied += count
+                onCopied?.invoke(copied)
             }
             copied == audio.length
         } catch (e: CancellationException) { throw e }
         catch (_: java.io.IOException) { false }
         finally { reader.close() }
+    }
+
+    /** Give a session its own name for a WAV, so eviction cannot remove audio in use. */
+    internal suspend fun restoreFile(key: String, target: File): Boolean {
+        val audio = synchronized(cache) {
+            if (!cache.isCached(key, 0, 1)) return false
+            val span = cache.startReadWriteNonBlocking(key, 0, 1) ?: return false
+            if (!span.isCached) {
+                cache.releaseHoleSpan(span)
+                return false
+            }
+            val file = span.file ?: return false
+            if (span.position != 0L || file.length() != span.length) return false
+            if (linkFile(file, target)) return true
+            CompleteAudio(key, Uri.fromFile(file), span.length)
+        }
+        return target.outputStream().buffered().use { copyComplete(audio, it) }
+    }
+
+    internal suspend fun storeFile(key: String, source: File) {
+        val length = source.length()
+        if (length <= 0 || length > AppPreferences(context).audioCacheBytes) return
+        val span = cache.startReadWriteNonBlocking(key, 0, length) ?: return
+        if (span.isCached) return
+        try {
+            val destination = cache.startFile(key, 0, length)
+            try {
+                if (!linkFile(source, destination)) copyFileAtomically(source, destination)
+                currentCoroutineContext().ensureActive()
+                cache.commitFile(destination, length)
+            } catch (e: Exception) {
+                destination.delete()
+                throw e
+            }
+        } finally { cache.releaseHoleSpan(span) }
+    }
+
+    private fun linkFile(source: File, target: File): Boolean = try {
+        Files.createLink(target.toPath(), source.toPath())
+        true
+    } catch (_: IOException) { false }
+    catch (_: UnsupportedOperationException) { false }
+
+    private suspend fun copyFileAtomically(source: File, target: File) {
+        val staging = File.createTempFile("backing-", ".tmp", target.parentFile)
+        try {
+            source.inputStream().use { input ->
+                staging.outputStream().use { output ->
+                    val buffer = ByteArray(64 * 1024)
+                    while (true) {
+                        currentCoroutineContext().ensureActive()
+                        val count = input.read(buffer)
+                        if (count < 0) break
+                        output.write(buffer, 0, count)
+                    }
+                }
+            }
+            if (!staging.renameTo(target)) throw IOException("Could not publish cached audio")
+        } finally { staging.delete() }
     }
     override fun close() { cache.release(); database.close() }
     companion object {

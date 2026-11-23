@@ -10,7 +10,10 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
 
     <application 
         android:name=".NativeApplication"
@@ -23,6 +26,7 @@
         <activity android:name=".ui.BilibiliLoginActivity" android:exported="false" />
         <activity android:name=".ui.CommentsActivity" android:exported="false" />
         <activity android:name=".ui.CommentImageActivity" android:exported="false" />
+        <activity android:name=".ui.KaraokeActivity" android:exported="false" android:launchMode="singleTop" />
         <activity android:name=".ui.LyricsDownloadActivity" android:exported="false" />
         <service android:name=".data.Mp3ConversionJob" android:exported="false" android:permission="android.permission.BIND_JOB_SERVICE" />
         <service android:name=".data.DownloadCoverJob" android:exported="false" android:permission="android.permission.BIND_JOB_SERVICE" />
@@ -93,6 +97,10 @@
             <intent-filter><action android:name="android.intent.action.DOWNLOAD_COMPLETE"/></intent-filter>
         </receiver>
 
+        <provider android:name=".ui.KaraokeFileProvider" android:authorities="${applicationId}.karaoke"
+            android:exported="false" android:grantUriPermissions="true">
+            <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/karaoke_paths" />
+        </provider>
         <provider
             android:name=".update.UpdateFileProvider"
             android:authorities="${applicationId}.updates"

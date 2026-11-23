@@ -12,6 +12,7 @@ import cn.toside.music.nativeapp.data.RecentSongs
 import cn.toside.music.nativeapp.data.Song
 import cn.toside.music.nativeapp.data.nextAllowedSongIndex
 import cn.toside.music.nativeapp.data.previousAllowedSongIndex
+import cn.toside.music.nativeapp.karaoke.KaraokeSource
 import cn.toside.music.nativeapp.lyrics.LrcParser
 import cn.toside.music.nativeapp.lyrics.LyricFormats
 import cn.toside.music.nativeapp.lyrics.LyricLine
@@ -91,6 +92,7 @@ class PlaybackService : Service() {
     val state: StateFlow<PlayerState> = mutableState
     private lateinit var session: MediaSession
     private lateinit var audio: AudioManager
+    private lateinit var equalizer: PlaybackEqualizer
     private var focusRequest: AudioFocusRequest? = null
     private var player: MediaPlayer? = null
     private var nativePlayer: NativeAudioPlayer? = null
@@ -148,6 +150,7 @@ class PlaybackService : Service() {
         audio = getSystemService(AUDIO_SERVICE) as AudioManager
         queueStore = QueueStore(applicationContext)
         settings = PlayerSettings(applicationContext)
+        equalizer = PlaybackEqualizer(applicationContext, audio, settings)
         preferences = AppPreferences(applicationContext)
         preferBilibiliSubtitles = preferences.preferBilibiliSubtitles
         matcher = SongMatcher(applicationContext, scope)
@@ -429,6 +432,18 @@ class PlaybackService : Service() {
         settings.setVolume(value)
         mutableState.value = mutableState.value.copy(volume = value)
     }
+    internal val equalizerState: EqualizerState? get() = equalizer.state
+
+    internal fun setEqualizerEnabled(enabled: Boolean): Boolean {
+        if (!equalizer.setEnabled(enabled)) return false
+        nativePlayer?.setEqualizerEnabled(enabled)
+        return true
+    }
+
+    internal fun setEqualizerGain(index: Int, gainMillibels: Int) = equalizer.setGain(index, gainMillibels)
+
+    internal fun resetEqualizer() = equalizer.reset()
+
     private fun applyRate(current: MediaPlayer, rate: Float) {
         current.playbackParams = PlaybackParams().allowDefaults().setPitch(1f).setSpeed(rate)
             .setAudioFallbackMode(PlaybackParams.AUDIO_FALLBACK_MODE_FAIL)
@@ -458,6 +473,26 @@ class PlaybackService : Service() {
     private fun preferredQuality() = getSharedPreferences("player", MODE_PRIVATE).getString("quality", "128k") ?: "128k"
     private fun audioResolver() = SourceAudioResolver(userSource, matcher::find, preferences.bool("player.autoSwitchSource", true))
     suspend fun resolveUrl(song: Song): String = resolveAudio(song, preferredQuality()).url
+    internal suspend fun karaokeInput(song: Song, target: java.io.File, progress: (Int) -> Unit): Uri {
+        if (song.source == "local") return song.uri
+        Downloads(applicationContext).playbackUri(song, preferredQuality())?.let { return it }
+        val cache = AudioStreamCache.existing()
+        val cached = cache != null && withContext(Dispatchers.IO) {
+            val complete = cache.completeAudio(song, if (song.source == "bili") "original" else preferredQuality())
+                ?: cache.completeAudios(song).firstOrNull()?.second
+            complete != null && complete.length <= KaraokeSource.MAX_BYTES &&
+                target.outputStream().buffered().use { output ->
+                    cache.copyComplete(complete, output) { bytes ->
+                        progress((bytes * 100 / complete.length).coerceAtMost(99).toInt())
+                    }
+                }
+        }
+        if (cached) return Uri.fromFile(target)
+        val input = if (song.source == "bili" && JSONObject(song.sourceInfo ?: "{}").optLong("cid") <= 0)
+            cn.toside.music.nativeapp.online.BilibiliApi(applicationContext).firstPart(song) else song
+        val headers = if (input.source == "bili") cn.toside.music.nativeapp.online.BilibiliApi.audioHeaders else emptyMap()
+        return KaraokeSource.copy(resolveUrl(input), headers, target, progress)
+    }
     internal suspend fun resolveDownloadUrl(song: Song, quality: String): String = resolveDownloadAddress(song, quality).url
     internal suspend fun resolveDownloadAddress(song: Song, quality: String, excluded: Set<String> = emptySet()): SourceAudio =
         sourceMutex.withLock { audioResolver().resolve(song, quality, excluded) }
@@ -620,7 +655,8 @@ class PlaybackService : Service() {
                     failNativePlayback(song, engine.position, cache, key, quality, detail, engine.streamRetriesExhausted, discardCache = engine.contentError)
                 }
             }
-        }, if(song.source == "bili") cn.toside.music.nativeapp.online.BilibiliApi.audioHeaders else emptyMap(), playbackRetries)
+        }, if(song.source == "bili") cn.toside.music.nativeapp.online.BilibiliApi.audioHeaders else emptyMap(), playbackRetries,
+            audioSessionId = equalizer.audioSessionId, equalizerEnabled = equalizer.state?.enabled == true)
         nativePlayer = current
         try { current.prepare(uri, key, position, state.value.playbackRate, state.value.volume, playWhenReady) }
         catch (e: Exception) {
@@ -632,6 +668,7 @@ class PlaybackService : Service() {
         val current = MediaPlayer()
         player = current
         try {
+            if (equalizer.audioSessionId > 0) current.audioSessionId = equalizer.audioSessionId
             current.setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA)
                 .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build())
             current.setDataSource(this, uri)
@@ -828,6 +865,7 @@ class PlaybackService : Service() {
         desktopLyrics.close()
         userSource.close()
         releasePlayback()
+        equalizer.close()
         if (Build.VERSION.SDK_INT >= 26) focusRequest?.let { audio.abandonAudioFocusRequest(it) }
         else @Suppress("DEPRECATION") audio.abandonAudioFocus(focusListener)
         session.release()

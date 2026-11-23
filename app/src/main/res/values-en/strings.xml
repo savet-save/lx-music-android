@@ -304,9 +304,7 @@
     <string name="ui_889839915c3f" formatted="false">"Added"</string>
     <string name="ui_54a28a424697" formatted="false">"This song is already in the playlist"</string>
     <string name="ui_3350538a51ed">"Could not add song: %1$s"</string>
-    <string name="ui_dcd3c46d127f">"View %1$s trending searches"</string>
     <string name="ui_02c0ab8fbd15" formatted="false">"Clear search history"</string>
-    <string name="ui_6d0b959193ab" formatted="false">"Search history and trending searches (hold a history item to delete)"</string>
     <string name="ui_fa0ead846beb" formatted="false">"Loading trending searches…"</string>
     <string name="ui_50933f24c7aa" formatted="false">"The provider returned no trending searches"</string>
     <string name="ui_2a61478eeecf">"%1$s trending searches"</string>

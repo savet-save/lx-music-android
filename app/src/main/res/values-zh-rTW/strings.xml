@@ -304,9 +304,7 @@
     <string name="ui_889839915c3f" formatted="false">"已添加"</string>
     <string name="ui_54a28a424697" formatted="false">"歌曲已在歌單中"</string>
     <string name="ui_3350538a51ed">"添加失敗：%1$s"</string>
-    <string name="ui_dcd3c46d127f">"查看%1$s熱搜"</string>
     <string name="ui_02c0ab8fbd15" formatted="false">"清空搜索曆史"</string>
-    <string name="ui_6d0b959193ab" formatted="false">"搜索曆史與熱搜（長按曆史可刪除）"</string>
     <string name="ui_fa0ead846beb" formatted="false">"正在加載熱搜…"</string>
     <string name="ui_50933f24c7aa" formatted="false">"平台沒有返回熱搜詞"</string>
     <string name="ui_2a61478eeecf">"%1$s熱搜"</string>
