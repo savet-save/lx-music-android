@@ -4,6 +4,7 @@ import cn.toside.music.nativeapp.data.Song
 import cn.toside.music.nativeapp.utils.ChineseText
 
 import android.content.Context
+import androidx.core.content.edit
 
 internal enum class LyricAlignment(val label: String) {
     LEFT("左对齐"), CENTER("居中"), RIGHT("右对齐");
@@ -15,6 +16,18 @@ internal class PlayerSettings(private val context: Context, name: String = "play
     private val preferences = context.getSharedPreferences(name, Context.MODE_PRIVATE)
     val playbackRate: Float get() = number(RATE, 1f).takeIf { it.isFinite() && it in MIN_RATE..MAX_RATE } ?: 1f
     val volume: Float get() = number(VOLUME, 1f).takeIf { it.isFinite() && it in 0f..1f } ?: 1f
+    var equalizerEnabled: Boolean
+        get() = preferences.all["equalizer-enabled"] as? Boolean ?: false
+        set(value) { preferences.edit { putBoolean("equalizer-enabled", value) } }
+
+    fun equalizerGain(frequencyMillihertz: Int): Int = preferences.all["equalizer-$frequencyMillihertz"] as? Int ?: 0
+
+    fun setEqualizerGain(frequencyMillihertz: Int, gainMillibels: Int) {
+        val key = "equalizer-$frequencyMillihertz"
+        preferences.edit {
+            if (gainMillibels == 0) remove(key) else putInt(key, gainMillibels)
+        }
+    }
     var showTranslation: Boolean
         get() = preferences.getBoolean("lyric-translation", false)
         set(value) { preferences.edit().putBoolean("lyric-translation", value).apply() }

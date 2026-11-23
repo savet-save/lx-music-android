@@ -20,6 +20,10 @@ import cn.toside.music.nativeapp.ui.PlayerLyricScroll
 import cn.toside.music.nativeapp.ui.UiPalette
 import cn.toside.music.nativeapp.ui.SettingsFragment
 import cn.toside.music.nativeapp.ui.ForegroundTestActivities
+import cn.toside.music.nativeapp.ui.AdaptiveLayout
+import cn.toside.music.nativeapp.ui.LxStyles
+import cn.toside.music.nativeapp.ui.NativeThemes
+import cn.toside.music.nativeapp.ui.equalizerSettingsContent
 import cn.toside.music.nativeapp.online.PlaylistBrowserRepository
 import cn.toside.music.nativeapp.online.PlaylistBrowseQuery
 import cn.toside.music.nativeapp.online.OnlinePlaylist
@@ -41,9 +45,13 @@ import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.RectF
+import android.graphics.Typeface
 import android.media.MediaMetadata
 import android.media.AudioManager
 import android.media.MediaPlayer
+import android.media.audiofx.Equalizer
 import android.media.session.MediaSession
 import android.net.Uri
 import android.os.Bundle
@@ -60,11 +68,15 @@ import android.view.accessibility.AccessibilityNodeInfo
 import android.view.MotionEvent
 import android.view.ViewConfiguration
 import android.widget.ListView
+import android.widget.FrameLayout
+import android.widget.HorizontalScrollView
 import android.widget.RadioButton
 import android.widget.SeekBar
+import android.widget.Switch
 import android.widget.TextView
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.media3.common.TrackSelectionParameters.AudioOffloadPreferences
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -76,6 +88,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.collect
 import org.junit.Assert.*
 import org.junit.Assume.assumeFalse
+import org.junit.Assume.assumeTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
@@ -85,6 +98,7 @@ import java.net.ServerSocket
 import java.net.InetAddress
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import kotlin.math.roundToInt
 
 @RunWith(AndroidJUnit4::class)
 class PlaybackSettingsTest {
@@ -286,6 +300,165 @@ class PlaybackSettingsTest {
                 fixture.player.resume()
             }
             waitFor { fixture.player.state.value.playing }
+        }
+    }
+    @Test fun equalizerAppliesToBothEnginesAndRestoresSavedBands() = runBlocking {
+        withPlayback { fixture ->
+            val initial = fixture.player.equalizerState
+            assumeTrue("The test needs an equalizer with at least two adjustable bands", initial != null &&
+                initial.bands.size >= 2 && initial.gainRange.first < 0 && initial.gainRange.last > 0)
+            val range = requireNotNull(initial).gainRange
+            val boost = minOf(range.last, 500)
+            val cut = maxOf(range.first, -600)
+            fun effect() = field(field(fixture.player, "equalizer")!!, "effect") as Equalizer
+            fun settingsRoot() = fixture.activity.settingsFragment()?.view
+
+            main {
+                assertTrue(fixture.player.resetEqualizer())
+                assertTrue(fixture.player.setEqualizerEnabled(false))
+            }
+            fixture.play()
+            invoke(fixture.activity, "showPlaybackSettings")
+            waitFor { settingsRoot()?.findViewWithTag<View>("settings-equalizer-enabled")?.isShown == true }
+            main {
+                val toggle = requireNotNull(settingsRoot()).findViewWithTag<Switch>("settings-equalizer-enabled")
+                toggle.performClick()
+                assertTrue(toggle.isChecked)
+            }
+            waitFor { settingsRoot()?.findViewWithTag<SeekBar>("settings-equalizer-band-0")?.height?.let { it > 0 } == true }
+            main {
+                val root = requireNotNull(settingsRoot())
+                val rail = root.findViewWithTag<SeekBar>("settings-equalizer-band-0").parent as View
+                val started = SystemClock.uptimeMillis()
+                fun touch(action: Int, y: Float) {
+                    val event = MotionEvent.obtain(started, SystemClock.uptimeMillis(), action, rail.width / 2f, y, 0)
+                    try { assertTrue(rail.dispatchTouchEvent(event)) } finally { event.recycle() }
+                }
+                touch(MotionEvent.ACTION_DOWN, rail.height * .5f)
+                touch(MotionEvent.ACTION_MOVE, rail.height * .2f)
+                touch(MotionEvent.ACTION_UP, rail.height * .2f)
+                assertTrue("Dragging a fader upward must raise its gain", effect().getBandLevel(0) > 0)
+                listOf(boost, cut).forEachIndexed { index, gain ->
+                    val slider = root.findViewWithTag<SeekBar>("settings-equalizer-band-$index")
+                    assertTrue(slider.performAccessibilityAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SET_PROGRESS.id,
+                        Bundle().apply { putFloat(AccessibilityNodeInfo.ACTION_ARGUMENT_PROGRESS_VALUE, gain.toFloat()) }))
+                }
+                assertTrue(effect().enabled)
+                assertEquals(boost, effect().getBandLevel(0).toInt())
+                assertEquals(cut, effect().getBandLevel(1).toInt())
+                assertEquals((field(fixture.player, "equalizer") as PlaybackEqualizer).audioSessionId, fixture.media().audioSessionId)
+                assertTrue(fixture.media().isPlaying)
+            }
+
+            AppPreferences(context).set("player.isEnableAudioOffload", true)
+            fixture.play()
+            main {
+                val current = field(fixture.player, "nativePlayer") as NativeAudioPlayer
+                assertEquals((field(fixture.player, "equalizer") as PlaybackEqualizer).audioSessionId, current.engine.audioSessionId)
+                assertEquals(AudioOffloadPreferences.AUDIO_OFFLOAD_MODE_DISABLED,
+                    current.engine.trackSelectionParameters.audioOffloadPreferences.audioOffloadMode)
+                assertTrue(fixture.player.setEqualizerEnabled(false))
+                assertFalse(effect().enabled)
+                assertEquals(AudioOffloadPreferences.AUDIO_OFFLOAD_MODE_ENABLED,
+                    current.engine.trackSelectionParameters.audioOffloadPreferences.audioOffloadMode)
+                assertTrue(fixture.player.setEqualizerEnabled(true))
+            }
+            fixture.restart()
+            main {
+                assertTrue(effect().enabled)
+                assertEquals(boost, effect().getBandLevel(0).toInt())
+                assertEquals(cut, effect().getBandLevel(1).toInt())
+            }
+            invoke(fixture.activity, "showPlaybackSettings")
+            waitFor { settingsRoot()?.findViewWithTag<View>("settings-equalizer-reset")?.isShown == true }
+            main {
+                assertTrue(requireNotNull(settingsRoot()).findViewWithTag<View>("settings-equalizer-reset").performClick())
+                assertTrue(fixture.player.equalizerState!!.bands.all { it.gainMillibels == 0 })
+                assertEquals(0, effect().getBandLevel(0).toInt())
+                assertEquals(0, effect().getBandLevel(1).toInt())
+            }
+        }
+    }
+    @Test fun equalizerChartAndVerticalFadersFitPhoneAndTabletThemes() = runBlocking {
+        withPlayback { fixture ->
+            val initial = fixture.player.equalizerState
+            assumeTrue("The device needs a working equalizer", initial != null)
+            val bandCount = requireNotNull(initial).bands.size
+            val activity = fixture.activity
+            main {
+                assertTrue(fixture.player.setEqualizerEnabled(true))
+                initial.bands.indices.forEach { index ->
+                    val gain = listOf(0, 480, 250, -320, 180)[index % 5].coerceIn(initial.gainRange)
+                    assertTrue(fixture.player.setEqualizerGain(index, gain))
+                }
+                val density = activity.resources.displayMetrics.density
+                val themes = NativeThemes(activity).all().associateBy { it.id }
+                val icons = Typeface.createFromAsset(activity.assets, "fonts/icomoon.ttf")
+                val layouts = listOf("phone" to AdaptiveLayout(360, 780), "tablet" to AdaptiveLayout(1024, 768),
+                    "short" to AdaptiveLayout(640, 360), "narrow" to AdaptiveLayout(288, 720))
+                layouts.forEach { (name, layout) ->
+                    for (theme in listOf("green", "black", "purple")) {
+                        val palette = UiPalette(activity, themes.getValue(theme))
+                        val styles = LxStyles(activity, palette, icons)
+                        val panel = equalizerSettingsContent(activity, styles, palette, layout, fixture.player)
+                        val sidebar = when {
+                            layout.widthDp >= 840 -> 208
+                            layout.expanded -> 168
+                            else -> 0
+                        }
+                        val previewWidth = layout.widthDp - sidebar
+                        val preview = FrameLayout(activity).apply {
+                            setBackgroundColor(palette.surface)
+                            val margin = styles.dp(if (layout.expanded) 28 else 20)
+                            setPadding(margin, styles.dp(12), margin, styles.dp(12))
+                            addView(panel, FrameLayout.LayoutParams(-1, -2))
+                        }
+                        val width = View.MeasureSpec.makeMeasureSpec(styles.dp(previewWidth), View.MeasureSpec.EXACTLY)
+                        preview.measure(width, View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED))
+                        preview.layout(0, 0, preview.measuredWidth, preview.measuredHeight)
+                        val chart = panel.findViewWithTag<View>("settings-equalizer-chart")
+                        val bank = panel.findViewWithTag<HorizontalScrollView>("settings-equalizer-fader-scroll")
+                        assertEquals(styles.dp(if (name == "tablet") 192 else 132), chart.height)
+                        assertEquals(chart.width, bank.width)
+                        for (index in 0 until bandCount) {
+                            val fader = panel.findViewWithTag<SeekBar>("settings-equalizer-band-$index")
+                            val rail = fader.parent as View
+                            val bounds = RectF(0f, 0f, fader.width.toFloat(), fader.height.toFloat())
+                            fader.matrix.mapRect(bounds)
+                            bounds.offset(fader.left.toFloat(), fader.top.toFloat())
+                            assertTrue("The rotated fader must fit its cell", bounds.left >= -1f && bounds.right <= rail.width + 1f)
+                            assertEquals((48 * density).toInt(), bounds.width().roundToInt())
+                            assertEquals(styles.dp(if (name == "tablet") 142 else 96), bounds.height().roundToInt())
+                        }
+                        if (InstrumentationRegistry.getArguments().getString("equalizerScreenshots") == "true") {
+                            val directory = File(context.getExternalFilesDir(null), "equalizer-style-validation").apply { mkdirs() }
+                            val image = Bitmap.createBitmap(preview.width, preview.height, Bitmap.Config.ARGB_8888)
+                            preview.draw(Canvas(image))
+                            File(directory, "equalizer-$name-$theme.png").outputStream().use { image.compress(Bitmap.CompressFormat.PNG, 100, it) }
+                            image.recycle()
+                        }
+                        if (name == "narrow" && bandCount >= 5) {
+                            assertTrue(bank.canScrollHorizontally(1))
+                            val fader = panel.findViewWithTag<SeekBar>("settings-equalizer-band-2")
+                            val rail = fader.parent as View
+                            val cell = rail.parent as View
+                            val x = cell.left + rail.left + rail.width / 2f
+                            val y = (cell.parent as View).top + cell.top + rail.top + rail.height / 2f
+                            val start = SystemClock.uptimeMillis()
+                            fun swipe(action: Int, offset: Int) {
+                                val event = MotionEvent.obtain(start, SystemClock.uptimeMillis(), action, x - styles.dp(offset), y, 0)
+                                try { bank.dispatchTouchEvent(event) } finally { event.recycle() }
+                            }
+                            val gain = fader.progress
+                            swipe(MotionEvent.ACTION_DOWN, 0)
+                            for (offset in listOf(26, 60, 90)) swipe(MotionEvent.ACTION_MOVE, offset)
+                            swipe(MotionEvent.ACTION_UP, 90)
+                            assertTrue("A swipe across a fader must scroll the bank", bank.scrollX > 0)
+                            assertEquals("Scrolling must not alter the fader", gain, fader.progress)
+                        }
+                    }
+                }
+            }
         }
     }
     @Test fun failedSourceUsesMatchingRecordingFromSupportedPlatformAndCanBeDisabled() = runBlocking {

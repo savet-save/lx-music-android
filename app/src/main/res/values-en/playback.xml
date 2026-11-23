@@ -19,4 +19,15 @@
     <string name="playback_queue_current">Current track</string>
     <string name="playback_history_empty">No playback history</string>
     <string name="playback_history_clear_error">Could not clear playback history</string>
+    <string name="equalizer_title">Equalizer</string>
+    <string name="equalizer_gain_chart">Band gain curve</string>
+    <string name="equalizer_unavailable">The in-app equalizer is unavailable on this device</string>
+    <string name="equalizer_offload_hint">Audio offload is paused while the equalizer is on.</string>
+    <string name="equalizer_band">%1$s band gain</string>
+    <string name="equalizer_reset">Reset bands</string>
+    <string name="equalizer_error">Could not apply the equalizer settings</string>
+    <string name="equalizer_hz">%1$s Hz</string>
+    <string name="equalizer_khz">%1$s kHz</string>
+    <string name="equalizer_gain">%1$.1f dB</string>
+    <string name="equalizer_gain_positive">%1$+.1f dB</string>
 </resources>

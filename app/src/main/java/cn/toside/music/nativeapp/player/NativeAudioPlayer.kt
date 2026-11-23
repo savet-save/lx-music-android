@@ -16,10 +16,11 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.datasource.HttpDataSource
 
 /** Native Media3 path for cached streaming and optional hardware audio offload. */
-internal class NativeAudioPlayer(context: Context, cache: AudioStreamCache?, offload: Boolean,
+internal class NativeAudioPlayer(context: Context, cache: AudioStreamCache?, private val offload: Boolean,
     private val changed: (NativeAudioPlayer) -> Unit, private val completed: (NativeAudioPlayer) -> Unit,
     private val failed: (NativeAudioPlayer, String) -> Unit, headers: Map<String,String> = emptyMap(),
-    retryBudget: PlaybackRetryBudget = PlaybackRetryBudget()) {
+    retryBudget: PlaybackRetryBudget = PlaybackRetryBudget(), audioSessionId: Int = C.AUDIO_SESSION_ID_UNSET,
+    equalizerEnabled: Boolean = false) {
     private val retryPolicy = StreamingRetryPolicy(retryBudget)
     internal val streamRetriesExhausted get() = retryPolicy.exhausted
     internal var failedHttpStatus: Int? = null
@@ -32,9 +33,8 @@ internal class NativeAudioPlayer(context: Context, cache: AudioStreamCache?, off
     init {
         engine.setWakeMode(C.WAKE_MODE_NETWORK)
         engine.setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MUSIC).build(), false)
-        engine.trackSelectionParameters = engine.trackSelectionParameters.buildUpon().setAudioOffloadPreferences(AudioOffloadPreferences.Builder()
-            .setAudioOffloadMode(if (offload) AudioOffloadPreferences.AUDIO_OFFLOAD_MODE_ENABLED else AudioOffloadPreferences.AUDIO_OFFLOAD_MODE_DISABLED)
-            .setIsSpeedChangeSupportRequired(true).build()).build()
+        if (audioSessionId > 0) engine.setAudioSessionId(audioSessionId)
+        setEqualizerEnabled(equalizerEnabled)
         engine.addListener(object : Player.Listener {
             override fun onPlaybackStateChanged(state: Int) { if (state == Player.STATE_ENDED) completed(this@NativeAudioPlayer) else changed(this@NativeAudioPlayer) }
             override fun onIsPlayingChanged(isPlaying: Boolean) { changed(this@NativeAudioPlayer) }
@@ -46,6 +46,16 @@ internal class NativeAudioPlayer(context: Context, cache: AudioStreamCache?, off
             }
         })
     }
+    fun setEqualizerEnabled(enabled: Boolean) {
+        val mode = if (offload && !enabled) AudioOffloadPreferences.AUDIO_OFFLOAD_MODE_ENABLED
+            else AudioOffloadPreferences.AUDIO_OFFLOAD_MODE_DISABLED
+        val preferences = AudioOffloadPreferences.Builder()
+            .setAudioOffloadMode(mode)
+            .setIsSpeedChangeSupportRequired(true)
+            .build()
+        engine.trackSelectionParameters = engine.trackSelectionParameters.buildUpon().setAudioOffloadPreferences(preferences).build()
+    }
+
     fun prepare(uri: Uri, key: String?, position: Int, rate: Float, volume: Float, play: Boolean) {
         engine.volume = volume; engine.playbackParameters = PlaybackParameters(rate, 1f)
         engine.setMediaItem(MediaItem.Builder().setUri(uri).setCustomCacheKey(key).build(), position.toLong())
