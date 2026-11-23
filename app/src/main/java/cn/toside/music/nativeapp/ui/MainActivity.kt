@@ -1236,6 +1236,7 @@ class MainActivity : FragmentActivity() {
     private fun showNavigationActions() {
         val labels = mutableListOf(getString(R.string.ui_a9531e47b75d), getString(R.string.ui_27c95ec6b766), getString(R.string.ui_87a2113eb66f), getString(R.string.ui_1ee95aa94712), getString(R.string.ui_259597bf6ca7), getString(R.string.ui_3158c8d56b7b), getString(R.string.ui_a5cd0a9169e8), getString(R.string.ui_3facd3e00be5), getString(R.string.ui_599818eb56df), getString(R.string.ui_727036c7fc2a), getString(R.string.ui_2a3ec620e12c), getString(R.string.ui_8c38525734c0), getString(R.string.ui_486b54a7b0af), getString(R.string.ui_6e763b71e69c), getString(R.string.ui_f01b6815d826), getString(R.string.ui_cad84b75d661), getString(R.string.ui_426744e26e7e), getString(R.string.ui_ac7aa03a458f), getString(R.string.settings_title), getString(R.string.ui_788db1cfec2a), getString(R.string.ui_4fd38bc4f6d4), getString(R.string.ui_bb1d19b85634))
         labels.add(getString(R.string.download_page))
+        labels.add(getString(R.string.karaoke_library))
         if (uiLayout.expanded && preferences.showBack) labels.add(getString(R.string.ui_f75a93326a3c))
         if (uiLayout.expanded && preferences.showExit) labels.add(getString(R.string.ui_b0d269c8707c))
         // Keep the original action IDs when filtering so each remaining label dispatches correctly.
@@ -1246,6 +1247,7 @@ class MainActivity : FragmentActivity() {
             navigationDrawer?.close(false)
             val which = id.toInt()
             if (labels[which] == getString(R.string.download_page)) { showDownloads(); return@show }
+            if (labels[which] == getString(R.string.karaoke_library)) { showKaraoke(null); return@show }
             if (labels[which] == getString(R.string.ui_f75a93326a3c)) { moveTaskToBack(true); return@show }
             if (labels[which] == getString(R.string.ui_b0d269c8707c)) {
                 confirmExit()
@@ -1826,6 +1828,10 @@ class MainActivity : FragmentActivity() {
             androidx.fragment.app.FragmentManager.POP_BACK_STACK_INCLUSIVE)
     }
     internal fun playerLyricsVisible() = detailShowingLyrics
+    private fun showKaraoke(song: Song?) {
+        service?.pause()
+        startActivity(KaraokeActivity.intent(this, song))
+    }
     internal fun createPlayerDetailView(showLyrics: Boolean?): View {
         val scroll = PlayerLyricScroll(this, lx.selected, {
             service?.state?.value?.let(::renderDetailTime)
@@ -1848,6 +1854,7 @@ class MainActivity : FragmentActivity() {
             previous = { service?.previous() }, play = ::togglePlayback, next = { service?.next() },
             mode = { service?.cycleMode() }, queue = ::showPlaybackQueue, sleep = ::showSleepTimer,
             settings = ::showPlaybackSettings,
+            karaoke = { showKaraoke(service?.state?.value?.song) },
             collect = { service?.state?.value?.song?.let(::choosePlaylistForSong) },
             comments = { service?.state?.value?.song?.takeIf { it.source != "local" }?.let { showComments(this, it) } },
             more = { anchor -> service?.state?.value?.song?.let { song -> showSongActionsFor(anchor, song, null, allowConversion = true, play = ::togglePlayback) } },

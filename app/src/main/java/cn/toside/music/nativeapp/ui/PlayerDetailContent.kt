@@ -29,6 +29,7 @@ internal data class PlayerDetailActions(
     val queue: () -> Unit,
     val sleep: () -> Unit,
     val settings: () -> Unit,
+    val karaoke: () -> Unit,
     val collect: () -> Unit,
     val comments: () -> Unit,
     val more: (View) -> Unit,
@@ -116,6 +117,15 @@ internal class PlayerDetailContent(
             visibility = if (adaptive.splitPlayer) View.INVISIBLE else View.VISIBLE
         }
         header.addView(heading, LayoutParams(0, -1, 1f))
+        header.addView(styles.label(context.getString(R.string.karaoke_title), 13f, palette.primary).apply {
+            tag = "player-karaoke"
+            gravity = Gravity.CENTER
+            minWidth = dp(48)
+            setPadding(dp(8), 0, dp(8), 0)
+            background = styles.touch()
+            isFocusable = true
+            setOnClickListener { actions.karaoke() }
+        }, LayoutParams(-2, dp(48)))
         if (!adaptive.splitPlayer) {
             header.addView(icon(59648, R.string.ui_f01b6815d826, 24f, actions.queue).apply {
                 tag = "player-queue"; tooltipText = context.getString(R.string.player_queue_timer)
