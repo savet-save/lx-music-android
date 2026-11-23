@@ -145,7 +145,7 @@ internal class PlayerDetailContent(
         val tools = LinearLayout(context).apply { tag = "player-tools"; gravity = Gravity.CENTER }
         val toolViews = if (adaptive.splitPlayer) listOf(
             pageToggle,
-            icon(59680, R.string.ui_f01b6815d826, 17f, actions.queue),
+            icon(59680, R.string.ui_f01b6815d826, 17f, actions.queue).apply { tag = "player-queue" },
             comments,
             icon(59687, R.string.ui_8c38525734c0, 18f, actions.settings),
             more,

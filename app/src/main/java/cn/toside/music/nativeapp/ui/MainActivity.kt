@@ -14,7 +14,6 @@ import cn.toside.music.nativeapp.data.LegacyBackup
 import cn.toside.music.nativeapp.data.LocalMusic
 import cn.toside.music.nativeapp.data.Playlist
 import cn.toside.music.nativeapp.data.Playlists
-import cn.toside.music.nativeapp.data.RecentSongs
 import cn.toside.music.nativeapp.data.Song
 import cn.toside.music.nativeapp.lyrics.LrcParser
 import cn.toside.music.nativeapp.lyrics.LyricLine
@@ -110,6 +109,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.launch
@@ -120,7 +121,13 @@ class MainActivity : FragmentActivity() {
     override fun attachBaseContext(newBase: Context) { super.attachBaseContext(UiPreferences.context(newBase)) }
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var updateCheckJob: Job? = null
+    private val mutablePlaybackService = MutableStateFlow<PlaybackService?>(null)
+    internal val playbackService = mutablePlaybackService.asStateFlow()
     private var service: PlaybackService? = null
+        set(value) {
+            field = value
+            mutablePlaybackService.value = value
+        }
     private var bound = false
     private var incomingHandled = false
     private var startupPlayerPending = false
@@ -351,6 +358,7 @@ class MainActivity : FragmentActivity() {
         waitingForAudioSettings = savedInstanceState?.getBoolean("waitingForAudioSettings", false) ?: false
         buildUi()
         initializeNavigation()
+        supportFragmentManager.addOnBackStackChangedListener(::updatePlaybackListAccessibility)
         if (preferences.bool("common.isAgreePact")) {
             if (!restorePage(savedInstanceState)) openStartupPage()
             homePageMemoryReady = true
@@ -1535,6 +1543,12 @@ class MainActivity : FragmentActivity() {
     private fun installHomeContent(root: View) {
         setContentView(root)
         updateDestinationChrome()
+        updatePlaybackListAccessibility()
+    }
+    private fun updatePlaybackListAccessibility() {
+        findViewById<View>(android.R.id.content).findViewWithTag<View>("home-content")?.importantForAccessibility =
+            if (supportFragmentManager.primaryNavigationFragment is PlaybackListFragment) View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+            else View.IMPORTANT_FOR_ACCESSIBILITY_AUTO
     }
     private fun updateDestinationChrome() {
         if (!::miniBar.isInitialized) return
@@ -1594,35 +1608,30 @@ class MainActivity : FragmentActivity() {
             window.decorView.systemUiVisibility = if (theme.dark) window.decorView.systemUiVisibility and light.inv() else window.decorView.systemUiVisibility or light
         }
     }
-    private fun showPlaybackQueue() {
-        val player = service ?: return
-        val snapshot = player.queueState.value
-        if (snapshot == null || snapshot.songs.isEmpty()) { toast(getString(R.string.ui_09679f956e0e)); return }
-        val list = ListView(this)
-        list.adapter = ArrayAdapter(this, android.R.layout.simple_list_item_1, snapshot.songs.mapIndexed { index, song ->
-            "${if (index == snapshot.index) "▶ " else ""}${index + 1}. ${song.title} · ${song.artist}"
-        })
-        val dialog = AlertDialog.Builder(this).setTitle(getString(R.string.ui_827be73ec6db, java.lang.String.valueOf(snapshot.songs.size))).setView(list)
-            .setNegativeButton(getString(R.string.ui_3fd47edce45b), null).setNeutralButton(getString(R.string.ui_d18e02739127)) { _, _ -> player.clearQueue() }.create()
-        fun current(): Boolean {
-            if (player.queueState.value?.songs == snapshot.songs) return true
-            dialog.dismiss(); showPlaybackQueue(); return false
-        }
-        list.setOnItemClickListener { _, _, position, _ -> if (current()) { player.playQueued(position); dialog.dismiss() } }
-        list.setOnItemLongClickListener { _, _, position, _ ->
-            val song = snapshot.songs[position]
-            AlertDialog.Builder(this).setTitle(song.title).setItems(arrayOf(getString(R.string.ui_c3396195e91c), getString(R.string.ui_f853a70b1204), getString(R.string.ui_e75e8b4e5c97), getString(R.string.ui_6135d4159e89))) { _, which ->
-                if (!current()) return@setItems
-                when (which) {
-                    0 -> player.playQueued(position)
-                    1 -> player.moveQueued(position, (position - 1).coerceAtLeast(0))
-                    2 -> player.moveQueued(position, (position + 1).coerceAtMost(snapshot.songs.lastIndex))
-                    3 -> player.removeQueued(position)
-                }
-                dialog.dismiss(); if (which != 0) showPlaybackQueue()
-            }.show(); true
-        }
-        dialog.show(); list.setSelection(snapshot.index)
+    private fun showPlaybackQueue() = openPlaybackList(PlaybackListFragment.Page.QUEUE)
+    private fun showHistory() = openPlaybackList(PlaybackListFragment.Page.HISTORY)
+    private fun isOnPlaybackBackStack(tag: String) = with(supportFragmentManager) {
+        // The pending entry still belongs to the stack during a predictive back preview.
+        (0 until backStackEntryCount).any { getBackStackEntryAt(it).name == tag }
+    }
+    private fun openPlaybackList(page: PlaybackListFragment.Page) {
+        val manager = supportFragmentManager
+        if (manager.isStateSaved || isOnPlaybackBackStack(PlaybackListFragment.TAG)) return
+        hidePageKeyboard()
+        playlistDrawer?.close(false)
+        val fragment = PlaybackListFragment.create(page)
+        val transaction = manager.beginTransaction().setReorderingAllowed(true)
+            .setCustomAnimations(R.animator.player_enter, R.animator.player_exit, R.animator.player_enter, R.animator.player_exit)
+        playerFragment()?.let(transaction::hide)
+        transaction.add(R.id.player_host, fragment, PlaybackListFragment.TAG)
+            .setPrimaryNavigationFragment(fragment)
+            .addToBackStack(PlaybackListFragment.TAG)
+            .commit()
+        manager.executePendingTransactions()
+    }
+    internal fun closePlaybackList() {
+        val manager = supportFragmentManager
+        if (!manager.isStateSaved && manager.primaryNavigationFragment is PlaybackListFragment) manager.popBackStackImmediate()
     }
     private fun showSourceActions(anchor: View, entry: UserSourceEntry, changed: () -> Unit = {}) {
         scope.launch {
@@ -1711,9 +1720,9 @@ class MainActivity : FragmentActivity() {
     }
     private fun loadOnlinePlaylist(playlist: OnlinePlaylist, append: Boolean = false) {
         val nav = navigation
-        if (!suppressPageNavigation && !append && nav != null && nav.currentDestination?.id != R.id.playlist_songs && !supportFragmentManager.isStateSaved) {
-            if (retainedPageState.beforePlaylist == null && beforePlaylistSaved == null) retainedPageState.beforePlaylist = pageSnapshot()
-            hidePageKeyboard(); nav.navigate(R.id.playlist_songs)
+        if (!suppressPageNavigation && !append) {
+            if (nav == null || supportFragmentManager.isStateSaved) return
+            if (nav.currentDestination?.id != R.id.playlist_songs) openPlaylistDetails(nav)
         }
         val more = append && onlinePlaylistMode && selectedOnlinePlaylist == playlist && onlinePlaylistPage > 0
         val page = if (more) onlinePlaylistPage + 1 else 1
@@ -1731,6 +1740,19 @@ class MainActivity : FragmentActivity() {
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) { if (onlinePlaylistMode) { status.text = getString(R.string.ui_31206f5478ba, java.lang.String.valueOf(e.localizedMessage)); if (more) loadMore.visibility = View.VISIBLE } }
         }
+    }
+    private fun openPlaylistDetails(nav: NavController) {
+        hidePageKeyboard()
+        while (nav.popBackStack(R.id.playlist_songs, inclusive = false, saveState = true)) {
+            // Navigation saves the pages above each old detail under the detail's destination ID.
+            // Remove the detail and restore those pages together so the latest source stays on top.
+            nav.navigate(R.id.playlist_songs, null, NavOptions.Builder()
+                .setPopUpTo(R.id.playlist_songs, true)
+                .setRestoreState(true)
+                .build())
+        }
+        if (retainedPageState.beforePlaylist == null && beforePlaylistSaved == null) retainedPageState.beforePlaylist = pageSnapshot()
+        nav.navigate(R.id.playlist_songs)
     }
     private fun showBoards() {
         val nav = navigation ?: return
@@ -1787,7 +1809,7 @@ class MainActivity : FragmentActivity() {
         }
     }
     private fun showPlayerDetails() {
-        if (service == null || playerFragment()?.isAdded == true) return
+        if (service == null || isOnPlaybackBackStack(PlayerDetailFragment.TAG)) return
         if (supportFragmentManager.isStateSaved) { pendingPlayerOpen = true; return }
         hidePageKeyboard(); playlistDrawer?.close(false)
         val fragment = PlayerDetailFragment()
@@ -2723,20 +2745,6 @@ class MainActivity : FragmentActivity() {
             if (index < 2) false else { history.remove(terms[index - 2]); dialog.dismiss(); showSearchTools(); true }
         }
         dialog.show()
-    }
-    private fun showHistory() {
-        scope.launch {
-            try {
-                val history = RecentSongs(this@MainActivity)
-                val songs = history.list()
-                AlertDialog.Builder(this@MainActivity).setTitle(getString(R.string.ui_4f03b04808e7, java.lang.String.valueOf(songs.size)))
-                    .setItems(songs.map { "${it.title} · ${it.artist}" }.toTypedArray()) { _, index ->
-                        val action = AudioAction.Play(songs, index)
-                        if (PermissionPolicy.requiresLibraryAccess(this@MainActivity, songs[index]) && !hasAudioPermission()) requestAudioAccess(action) else performAudioAction(action)
-                    }.setNegativeButton(getString(R.string.ui_3fd47edce45b), null).setNeutralButton(getString(R.string.ui_1ef3de06b32e)) { _, _ -> scope.launch { history.clear() } }.show()
-            } catch (e: CancellationException) { throw e }
-            catch (e: Exception) { toast(getString(R.string.ui_82abac1a7ffd, java.lang.String.valueOf(e.localizedMessage))) }
-        }
     }
     private fun searchOnline(append: Boolean = false) {
         if (!isCatalogPage) return

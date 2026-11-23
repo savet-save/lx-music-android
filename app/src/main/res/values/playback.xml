@@ -16,4 +16,7 @@
     <string name="playback_settings_error">无法应用播放设置：%1$s</string>
     <string name="playback_open_error">无法打开音频：%1$s</string>
     <string name="playback_queue_error">保存播放队列失败：%1$s</string>
+    <string name="playback_queue_current">当前歌曲</string>
+    <string name="playback_history_empty">暂无播放历史</string>
+    <string name="playback_history_clear_error">清空播放历史失败</string>
 </resources>
