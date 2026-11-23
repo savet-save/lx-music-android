@@ -31,6 +31,7 @@ import cn.toside.music.nativeapp.online.OnlineTagGroup
 import cn.toside.music.nativeapp.online.PlaylistBrowseQuery
 import cn.toside.music.nativeapp.online.PlaylistBrowserRepository
 import cn.toside.music.nativeapp.online.SearchCatalog
+import cn.toside.music.nativeapp.online.SearchHistory
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.NonCancellable
@@ -380,6 +381,97 @@ class SearchPageTest {
                 val tabs = field(activity, "searchTabs") as View
                 assertTrue(tabs.width > 0); assertTrue(tabs.right <= (tabs.parent as View).width)
                 snapshot("search-english-large", root)
+            }
+        }
+    }
+
+    @Test fun searchHistoryKeepsItsSourcePageAndAppliesTheActiveTheme() {
+        val context = instrumentation.targetContext
+        val preferences = context.getSharedPreferences("search-history", 0)
+        val stored = preferences.getString("terms", null)
+        val history = SearchHistory(context)
+        try {
+            Fixture(overrides = mapOf("theme.id" to "black")).use { fixture ->
+                val activity = fixture.activity
+                val manager = activity.supportFragmentManager
+                fun page() = (manager.primaryNavigationFragment as? SearchHistoryFragment)?.view
+                fun rows() = requireNotNull(page()).findViewWithTag<ListView>("search-history-list")
+                val previous = manager.primaryNavigationFragment
+                val search = field(activity, "search") as EditText
+                instrumentation.runOnMainSync {
+                    search.setText("original search")
+                    submit(activity)
+                }
+                waitForSearch(activity)
+                val results = field(activity, "allSongs")
+                instrumentation.runOnMainSync {
+                    history.clear()
+                    history.add("delete this")
+                    history.add("another search")
+                    assertTrue(search.performLongClick())
+                    invoke(activity, "showSearchTools")
+                }
+                awaitUi { page()?.isShown == true && rows().childCount == 2 }
+                instrumentation.runOnMainSync {
+                    val view = requireNotNull(page())
+                    val palette = UiPalette(activity, NativeThemes(activity).active())
+                    assertTrue(palette.theme.dark)
+                    assertEquals(palette.surface, (view.background as android.graphics.drawable.ColorDrawable).color)
+                    assertEquals(palette.primary, view.findViewWithTag<TextView>("search-history-clear").currentTextColor)
+                    assertEquals(activity.window.decorView.windowToken, view.windowToken)
+                    assertEquals(1, manager.backStackEntryCount)
+                    assertTrue(view.findViewWithTag<View>("page-back").performClick())
+                    assertSame(previous, manager.primaryNavigationFragment)
+                    assertEquals("original search", search.text.toString())
+                    assertSame(results, field(activity, "allSongs"))
+                    assertTrue(search.performLongClick())
+                }
+                awaitUi { page()?.isShown == true && rows().childCount == 2 }
+                instrumentation.runOnMainSync {
+                    val list = rows()
+                    assertTrue(list.onItemLongClickListener.onItemLongClick(list, list.getChildAt(1), 1, list.adapter.getItemId(1)))
+                    assertEquals(listOf("another search"), history.list())
+                    assertTrue(list.performItemClick(list.getChildAt(0), 0, list.adapter.getItemId(0)))
+                }
+                waitForSearch(activity)
+                instrumentation.runOnMainSync {
+                    assertSame(previous, manager.primaryNavigationFragment)
+                    assertEquals(0, manager.backStackEntryCount)
+                    assertEquals("another search", search.text.toString())
+                    assertTrue(search.performLongClick())
+                    assertTrue(requireNotNull(page()).findViewWithTag<View>("search-history-clear").performClick())
+                    assertTrue(history.list().isEmpty())
+                }
+                awaitUi { page()?.findViewWithTag<TextView>("search-history-empty")?.isShown == true }
+            }
+        } finally {
+            preferences.edit().putString("terms", stored).commit()
+        }
+    }
+
+    @Test fun trendingResultsStayInTheSearchHistoryFragment() {
+        Fixture().use { fixture ->
+            val activity = fixture.activity
+            val manager = activity.supportFragmentManager
+            lateinit var historyPage: View
+            instrumentation.runOnMainSync {
+                // This provider has no trending endpoint, so the empty result is deterministic.
+                set(activity, "searchSource", "bili")
+                invoke(activity, "showSearchTools")
+                historyPage = requireNotNull(manager.primaryNavigationFragment?.view)
+                assertTrue(historyPage.findViewWithTag<View>("search-trending-tab").performClick())
+            }
+            awaitUi {
+                val message = historyPage.findViewWithTag<TextView>("search-history-empty")
+                message.isShown && message.text == activity.getString(R.string.ui_50933f24c7aa)
+            }
+            instrumentation.runOnMainSync {
+                assertEquals(1, manager.backStackEntryCount)
+                assertSame(historyPage, manager.primaryNavigationFragment?.view)
+                assertTrue(historyPage.findViewWithTag<View>("search-history-tab").performClick())
+                assertTrue(historyPage.findViewWithTag<View>("search-history-tab").isSelected)
+                activity.onBackPressedDispatcher.onBackPressed()
+                assertEquals(0, manager.backStackEntryCount)
             }
         }
     }

@@ -59,9 +59,9 @@ class PlaybackListFragmentTest {
 
     private fun songs() = (1L..3).map { Song(it, Uri.EMPTY, "Track $it", "Artist", 1000) }
 
-    @Test fun openingDuringBackPreviewDoesNotDuplicatePlaybackPages() = withActivity { activity ->
+    @Test fun openingDuringBackPreviewDoesNotDuplicateOverlayPages() = withActivity { activity ->
         val manager = activity.supportFragmentManager
-        for (method in listOf("showHistory", "showPlaybackQueue", "showPlayerDetails")) {
+        for (method in listOf("showHistory", "showPlaybackQueue", "showPlayerDetails", "showSearchTools")) {
             val previous = manager.primaryNavigationFragment
             main {
                 open(activity, method)

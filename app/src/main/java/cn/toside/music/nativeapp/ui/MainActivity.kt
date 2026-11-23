@@ -358,7 +358,7 @@ class MainActivity : FragmentActivity() {
         waitingForAudioSettings = savedInstanceState?.getBoolean("waitingForAudioSettings", false) ?: false
         buildUi()
         initializeNavigation()
-        supportFragmentManager.addOnBackStackChangedListener(::updatePlaybackListAccessibility)
+        supportFragmentManager.addOnBackStackChangedListener(::updateOverlayAccessibility)
         if (preferences.bool("common.isAgreePact")) {
             if (!restorePage(savedInstanceState)) openStartupPage()
             homePageMemoryReady = true
@@ -1548,11 +1548,12 @@ class MainActivity : FragmentActivity() {
     private fun installHomeContent(root: View) {
         setContentView(root)
         updateDestinationChrome()
-        updatePlaybackListAccessibility()
+        updateOverlayAccessibility()
     }
-    private fun updatePlaybackListAccessibility() {
+    private fun updateOverlayAccessibility() {
+        val overlay = supportFragmentManager.primaryNavigationFragment
         findViewById<View>(android.R.id.content).findViewWithTag<View>("home-content")?.importantForAccessibility =
-            if (supportFragmentManager.primaryNavigationFragment is PlaybackListFragment) View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+            if (overlay is PlaybackListFragment || overlay is SearchHistoryFragment) View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
             else View.IMPORTANT_FOR_ACCESSIBILITY_AUTO
     }
     private fun updateDestinationChrome() {
@@ -1615,13 +1616,13 @@ class MainActivity : FragmentActivity() {
     }
     private fun showPlaybackQueue() = openPlaybackList(PlaybackListFragment.Page.QUEUE)
     private fun showHistory() = openPlaybackList(PlaybackListFragment.Page.HISTORY)
-    private fun isOnPlaybackBackStack(tag: String) = with(supportFragmentManager) {
+    private fun hasOverlayBackStackEntry(tag: String) = with(supportFragmentManager) {
         // The pending entry still belongs to the stack during a predictive back preview.
         (0 until backStackEntryCount).any { getBackStackEntryAt(it).name == tag }
     }
     private fun openPlaybackList(page: PlaybackListFragment.Page) {
         val manager = supportFragmentManager
-        if (manager.isStateSaved || isOnPlaybackBackStack(PlaybackListFragment.TAG)) return
+        if (manager.isStateSaved || hasOverlayBackStackEntry(PlaybackListFragment.TAG)) return
         hidePageKeyboard()
         playlistDrawer?.close(false)
         val fragment = PlaybackListFragment.create(page)
@@ -1785,7 +1786,7 @@ class MainActivity : FragmentActivity() {
         }
     }
     private fun sourceLabel(): String = sourceLabel(searchSource)
-    private fun sourceLabel(source: String): String = if (source == SearchCatalog.ALL) getString(R.string.search_all_sources) else UiPreferences.sourceName(this, source)
+    internal fun sourceLabel(source: String): String = if (source == SearchCatalog.ALL) getString(R.string.search_all_sources) else UiPreferences.sourceName(this, source)
     private suspend fun availableSearchSources(): List<String> {
         val enabled = withContext(Dispatchers.IO) { UserSourceLibrary(applicationContext).bilibiliEnabled() }
         if (!enabled && searchSource == "bili") {
@@ -1814,7 +1815,7 @@ class MainActivity : FragmentActivity() {
         }
     }
     private fun showPlayerDetails() {
-        if (service == null || isOnPlaybackBackStack(PlayerDetailFragment.TAG)) return
+        if (service == null || hasOverlayBackStackEntry(PlayerDetailFragment.TAG)) return
         if (supportFragmentManager.isStateSaved) { pendingPlayerOpen = true; return }
         hidePageKeyboard(); playlistDrawer?.close(false)
         val fragment = PlayerDetailFragment()
@@ -2728,33 +2729,31 @@ class MainActivity : FragmentActivity() {
         setSearchVisible(true); search.setText(term); searchOnline()
     }
     private fun showSearchTools() {
-        val history = SearchHistory(this)
-        val terms = history.list()
-        val labels = listOf(getString(R.string.ui_dcd3c46d127f, java.lang.String.valueOf(sourceLabel())), getString(R.string.ui_02c0ab8fbd15)) + terms
-        val view = ListView(this).apply { adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_list_item_1, labels) }
-        val dialog = AlertDialog.Builder(this).setTitle(getString(R.string.ui_6d0b959193ab)).setView(view).setNegativeButton(getString(R.string.ui_3fd47edce45b), null).create()
-        view.setOnItemClickListener { _, _, index, _ ->
-            when (index) {
-                0 -> {
-                    dialog.dismiss()
-                    scope.launch {
-                        try {
-                            toast(getString(R.string.ui_fa0ead846beb))
-                            val hot = SearchSuggestions().hot(searchSource)
-                            if (hot.isEmpty()) toast(getString(R.string.ui_50933f24c7aa)) else AlertDialog.Builder(this@MainActivity).setTitle(getString(R.string.ui_2a61478eeecf, java.lang.String.valueOf(sourceLabel())))
-                                .setItems(hot.toTypedArray()) { _, position -> searchTerm(hot[position]) }.setNegativeButton(getString(R.string.ui_3fd47edce45b), null).show()
-                        } catch (e: CancellationException) { throw e }
-                        catch (e: Exception) { toast(getString(R.string.ui_bf00a3daba4a, java.lang.String.valueOf(e.localizedMessage))) }
-                    }
-                }
-                1 -> { history.clear(); dialog.dismiss(); showSearchTools() }
-                else -> { dialog.dismiss(); searchTerm(terms[index - 2]) }
-            }
-        }
-        view.setOnItemLongClickListener { _, _, index, _ ->
-            if (index < 2) false else { history.remove(terms[index - 2]); dialog.dismiss(); showSearchTools(); true }
-        }
-        dialog.show()
+        val manager = supportFragmentManager
+        if (manager.isStateSaved || hasOverlayBackStackEntry(SearchHistoryFragment.TAG)) return
+        hidePageKeyboard()
+        playlistDrawer?.close(false)
+        suggestionJob?.cancel()
+        (search as? AutoCompleteTextView)?.dismissDropDown()
+        search.clearFocus()
+        val fragment = SearchHistoryFragment.create(searchSource)
+        val transaction = manager.beginTransaction().setReorderingAllowed(true)
+            .setCustomAnimations(R.animator.player_enter, R.animator.player_exit, R.animator.player_enter, R.animator.player_exit)
+        manager.primaryNavigationFragment?.takeIf { it.id == R.id.player_host }?.let(transaction::hide)
+        transaction.add(R.id.player_host, fragment, SearchHistoryFragment.TAG)
+            .setPrimaryNavigationFragment(fragment)
+            .addToBackStack(SearchHistoryFragment.TAG)
+            .commit()
+        manager.executePendingTransactions()
+    }
+
+    internal fun closeSearchHistory(): Boolean {
+        val manager = supportFragmentManager
+        return !manager.isStateSaved && manager.primaryNavigationFragment is SearchHistoryFragment && manager.popBackStackImmediate()
+    }
+
+    internal fun searchFromHistory(term: String) {
+        if (closeSearchHistory()) searchTerm(term)
     }
     private fun searchOnline(append: Boolean = false) {
         if (!isCatalogPage) return

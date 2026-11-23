@@ -1,0 +1,5 @@
+<resources>
+    <string name="search_history_tab">搜索历史</string>
+    <string name="search_history_empty">暂无搜索历史</string>
+    <string name="search_history_remove_hint">长按可删除单条记录</string>
+</resources>

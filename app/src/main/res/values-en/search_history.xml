@@ -1,0 +1,5 @@
+<resources>
+    <string name="search_history_tab">Search history</string>
+    <string name="search_history_empty">No search history</string>
+    <string name="search_history_remove_hint">Touch and hold to remove an entry</string>
+</resources>
