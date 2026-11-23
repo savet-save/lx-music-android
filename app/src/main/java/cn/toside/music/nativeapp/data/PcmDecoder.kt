@@ -18,7 +18,12 @@ internal data class PcmFormat(val rate: Int, val channels: Int)
 
 /** Decodes the first audio track into bounded batches of interleaved PCM16. */
 internal object PcmDecoder {
-    suspend fun decode(context: Context, uri: Uri, consume: (PcmFormat, ShortArray) -> Unit) = withContext(Dispatchers.IO) {
+    suspend fun decode(
+        context: Context,
+        uri: Uri,
+        onDurationUs: ((Long) -> Unit)? = null,
+        consume: (PcmFormat, ShortArray) -> Unit,
+    ) = withContext(Dispatchers.IO) {
         val extractor = MediaExtractor()
         var decoder: MediaCodec? = null
         try {
@@ -26,6 +31,9 @@ internal object PcmDecoder {
             val track = (0 until extractor.trackCount).first { extractor.getTrackFormat(it).getString(MediaFormat.KEY_MIME)?.startsWith("audio/") == true }
             extractor.selectTrack(track)
             val format = extractor.getTrackFormat(track)
+            if (onDurationUs != null && format.containsKey(MediaFormat.KEY_DURATION)) {
+                onDurationUs(format.getLong(MediaFormat.KEY_DURATION))
+            }
             val mime = requireNotNull(format.getString(MediaFormat.KEY_MIME))
             if (mime == MediaFormat.MIMETYPE_AUDIO_RAW) {
                 val pcm = format.pcmFormat()

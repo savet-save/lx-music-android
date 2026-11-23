@@ -12,6 +12,7 @@ import cn.toside.music.nativeapp.data.RecentSongs
 import cn.toside.music.nativeapp.data.Song
 import cn.toside.music.nativeapp.data.nextAllowedSongIndex
 import cn.toside.music.nativeapp.data.previousAllowedSongIndex
+import cn.toside.music.nativeapp.karaoke.KaraokeSource
 import cn.toside.music.nativeapp.lyrics.LrcParser
 import cn.toside.music.nativeapp.lyrics.LyricFormats
 import cn.toside.music.nativeapp.lyrics.LyricLine
@@ -472,21 +473,25 @@ class PlaybackService : Service() {
     private fun preferredQuality() = getSharedPreferences("player", MODE_PRIVATE).getString("quality", "128k") ?: "128k"
     private fun audioResolver() = SourceAudioResolver(userSource, matcher::find, preferences.bool("player.autoSwitchSource", true))
     suspend fun resolveUrl(song: Song): String = resolveAudio(song, preferredQuality()).url
-    internal suspend fun karaokeInput(song: Song, target: java.io.File): Uri {
+    internal suspend fun karaokeInput(song: Song, target: java.io.File, progress: (Int) -> Unit): Uri {
         if (song.source == "local") return song.uri
         Downloads(applicationContext).playbackUri(song, preferredQuality())?.let { return it }
         val cache = AudioStreamCache.existing()
         val cached = cache != null && withContext(Dispatchers.IO) {
             val complete = cache.completeAudio(song, if (song.source == "bili") "original" else preferredQuality())
                 ?: cache.completeAudios(song).firstOrNull()?.second
-            complete != null && complete.length <= cn.toside.music.nativeapp.karaoke.KaraokeSource.MAX_BYTES &&
-                target.outputStream().buffered().use { cache.copyComplete(complete, it) }
+            complete != null && complete.length <= KaraokeSource.MAX_BYTES &&
+                target.outputStream().buffered().use { output ->
+                    cache.copyComplete(complete, output) { bytes ->
+                        progress((bytes * 100 / complete.length).coerceAtMost(99).toInt())
+                    }
+                }
         }
         if (cached) return Uri.fromFile(target)
         val input = if (song.source == "bili" && JSONObject(song.sourceInfo ?: "{}").optLong("cid") <= 0)
             cn.toside.music.nativeapp.online.BilibiliApi(applicationContext).firstPart(song) else song
         val headers = if (input.source == "bili") cn.toside.music.nativeapp.online.BilibiliApi.audioHeaders else emptyMap()
-        return cn.toside.music.nativeapp.karaoke.KaraokeSource.copy(resolveUrl(input), headers, target)
+        return KaraokeSource.copy(resolveUrl(input), headers, target, progress)
     }
     internal suspend fun resolveDownloadUrl(song: Song, quality: String): String = resolveDownloadAddress(song, quality).url
     internal suspend fun resolveDownloadAddress(song: Song, quality: String, excluded: Set<String> = emptySet()): SourceAudio =

@@ -14,7 +14,16 @@ import java.io.File
 import java.io.InputStream
 import java.io.OutputStream
 
-internal data class KaraokeRecording(val id: String, val title: String, val artist: String, val file: File, val durationMs: Int) {
+internal data class KaraokeRecording(
+    val id: String,
+    val title: String,
+    val artist: String,
+    val file: File,
+    val durationMs: Int,
+    val sizeBytes: Long,
+    val recordedAt: Long?,
+    val savedAt: Long,
+) {
     val exportName: String get() = title.replace(Regex("[\\p{Cntrl}\\\\/:*?\"<>|]"), "_").take(100).ifBlank { id } + ".wav"
 }
 
@@ -26,22 +35,26 @@ internal class KaraokeLibrary(context: Context) {
     suspend fun list(): List<KaraokeRecording> = withContext(Dispatchers.IO) {
         directory.listFiles { file -> file.extension == "json" && ID.matches(file.nameWithoutExtension) }.orEmpty()
             .mapNotNull { metadata -> read(metadata.nameWithoutExtension) }
-            .sortedByDescending { it.file.lastModified() }
+            .sortedByDescending { it.savedAt }
     }
 
     fun read(id: String): KaraokeRecording? {
         if (!ID.matches(id)) return null
         val wave = directory.resolve("$id.wav")
-        val frames = (wave.length() - KaraokeAudio.HEADER_BYTES) / KaraokeAudio.BYTES_PER_FRAME
+        val size = wave.length()
+        val frames = (size - KaraokeAudio.HEADER_BYTES) / KaraokeAudio.BYTES_PER_FRAME
         if (!wave.isFile || frames <= 0) return null
         return runCatching {
             val text = AtomicFile(directory.resolve("$id.json")).openRead().use { it.readBounded(16 * 1024).toString(Charsets.UTF_8) }
             val data = JSONObject(text)
-            KaraokeRecording(id, data.getString("title"), data.getString("artist"), wave, KaraokeAudio.millis(frames))
+            KaraokeRecording(
+                id, data.getString("title"), data.getString("artist"), wave, KaraokeAudio.millis(frames), size,
+                data.optLong("recordedAt").takeIf { it > 0 }, wave.lastModified(),
+            )
         }.getOrNull()
     }
 
-    suspend fun save(id: String, song: Song, mixed: File): KaraokeRecording = withContext(Dispatchers.IO) {
+    suspend fun save(id: String, song: Song, mixed: File, recordedAt: Long): KaraokeRecording = withContext(Dispatchers.IO) {
         require(ID.matches(id) && mixed.length() > KaraokeAudio.HEADER_BYTES)
         check(directory.mkdirs() || directory.isDirectory)
         val metadata = AtomicFile(directory.resolve("$id.json"))
@@ -49,6 +62,7 @@ internal class KaraokeLibrary(context: Context) {
         val previous = wave.baseFile.isFile
         try {
             val data = JSONObject().put("title", song.title.take(500)).put("artist", song.artist.take(500))
+                .put("recordedAt", recordedAt)
             metadata.write { it.write(data.toString().toByteArray(Charsets.UTF_8)) }
             wave.write { output -> mixed.inputStream().use { copy(it, output) } }
             checkNotNull(read(id))

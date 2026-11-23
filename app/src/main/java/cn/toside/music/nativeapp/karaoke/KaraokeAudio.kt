@@ -17,7 +17,13 @@ import kotlin.math.abs
 import kotlin.math.exp
 import kotlin.math.roundToInt
 
-internal data class KaraokeBacking(val file: File, val frames: Long, val stereo: Boolean)
+internal data class KaraokeBacking(
+    val file: File,
+    val frames: Long,
+    val stereo: Boolean,
+    val original: File? = null,
+    val cacheKey: String? = null,
+)
 internal data class KaraokeTake(val backing: KaraokeBacking, val voice: File, val frames: Long)
 internal data class KaraokeEdit(
     val music: Int = 70,
@@ -38,22 +44,57 @@ internal object KaraokeAudio {
     fun millis(frames: Long): Int = (frames * 1000L / RATE).toInt()
     private fun frames(millis: Int): Long = millis.toLong() * RATE / 1000
 
-    suspend fun prepare(context: Context, source: Uri, target: File): KaraokeBacking = withContext(Dispatchers.IO) {
+    suspend fun prepare(
+        context: Context,
+        source: Uri,
+        target: File,
+        songDurationMs: Long,
+        original: File? = null,
+        progress: (Int) -> Unit,
+    ): KaraokeBacking = render(context, source, target, songDurationMs, original, removeCenter = true, progress = progress)
+
+    suspend fun prepareOriginal(context: Context, source: Uri, target: File, frames: Long): File {
+        val original = render(context, source, target, 0, null, removeCenter = false) {}
+        check(original.stereo && original.frames == frames) { "Original audio does not match the accompaniment" }
+        return target
+    }
+
+    private suspend fun render(
+        context: Context,
+        source: Uri,
+        target: File,
+        songDurationMs: Long,
+        original: File?,
+        removeCenter: Boolean,
+        progress: (Int) -> Unit,
+    ): KaraokeBacking = withContext(Dispatchers.IO) {
         WavWriter(target).use { writer ->
-            var resampler: StereoResampler? = null
-            var format: PcmFormat? = null
-            PcmDecoder.decode(context, source) { pcm, samples ->
-                require(pcm.rate in 8_000..384_000 && pcm.channels in 1..8)
-                if (format == null) {
-                    format = pcm
-                    resampler = StereoResampler(pcm, writer)
+            original?.let(::WavWriter).use { dry ->
+                var resampler: StereoResampler? = null
+                var format: PcmFormat? = null
+                var durationMs = songDurationMs
+                var reported = 0
+                PcmDecoder.decode(context, source, onDurationUs = { if (it >= 1000) durationMs = it / 1000 }) { pcm, samples ->
+                    require(pcm.rate in 8_000..384_000 && pcm.channels in 1..8)
+                    if (format == null) {
+                        format = pcm
+                        resampler = StereoResampler(pcm, writer, dry, removeCenter)
+                    }
+                    require(format == pcm) { "Audio format changed during decoding" }
+                    checkNotNull(resampler).write(samples)
+                    if (durationMs > 0) {
+                        val percent = (millis(writer.frames) * 100L / durationMs).coerceAtMost(99).toInt()
+                        if (percent > reported) {
+                            reported = percent
+                            progress(percent)
+                        }
+                    }
                 }
-                require(format == pcm) { "Audio format changed during decoding" }
-                checkNotNull(resampler).write(samples)
+                checkNotNull(resampler).flush()
+                check(writer.frames > 0) { "No decoded audio" }
+                val stereo = checkNotNull(format).channels >= 2
+                KaraokeBacking(target, writer.frames, stereo, original.takeIf { stereo })
             }
-            checkNotNull(resampler).flush()
-            check(writer.frames > 0) { "No decoded audio" }
-            KaraokeBacking(target, writer.frames, checkNotNull(format).channels >= 2)
         }
     }
 
@@ -138,9 +179,15 @@ internal object KaraokeAudio {
         }
     }
 
-    private class StereoResampler(private val format: PcmFormat, private val output: WavWriter) {
-        private val reducer = StereoCenterReduction()
+    private class StereoResampler(
+        private val format: PcmFormat,
+        private val output: WavWriter,
+        private val original: WavWriter?,
+        removeCenter: Boolean,
+    ) {
+        private val reducer = if (removeCenter && format.channels >= 2) StereoCenterReduction() else null
         private val chunk = ShortArray(BLOCK_FRAMES * 2)
+        private val originalChunk = if (original != null && format.channels >= 2) ShortArray(chunk.size) else null
         private var used = 0
         private var inputFrame = 0L
         private var nextOutput = 0L
@@ -158,7 +205,11 @@ internal object KaraokeAudio {
                     val fraction = 1.0 - (clock - nextOutput).toDouble() / RATE
                     val l = left + (nextLeft - left) * fraction
                     val r = right + (nextRight - right) * fraction
-                    val center = if (format.channels >= 2) reducer.center((l + r) * .5) else 0.0
+                    val center = reducer?.center((l + r) * .5) ?: 0.0
+                    originalChunk?.let {
+                        it[used] = sample16(l)
+                        it[used + 1] = sample16(r)
+                    }
                     chunk[used++] = sample16(l - center)
                     chunk[used++] = sample16(r - center)
                     if (used == chunk.size) flush()
@@ -171,7 +222,10 @@ internal object KaraokeAudio {
         }
 
         fun flush() {
-            if (used > 0) output.write(chunk, used)
+            if (used > 0) {
+                output.write(chunk, used)
+                originalChunk?.let { checkNotNull(original).write(it, used) }
+            }
             used = 0
         }
     }

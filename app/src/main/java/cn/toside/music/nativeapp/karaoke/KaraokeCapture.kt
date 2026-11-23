@@ -65,10 +65,12 @@ private class AndroidKaraokeMicrophone private constructor(private val recorder:
 internal class KaraokeCapture(private val openMicrophone: (Context) -> KaraokeMicrophone = AndroidKaraokeMicrophone::open) {
     private enum class Command { RECORD, PAUSE, STOP }
     private val command = MutableStateFlow(Command.RECORD)
+    @Volatile private var original: File? = null
 
     fun pause() { command.compareAndSet(Command.RECORD, Command.PAUSE) }
     fun resume() { command.compareAndSet(Command.PAUSE, Command.RECORD) }
     fun stop() { command.value = Command.STOP }
+    fun selectOriginal(file: File?) { original = file }
 
     suspend fun record(context: Context, backing: KaraokeBacking, voice: File, progress: (Long, Boolean) -> Unit): KaraokeTake =
         withContext(Dispatchers.IO) {
@@ -87,9 +89,8 @@ internal class KaraokeCapture(private val openMicrophone: (Context) -> KaraokeMi
             try {
                 check(track.state == AudioTrack.STATE_INITIALIZED)
                 openMicrophone(context).use { recorder ->
-                    RandomAccessFile(backing.file, "r").use { song ->
+                    KaraokeMonitor(backing.file).use { song ->
                         RandomAccessFile(voice, "rw").use { recording ->
-                            song.seek(KaraokeAudio.HEADER_BYTES)
                             recording.setLength(0)
                             capture(track, recorder, manager, focus, backing.frames, song, recording, progress)
                         }
@@ -108,7 +109,7 @@ internal class KaraokeCapture(private val openMicrophone: (Context) -> KaraokeMi
         manager: AudioManager,
         focus: AudioFocusRequest,
         total: Long,
-        song: RandomAccessFile,
+        song: KaraokeMonitor,
         voice: RandomAccessFile,
         progress: (Long, Boolean) -> Unit,
     ): Long {
@@ -117,19 +118,24 @@ internal class KaraokeCapture(private val openMicrophone: (Context) -> KaraokeMi
         val encoded = ByteBuffer.allocate(samples.size * 2).order(ByteOrder.LITTLE_ENDIAN)
         var limit = 0
         var offset = 0
+        var writtenBytes = 0L
+        var bufferOriginal: File? = null
         var running = false
         var head = 0L
         var voicePosition = 0L
         var reported = -KaraokeAudio.RATE.toLong()
         fun feedTrack() {
-            if (offset == limit) {
-                limit = song.read(backingBuffer).coerceAtLeast(0)
+            val selected = original
+            if (offset == limit || selected != bufferOriginal) {
+                limit = song.read(backingBuffer, writtenBytes, selected)
                 offset = 0
+                bufferOriginal = selected
             }
             if (offset < limit) {
                 val written = track.write(backingBuffer, offset, limit - offset, AudioTrack.WRITE_NON_BLOCKING)
                 check(written >= 0) { "Audio output stopped ($written)" }
                 offset += written
+                writtenBytes += written
             }
         }
 
@@ -189,5 +195,24 @@ internal class KaraokeCapture(private val openMicrophone: (Context) -> KaraokeMi
         }
         voice.setLength(head * 2)
         return head
+    }
+}
+
+/** Both WAV files use the same PCM layout and the same playback position. */
+internal class KaraokeMonitor(file: File) : AutoCloseable {
+    private val backing = RandomAccessFile(file, "r")
+    private var originalReader: RandomAccessFile? = null
+
+    fun read(buffer: ByteArray, writtenBytes: Long, original: File?): Int {
+        val input = if (original == null) backing else {
+            originalReader ?: RandomAccessFile(original, "r").also { originalReader = it }
+        }
+        input.seek(KaraokeAudio.HEADER_BYTES + writtenBytes)
+        return input.read(buffer).coerceAtLeast(0)
+    }
+
+    override fun close() {
+        try { originalReader?.close() }
+        finally { backing.close() }
     }
 }

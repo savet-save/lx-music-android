@@ -13,19 +13,25 @@ import android.graphics.Typeface
 import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
+import android.text.format.DateFormat
+import android.text.format.Formatter
 import android.view.Gravity
+import android.view.Menu
 import android.view.View
 import android.widget.Button
 import android.widget.CheckBox
 import android.widget.LinearLayout
+import android.widget.PopupMenu
 import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.SeekBar
+import android.widget.Switch
 import android.widget.TextView
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.core.content.FileProvider
+import androidx.core.graphics.ColorUtils
 import androidx.core.net.toUri
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.Lifecycle
@@ -33,6 +39,7 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import cn.toside.music.nativeapp.R
 import cn.toside.music.nativeapp.data.Song
+import cn.toside.music.nativeapp.karaoke.KaraokeAudio
 import cn.toside.music.nativeapp.karaoke.KaraokeRecording
 import cn.toside.music.nativeapp.lyrics.LrcParser
 import cn.toside.music.nativeapp.player.PlaybackService
@@ -42,6 +49,8 @@ import cn.toside.music.nativeapp.utils.PermissionPolicy
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import java.text.NumberFormat
+import java.text.SimpleDateFormat
+import java.util.Date
 
 class KaraokeActivity : FragmentActivity() {
     private val studio by viewModels<KaraokeViewModel>()
@@ -59,9 +68,11 @@ class KaraokeActivity : FragmentActivity() {
     private lateinit var libraryList: LinearLayout
     private lateinit var message: TextView
     private lateinit var status: TextView
-    private lateinit var lyric: TextView
+    private lateinit var lyricPanel: LinearLayout
+    private lateinit var lyricRows: List<TextView>
     private lateinit var timing: TextView
     private lateinit var progress: ProgressBar
+    private lateinit var originalSwitch: Switch
     private lateinit var captureButton: Button
     private lateinit var stopButton: Button
     private lateinit var editor: LinearLayout
@@ -75,13 +86,21 @@ class KaraokeActivity : FragmentActivity() {
     private lateinit var share: Button
     private lateinit var export: Button
     private var displayedRecordings: List<KaraokeRecording>? = null
-    private val previewButtons = mutableMapOf<String, Button>()
+    private val recordingRows = mutableMapOf<String, RecordingRow>()
+    private var renderedPlaybackId: String? = null
     private var service: PlaybackService? = null
     private var bound = false
     private var lyricJob: Job? = null
     private var lyrics = PlayerLyrics()
+    private var renderedLyrics: PlayerLyrics? = null
+    private var renderedLyricIndex = -1
     private var pendingExport: String? = null
     private val number by lazy { NumberFormat.getIntegerInstance(resources.configuration.locales[0]).apply { isGroupingUsed = false } }
+    private val recordingDateFormat by lazy {
+        val locale = resources.configuration.locales[0]
+        val skeleton = if (DateFormat.is24HourFormat(this)) "yMMMdHms" else "yMMMdhms"
+        SimpleDateFormat(DateFormat.getBestDateTimePattern(locale, skeleton), locale)
+    }
 
     private val microphone = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) studio.record() else studio.message(R.string.karaoke_microphone_required)
@@ -143,7 +162,7 @@ class KaraokeActivity : FragmentActivity() {
 
     override fun onStop() {
         studio.pause()
-        studio.stopPreview()
+        studio.pausePlayback()
         lyricJob?.cancel()
         if (bound) unbindService(connection)
         bound = false
@@ -162,8 +181,10 @@ class KaraokeActivity : FragmentActivity() {
             studio.message(R.string.karaoke_prepare_error)
             return
         }
-        if (selected.source == "local") studio.prepare { selected.uri }
-        else service?.let { player -> studio.prepare { file -> player.karaokeInput(selected, file) } }
+        if (selected.source == "local") studio.prepare(selected) { _, _ -> selected.uri }
+        else service?.let { player ->
+            studio.prepare(selected) { file, progress -> player.karaokeInput(selected, file, progress) }
+        }
     }
 
     private fun record() {
@@ -217,6 +238,61 @@ class KaraokeActivity : FragmentActivity() {
         startActivity(Intent.createChooser(send, getString(R.string.karaoke_share)))
     }
 
+    private fun showRecordingOptions(anchor: View, recording: KaraokeRecording) {
+        PopupMenu(this, anchor, Gravity.END).apply {
+            listOf(R.string.karaoke_details, R.string.karaoke_export, R.string.karaoke_share).forEach { label ->
+                menu.add(Menu.NONE, label, Menu.NONE, label)
+            }
+            setOnMenuItemClickListener { item ->
+                when (item.itemId) {
+                    R.string.karaoke_details -> showRecordingDetails(recording)
+                    R.string.karaoke_export -> export(recording)
+                    R.string.karaoke_share -> share(recording)
+                    else -> return@setOnMenuItemClickListener false
+                }
+                true
+            }
+            show()
+        }
+    }
+
+    private fun showRecordingDetails(recording: KaraokeRecording) {
+        val bitrate = KaraokeAudio.RATE * KaraokeAudio.BYTES_PER_FRAME * Byte.SIZE_BITS / 1000
+        val startedAt = recording.recordedAt?.let { recordingDateFormat.format(Date(it)) }
+            ?: getString(R.string.karaoke_date_unavailable)
+        val duration = getString(R.string.karaoke_trim_time, time(recording.durationMs), recording.durationMs % 1000 / 100)
+        val fields = listOf(
+            R.string.karaoke_bitrate to getString(R.string.karaoke_bitrate_value, bitrate),
+            R.string.karaoke_recording_started to startedAt,
+            R.string.karaoke_recording_duration to duration,
+            R.string.karaoke_file_size to Formatter.formatFileSize(this, recording.sizeBytes),
+        )
+        val content = column().apply {
+            setPaddingRelative(dp(24), dp(12), dp(24), dp(8))
+            fields.forEach { (label, value) ->
+                val row = LinearLayout(this@KaraokeActivity).apply {
+                    gravity = Gravity.CENTER_VERTICAL
+                    setPadding(0, dp(8), 0, dp(8))
+                    addView(styles.label(getString(label), 14f, palette.muted).apply { maxLines = 2 },
+                        LinearLayout.LayoutParams(0, -2, 1f))
+                    addView(styles.label(value, 14f).apply {
+                        maxLines = 3
+                        gravity = Gravity.END or Gravity.CENTER_VERTICAL
+                        setPaddingRelative(dp(8), 0, 0, 0)
+                    }, LinearLayout.LayoutParams(0, -2, 1.6f))
+                }
+                addView(row, LinearLayout.LayoutParams(-1, -2))
+            }
+        }
+        val scroll = ScrollView(this).apply {
+            tag = "karaoke-details"
+            addView(content)
+        }
+        AlertDialog.Builder(this).setTitle(R.string.karaoke_details).setView(scroll)
+            .setPositiveButton(android.R.string.ok, null).show()
+            .getButton(AlertDialog.BUTTON_POSITIVE).setTextColor(palette.primary)
+    }
+
     private fun buildPage() = column().apply {
         tag = "karaoke-page"
         setBackgroundColor(palette.surface)
@@ -263,7 +339,10 @@ class KaraokeActivity : FragmentActivity() {
                 maxLines = 2
             })
             selected?.artist?.takeIf { it.isNotBlank() }?.let { addView(styles.label(it, 13f, palette.muted)) }
-            status = styles.label("", 13f, palette.muted).apply { maxLines = 3; setPadding(0, dp(8), 0, dp(4)) }
+            status = styles.label("", 13f, palette.muted).apply {
+                maxLines = 3
+                setPadding(0, dp(8), 0, dp(4))
+            }
             addView(status)
             timing = styles.label("", 14f).apply { gravity = Gravity.END; setPadding(0, dp(4), 0, 0) }
             addView(timing, LinearLayout.LayoutParams(-1, -2))
@@ -271,14 +350,37 @@ class KaraokeActivity : FragmentActivity() {
                 progressTintList = ColorStateList.valueOf(palette.primary)
             }
             addView(progress, LinearLayout.LayoutParams(-1, dp(8)))
+            @Suppress("UseSwitchCompatOrMaterialCode")
+            val toggle = Switch(context).apply {
+                tag = "karaoke-original"
+                setText(R.string.karaoke_original)
+                setTextColor(palette.foreground)
+                textSize = 14f
+                minHeight = dp(48)
+                val states = arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf())
+                thumbTintList = ColorStateList(states, intArrayOf(palette.primary, palette.muted))
+                trackTintList = ColorStateList(states, intArrayOf(ColorUtils.blendARGB(styles.panel, palette.primary, .4f),
+                    ColorUtils.blendARGB(styles.panel, palette.muted, .35f)))
+                setOnCheckedChangeListener { _, checked ->
+                    if (checked != studio.state.value.originalEnabled) selected?.let { studio.selectOriginal(it, checked) }
+                }
+            }
+            originalSwitch = toggle
+            addView(originalSwitch, LinearLayout.LayoutParams(-1, -2))
         }
         addView(songCard, LinearLayout.LayoutParams(-1, -2))
-        lyric = styles.label("", 19f, palette.primary).apply {
-            maxLines = 3
-            gravity = Gravity.CENTER
+        lyricPanel = column().apply {
+            tag = "karaoke-lyrics"
             setPadding(0, dp(12), 0, dp(12))
         }
-        addView(lyric, LinearLayout.LayoutParams(-1, -2))
+        lyricRows = List(6) {
+            styles.label("", 17f).apply {
+                maxLines = 3
+                gravity = Gravity.CENTER
+                minHeight = dp(28)
+            }.also { lyricPanel.addView(it, LinearLayout.LayoutParams(-1, -2)) }
+        }
+        addView(lyricPanel, LinearLayout.LayoutParams(-1, -2))
         captureButton = button(R.string.karaoke_record, filled = true, click = ::captureAction).apply { tag = "karaoke-capture" }
         stopButton = button(R.string.karaoke_stop, click = studio::stop).apply { tag = "karaoke-stop" }
         addView(actions(captureButton, stopButton))
@@ -330,17 +432,28 @@ class KaraokeActivity : FragmentActivity() {
             renderLibrary(state)
             return
         }
-        status.setText(when (state.stage) {
-            KaraokeStage.IDLE, KaraokeStage.PREPARING -> R.string.karaoke_preparing
-            KaraokeStage.READY -> if (state.mono) R.string.karaoke_mono else R.string.karaoke_ready
-            KaraokeStage.RECORDING -> R.string.karaoke_recording
-            KaraokeStage.PAUSED -> R.string.karaoke_paused
-            KaraokeStage.MIXING -> R.string.karaoke_mixing
-            KaraokeStage.REVIEW -> R.string.karaoke_review
-        })
-        timing.text = getString(R.string.karaoke_timing, time(state.position), time(state.duration))
-        progress.max = state.duration.coerceAtLeast(1)
-        progress.progress = state.position
+        val preparing = state.stage == KaraokeStage.PREPARING
+        val statusText = when (state.stage) {
+            KaraokeStage.IDLE -> getString(R.string.karaoke_preparing)
+            KaraokeStage.PREPARING -> getString(R.string.karaoke_preparing_progress, state.prepareProgress)
+            KaraokeStage.READY -> getString(if (state.mono) R.string.karaoke_mono else R.string.karaoke_ready)
+            KaraokeStage.RECORDING -> getString(
+                if (state.originalEnabled && !state.originalLoading) R.string.karaoke_recording_original else R.string.karaoke_recording,
+            )
+            KaraokeStage.PAUSED -> getString(R.string.karaoke_paused)
+            KaraokeStage.MIXING -> getString(R.string.karaoke_mixing)
+            KaraokeStage.REVIEW -> getString(R.string.karaoke_review)
+        }
+        if (status.text != statusText) status.text = statusText
+        timing.visibility = if (preparing) View.GONE else View.VISIBLE
+        if (!preparing) timing.text = getString(R.string.karaoke_timing, time(state.position), time(state.duration))
+        progress.max = if (preparing) 100 else state.duration.coerceAtLeast(1)
+        progress.progress = if (preparing) state.prepareProgress else state.position
+        val monitoring = state.stage == KaraokeStage.READY || state.stage == KaraokeStage.RECORDING || state.stage == KaraokeStage.PAUSED
+        originalSwitch.visibility = if (monitoring) View.VISIBLE else View.GONE
+        originalSwitch.isEnabled = monitoring && !state.mono
+        originalSwitch.isChecked = state.originalEnabled
+        originalSwitch.setText(if (state.originalLoading && state.originalEnabled) R.string.karaoke_original_loading else R.string.karaoke_original)
         renderLyrics(state)
         captureButton.isEnabled = state.stage !in setOf(KaraokeStage.PREPARING, KaraokeStage.MIXING)
         captureButton.setText(when (state.stage) {
@@ -373,36 +486,132 @@ class KaraokeActivity : FragmentActivity() {
     private fun renderLyrics(state: KaraokeState) {
         val activeSong = song ?: return
         val lines = lyrics.lines.takeIf { lyrics.key == "${activeSong.source}:${activeSong.id}" }.orEmpty()
-        val index = LrcParser.indexAt(lines, state.position.toLong())
-        val line = lines.getOrNull(index)?.let { LyricRendering.text(it, playerSettings) }.orEmpty()
-        lyric.visibility = if (line.isNotBlank() && state.stage in setOf(KaraokeStage.RECORDING, KaraokeStage.PAUSED)) View.VISIBLE else View.GONE
-        if (lyric.text != line) lyric.text = line
+        val show = lines.isNotEmpty() && state.stage != KaraokeStage.MIXING && state.stage != KaraokeStage.REVIEW
+        lyricPanel.visibility = if (show) View.VISIBLE else View.GONE
+        if (!show) return
+        val active = LrcParser.indexAt(lines, state.position.toLong())
+        if (renderedLyrics === lyrics && renderedLyricIndex == active) return
+        renderedLyrics = lyrics
+        renderedLyricIndex = active
+        val first = active.coerceAtLeast(0) - 1
+        lyricRows.forEachIndexed { offset, row ->
+            val index = first + offset
+            val line = lines.getOrNull(index)
+            row.visibility = if (line != null) View.VISIBLE else View.GONE
+            if (line == null) return@forEachIndexed
+            row.text = LyricRendering.text(line, playerSettings)
+            row.isSelected = index == active
+            row.setTypeface(Typeface.DEFAULT, if (row.isSelected) Typeface.BOLD else Typeface.NORMAL)
+            row.setTextColor(when {
+                row.isSelected -> palette.primary
+                index < active -> palette.muted
+                else -> palette.foreground
+            })
+        }
     }
 
     private fun renderLibrary(state: KaraokeState) {
         if (displayedRecordings != state.recordings) {
             displayedRecordings = state.recordings
             libraryList.removeAllViews()
-            previewButtons.clear()
+            recordingRows.clear()
+            renderedPlaybackId = null
             if (state.recordings.isEmpty()) libraryList.addView(styles.label(getString(R.string.karaoke_empty_library), 15f, palette.muted).apply {
                 gravity = Gravity.CENTER
                 minHeight = dp(96)
             })
             state.recordings.forEach { recording ->
-                val row = column().apply {
-                    background = styles.shape(styles.panel, radius = 10, border = palette.divider)
-                    setPadding(dp(12), dp(8), dp(12), dp(4))
-                    addView(styles.label(recording.title, 16f).apply { maxLines = 2 })
-                    val detail = listOf(recording.artist, time(recording.durationMs)).filter { it.isNotBlank() }.joinToString(" · ")
-                    addView(styles.label(detail, 13f, palette.muted))
-                    val play = button(R.string.karaoke_preview) { studio.previewRecording(recording) }
-                    previewButtons[recording.id] = play
-                    addView(actions(play, button(R.string.karaoke_export) { export(recording) }, button(R.string.karaoke_share) { share(recording) }))
-                }
-                libraryList.addView(row, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
+                val row = RecordingRow(recording)
+                recordingRows[recording.id] = row
+                libraryList.addView(row.view, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
             }
         }
-        previewButtons.forEach { (id, play) -> play.setText(if (id == state.playingPreview) R.string.karaoke_preview_stop else R.string.karaoke_preview) }
+        val playback = state.recordingPlayback
+        if (renderedPlaybackId != playback?.id) renderedPlaybackId?.let { recordingRows[it]?.render(null) }
+        if (playback != null) recordingRows[playback.id]?.render(playback)
+        renderedPlaybackId = playback?.id
+    }
+
+    private inner class RecordingRow(private val recording: KaraokeRecording) {
+        private var dragging = false
+        private val playbackTime = styles.label("", 13f, palette.muted).apply {
+            setPaddingRelative(0, 0, dp(8), 0)
+        }
+        private val play = button(R.string.karaoke_play, filled = true) { studio.playRecording(recording) }.apply {
+            tag = "karaoke-play-${recording.id}"
+        }
+        private val seek = SeekBar(this@KaraokeActivity).apply {
+            tag = "karaoke-seek-${recording.id}"
+            contentDescription = getString(R.string.karaoke_playback_position)
+            max = recording.durationMs
+            keyProgressIncrement = (max / 20).coerceAtLeast(250)
+            progressTintList = ColorStateList.valueOf(palette.primary)
+            thumbTintList = ColorStateList.valueOf(palette.primary)
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(view: SeekBar, progress: Int, fromUser: Boolean) {
+                    if (!fromUser) return
+                    updateTime(progress)
+                    if (!dragging) studio.seekRecording(recording.id, progress)
+                }
+
+                override fun onStartTrackingTouch(view: SeekBar) { dragging = true }
+                override fun onStopTrackingTouch(view: SeekBar) {
+                    dragging = false
+                    studio.seekRecording(recording.id, view.progress)
+                }
+            })
+        }
+        private val seekRow = LinearLayout(this@KaraokeActivity).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            visibility = View.GONE
+            addView(playbackTime, LinearLayout.LayoutParams(-2, -2))
+            addView(seek, LinearLayout.LayoutParams(0, dp(48), 1f))
+        }
+
+        val view = column().apply {
+            background = styles.shape(styles.panel, radius = 10, border = palette.divider)
+            setPadding(dp(12), dp(10), dp(12), dp(4))
+            addView(styles.label(recording.title, 16f).apply {
+                maxLines = 2
+                setTypeface(typeface, Typeface.BOLD)
+            })
+            val detail = listOf(recording.artist, time(recording.durationMs)).filter { it.isNotBlank() }.joinToString(" · ")
+            addView(styles.label(detail, 13f, palette.muted))
+            if (recording.savedAt > 0) {
+                val savedAt = recordingDateFormat.format(Date(recording.savedAt))
+                addView(styles.label(getString(R.string.karaoke_saved_at, savedAt), 13f, palette.muted).apply {
+                    maxLines = 2
+                    tag = "karaoke-date-${recording.id}"
+                })
+            }
+            addView(seekRow, LinearLayout.LayoutParams(-1, -2))
+            val more = button(R.string.karaoke_more) {}.apply {
+                tag = "karaoke-more-${recording.id}"
+                setOnClickListener { showRecordingOptions(it, recording) }
+            }
+            addView(actions(play, more))
+        }
+
+        fun render(playback: KaraokePlayback?) {
+            seekRow.visibility = if (playback != null) View.VISIBLE else View.GONE
+            val label = when {
+                playback == null -> R.string.karaoke_play
+                playback.status != KaraokePlaybackStatus.PAUSED -> R.string.karaoke_pause
+                playback.positionMs in 1 until playback.durationMs -> R.string.karaoke_continue_playback
+                else -> R.string.karaoke_play
+            }
+            val text = getString(label)
+            if (play.text != text) play.text = text
+            if (playback != null && !dragging) {
+                seek.progress = playback.positionMs
+                updateTime(playback.positionMs)
+            }
+        }
+
+        private fun updateTime(positionMs: Int) {
+            val text = getString(R.string.karaoke_timing, time(positionMs), time(recording.durationMs))
+            if (playbackTime.text != text) playbackTime.text = text
+        }
     }
 
     private fun slider(parent: LinearLayout, title: Int, low: Int, high: Int, format: (Int) -> String, change: (Int) -> Unit): Slider {

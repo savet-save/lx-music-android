@@ -755,7 +755,10 @@ class MainActivity : FragmentActivity() {
         if (uiLayout.expanded || preferences.menuOnRight) header.addView(menu, LinearLayout.LayoutParams(dp(48), dp(48)))
         main.addView(header)
         val body = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        val picker = PlaylistPicker(this, lx, palette, { it.displayName }, ::selectPlaylist, ::showPlaylistActions)
+        val picker = PlaylistPicker(this, lx, palette, { it.displayName }, ::selectPlaylist, ::showPlaylistActions) {
+            playlistDrawer?.close(false)
+            showKaraoke(null)
+        }
         playlistPicker = picker
         playlistDrawer = HomeDrawerLayout(this, body, picker, onRight = false, widthFraction = .82f,
             tagPrefix = "playlist-drawer", closeDescription = R.string.playlist_close_picker,

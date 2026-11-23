@@ -16,7 +16,12 @@ internal object KaraokeSource {
     private val client = OkHttpClient.Builder().connectTimeout(15, TimeUnit.SECONDS).readTimeout(25, TimeUnit.SECONDS)
         .callTimeout(3, TimeUnit.MINUTES).build()
 
-    suspend fun copy(url: String, headers: Map<String, String>, target: File): Uri = suspendCancellableCoroutine { continuation ->
+    suspend fun copy(
+        url: String,
+        headers: Map<String, String>,
+        target: File,
+        progress: (Int) -> Unit,
+    ): Uri = suspendCancellableCoroutine { continuation ->
         val request = Request.Builder().url(url).apply { headers.forEach { (key, value) -> header(key, value) } }.build()
         val call = client.newCall(request)
         continuation.invokeOnCancellation { call.cancel() }
@@ -28,7 +33,8 @@ internal object KaraokeSource {
                     response.use { result ->
                         check(result.isSuccessful) { "HTTP ${result.code}" }
                         val body = requireNotNull(result.body)
-                        require(body.contentLength() <= MAX_BYTES)
+                        val length = body.contentLength()
+                        require(length <= MAX_BYTES)
                         check(continuation.isActive)
                         target.outputStream().buffered().use { output ->
                             val buffer = ByteArray(64 * 1024)
@@ -40,6 +46,7 @@ internal object KaraokeSource {
                                 bytes += count
                                 require(bytes <= MAX_BYTES)
                                 output.write(buffer, 0, count)
+                                if (length > 0) progress((bytes * 100 / length).coerceAtMost(99).toInt())
                             }
                             check(bytes > 0 && continuation.isActive)
                         }

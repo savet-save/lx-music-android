@@ -43,7 +43,12 @@ class KaraokeAudioTest {
         val voice = files.newFile("voice.pcm").apply {
             writeBytes(ByteBuffer.allocate(rate * 2).order(ByteOrder.LITTLE_ENDIAN).apply { repeat(rate) { putShort(4000) } }.array())
         }
-        val take = KaraokeTake(KaraokeBacking(backing, rate.toLong(), true), voice, rate.toLong())
+        val original = files.newFile("original.wav")
+        KaraokeAudio.WavWriter(original).use { sink ->
+            val samples = ShortArray(rate * 2) { 8000 }
+            sink.write(samples, samples.size)
+        }
+        val take = KaraokeTake(KaraokeBacking(backing, rate.toLong(), true, original), voice, rate.toLong())
         val mix = files.newFile("mix.wav")
         val count = KaraokeAudio.mix(take, KaraokeEdit(music = 50, voice = 25, trimStartMs = 100,
             trimEndMs = 100, voiceDelayMs = 200), mix)
@@ -54,6 +59,23 @@ class KaraokeAudioTest {
         assertEquals((-500).toShort(), wav.getShort(46))
         assertEquals(1500.toShort(), wav.getShort(44 + 4800 * 4))
         assertEquals(500.toShort(), wav.getShort(46 + 4800 * 4))
+    }
+
+    @Test fun monitoringSwitchReadsBothVersionsAtTheSamePosition() {
+        val backing = files.newFile("monitor-backing.wav")
+        val original = files.newFile("monitor-original.wav")
+        KaraokeAudio.WavWriter(backing).use { it.write(shortArrayOf(100, -100, 200, -200, 300, -300), 6) }
+        KaraokeAudio.WavWriter(original).use { it.write(shortArrayOf(1100, 900, 1200, 800, 1300, 700), 6) }
+        val buffer = ByteBuffer.allocate(KaraokeAudio.BYTES_PER_FRAME).order(ByteOrder.LITTLE_ENDIAN)
+        KaraokeMonitor(backing).use { monitor ->
+            assertEquals(4, monitor.read(buffer.array(), 0, null))
+            assertEquals(100.toShort(), buffer.getShort(0))
+            assertEquals(4, monitor.read(buffer.array(), 4, original))
+            assertEquals(1200.toShort(), buffer.getShort(0))
+            assertEquals(800.toShort(), buffer.getShort(2))
+            assertEquals(4, monitor.read(buffer.array(), 8, null))
+            assertEquals(300.toShort(), buffer.getShort(0))
+        }
     }
 
     @Test fun noiseReductionSuppressesLowLevelRumbleInTheVocalTrack() = runBlocking {
