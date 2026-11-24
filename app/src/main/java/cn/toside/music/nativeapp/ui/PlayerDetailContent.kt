@@ -10,7 +10,6 @@ import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
-import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.SeekBar
 import android.widget.TextView
@@ -27,8 +26,6 @@ internal data class PlayerDetailActions(
     val next: () -> Unit,
     val mode: () -> Unit,
     val queue: () -> Unit,
-    val sleep: () -> Unit,
-    val settings: () -> Unit,
     val karaoke: () -> Unit,
     val collect: () -> Unit,
     val comments: () -> Unit,
@@ -43,6 +40,8 @@ internal class PlayerDetailContent(
     icons: Typeface,
     val lyrics: PlayerLyricScroll,
     actions: PlayerDetailActions,
+    readLevel: () -> Float,
+    onRecordMotionChanged: (Boolean) -> Unit,
 ) : LinearLayout(context) {
     private val styles = LxStyles(context, palette, icons)
     private fun dp(value: Int) = styles.dp(value)
@@ -64,9 +63,10 @@ internal class PlayerDetailContent(
         tag = "player-artwork"; clipChildren = false; clipToPadding = false
         contentDescription = context.getString(R.string.ui_ccbb5ee62b1a)
         setOnClickListener { actions.lyrics() }
-        setOnLongClickListener { actions.more(it); true }
     }
-    val coverImage = ImageView(context).apply { scaleType = ImageView.ScaleType.CENTER_CROP; visibility = View.GONE }
+    private val record = PlayerRecordView(context, palette,
+        styles.label("LX", 58f, palette.primary).apply { gravity = Gravity.CENTER }, readLevel, onRecordMotionChanged)
+    val coverImage get() = record.image
     val pageToggle = icon(59697, R.string.ui_9dbfa9b42bb3, 24f, actions.lyrics).apply { tag = "player-lyrics-toggle" }
     val toggle = icon(59653, R.string.ui_c3396195e91c, if (adaptive.splitPlayer) 28f else 42f, actions.play).apply {
         tag = "player-play"; setTextColor(palette.primary)
@@ -74,9 +74,6 @@ internal class PlayerDetailContent(
     val mode = icon(59649, R.string.player_play_mode, 24f, actions.mode).apply { tag = "player-mode" }
     val collect = icon(59670, R.string.ui_cc143006b20d, 25f, actions.collect).apply { tag = "player-collect" }
     val comments = icon(59672, R.string.ui_07f73642e525, 24f, actions.comments).apply { tag = "player-comments" }
-    val more = icon(59680, R.string.ui_38844b135cf7, 24f) {}.apply {
-        tag = "player-more"; setOnClickListener { actions.more(this) }
-    }
     val elapsed = label(16f, palette.muted).apply { tag = "player-elapsed" }
     val duration = label(16f, palette.muted).apply { tag = "player-duration"; gravity = Gravity.END or Gravity.CENTER_VERTICAL }
     val time = label(12f, palette.foreground).apply { tag = "player-time"; gravity = Gravity.END or Gravity.CENTER_VERTICAL }
@@ -126,21 +123,16 @@ internal class PlayerDetailContent(
             isFocusable = true
             setOnClickListener { actions.karaoke() }
         }, LayoutParams(-2, dp(48)))
-        if (!adaptive.splitPlayer) {
-            header.addView(icon(59648, R.string.ui_f01b6815d826, 24f, actions.queue).apply {
-                tag = "player-queue"; tooltipText = context.getString(R.string.player_queue_timer)
-                setOnLongClickListener { actions.sleep(); true }
-            }, LayoutParams(dp(48), dp(56)))
-            header.addView(icon(59687, R.string.ui_8c38525734c0, 25f, actions.settings), LayoutParams(dp(48), dp(56)))
+        val queue = icon(59680, R.string.ui_f01b6815d826, 24f, actions.queue).apply { tag = "player-queue" }
+        if (!adaptive.splitPlayer) header.addView(queue, LayoutParams(dp(48), dp(48)))
+        val more = icon(59667, R.string.ui_38844b135cf7, 24f) {}.apply {
+            tag = "player-more"
+            setOnClickListener { actions.more(it) }
         }
+        header.addView(more, LayoutParams(dp(48), dp(48)))
         addView(header, LayoutParams(-1, dp(if (adaptive.splitPlayer || adaptive.compactPlayer) 56 else 64)))
 
-        val album = FrameLayout(context).apply {
-            background = styles.shape(palette.placeholder, 2); clipToOutline = true; elevation = dp(3).toFloat()
-            addView(styles.label("LX", 58f, palette.primary).apply { gravity = Gravity.CENTER }, FrameLayout.LayoutParams(-1, -1))
-            addView(coverImage, FrameLayout.LayoutParams(-1, -1))
-        }
-        cover.addView(album, FrameLayout.LayoutParams(dp(240), dp(240), Gravity.CENTER))
+        cover.addView(record, FrameLayout.LayoutParams(dp(240), dp(240), Gravity.CENTER))
         cover.addView(metadata, FrameLayout.LayoutParams(-1, -2))
         lyrics.isVerticalFadingEdgeEnabled = true; lyrics.setFadingEdgeLength(dp(56))
         body = PlayerBody(context, adaptive.splitPlayer, cover, lyrics, if (adaptive.splitPlayer) null else status)
@@ -153,16 +145,8 @@ internal class PlayerDetailContent(
             listOf(previous, toggle, next).forEach { addView(it, LayoutParams(0, -1, 1f)) }
         }
         val tools = LinearLayout(context).apply { tag = "player-tools"; gravity = Gravity.CENTER }
-        val toolViews = if (adaptive.splitPlayer) listOf(
-            pageToggle,
-            icon(59680, R.string.ui_f01b6815d826, 17f, actions.queue).apply { tag = "player-queue" },
-            comments,
-            icon(59687, R.string.ui_8c38525734c0, 18f, actions.settings),
-            more,
-            icon(59685, R.string.ui_dc0e25979181, 18f, actions.settings),
-            icon(59648, R.string.ui_7afda7dc6745, 18f, actions.sleep),
-            mode, collect,
-        ) else listOf(pageToggle, collect, mode, comments, more)
+        val toolViews = if (adaptive.splitPlayer) listOf(pageToggle, queue, comments, mode, collect)
+            else listOf(pageToggle, collect, mode, comments)
         toolViews.forEach { view ->
             if (adaptive.splitPlayer) view.textSize = 17f
             view.setTextColor(palette.muted)
@@ -175,6 +159,7 @@ internal class PlayerDetailContent(
 
     fun renderSong(song: Song?) {
         if (song == renderedSong && title.text.isNotEmpty()) return
+        if (song?.id != renderedSong?.id || song?.source != renderedSong?.source) record.resetTrack()
         renderedSong = song
         title.text = song?.title ?: context.getString(R.string.ui_f518674b61f6)
         artist.text = song?.artist.orEmpty()
@@ -189,6 +174,8 @@ internal class PlayerDetailContent(
         comments.alpha = if (comments.isEnabled) 1f else .4f
     }
 
+    fun setPlaying(playing: Boolean) = record.setPlaying(playing)
+
     fun showLyrics(show: Boolean) {
         lyrics.visibility = if (show) View.VISIBLE else View.GONE
         cover.visibility = if (!adaptive.splitPlayer && show) View.GONE else View.VISIBLE
@@ -199,7 +186,7 @@ internal class PlayerDetailContent(
     }
 }
 
-/** Keep the square artwork and the lyrics independent of transport controls. */
+/** Keep the artwork and lyrics independent of transport controls. */
 private class PlayerBody(context: Context, private val split: Boolean, private val cover: View, private val lyrics: View,
     private val status: View?) : FrameLayout(context) {
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()

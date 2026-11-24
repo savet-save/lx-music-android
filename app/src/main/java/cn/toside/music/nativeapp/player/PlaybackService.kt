@@ -105,6 +105,8 @@ class PlaybackService : Service() {
     private var resumeOnFocus = false
     private var playWhenReady = false
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private val localLevels = LocalPlaybackLevels(this, scope)
+    private var playbackLevelsEnabled = false
     private val sourceMutex = Mutex()
     private lateinit var userSource: UserSources
     private lateinit var queueStore: QueueStore
@@ -434,6 +436,20 @@ class PlaybackService : Service() {
     }
     internal val equalizerState: EqualizerState? get() = equalizer.state
 
+    internal fun setPlaybackLevelsEnabled(enabled: Boolean) {
+        playbackLevelsEnabled = enabled
+        nativePlayer?.measureAudioLevels = enabled
+        if (!enabled) localLevels.close()
+    }
+
+    internal fun playbackLevel(): Float {
+        val current = state.value
+        val song = current.song ?: return 0f
+        if (!playbackLevelsEnabled || !current.playing || current.preparing) return 0f
+        val level = nativePlayer?.playbackLevel() ?: player?.let { localLevels.at(song.uri, it.currentPosition) } ?: 0f
+        return level * current.volume
+    }
+
     internal fun setEqualizerEnabled(enabled: Boolean): Boolean {
         if (!equalizer.setEnabled(enabled)) return false
         nativePlayer?.setEqualizerEnabled(enabled)
@@ -554,6 +570,7 @@ class PlaybackService : Service() {
         }
     }
     private fun releasePlayback() {
+        localLevels.close()
         player?.release(); player = null
         val previous = nativePlayer; nativePlayer = null; previous?.release()
     }
@@ -657,6 +674,7 @@ class PlaybackService : Service() {
             }
         }, if(song.source == "bili") cn.toside.music.nativeapp.online.BilibiliApi.audioHeaders else emptyMap(), playbackRetries,
             audioSessionId = equalizer.audioSessionId, equalizerEnabled = equalizer.state?.enabled == true)
+        current.measureAudioLevels = playbackLevelsEnabled
         nativePlayer = current
         try { current.prepare(uri, key, position, state.value.playbackRate, state.value.volume, playWhenReady) }
         catch (e: Exception) {
@@ -700,6 +718,7 @@ class PlaybackService : Service() {
     /** One-way fallback; late callbacks from a released MediaPlayer cannot replace the current engine. */
     internal fun recoverMediaPlayer(current: MediaPlayer, song: Song, uri: Uri, position: Int, reason: String) {
         if (player !== current || state.value.song != song) return
+        localLevels.close()
         player = null; runCatching { current.release() }
         DiagnosticLog(this).record("playback", "$reason; retrying with Media3", "WARN")
         mutableState.value = mutableState.value.copy(preparing = true, playing = false, error = null)
@@ -772,6 +791,7 @@ class PlaybackService : Service() {
         if (mutableState.value.preparing) return
         try {
             val target = position.coerceIn(0, mutableState.value.duration)
+            localLevels.close()
             player?.seekTo(target)
             nativePlayer?.seekTo(target)
             mutableState.value = mutableState.value.copy(position = target)

@@ -317,7 +317,10 @@ class MainActivity : FragmentActivity() {
             settingsFragment()?.refreshPlayback()
             refreshBilibiliSearchAvailability()
         }
-        override fun onServiceDisconnected(name: ComponentName?) { service = null; stateJob?.cancel(); lyricJob?.cancel(); artworkJob?.cancel(); sourceUpdateJob?.cancel() }
+        override fun onServiceDisconnected(name: ComponentName?) {
+            detailContent?.setPlaying(false)
+            service = null; stateJob?.cancel(); lyricJob?.cancel(); artworkJob?.cancel(); sourceUpdateJob?.cancel()
+        }
     }
     private val syncConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
@@ -388,6 +391,7 @@ class MainActivity : FragmentActivity() {
     }
     override fun onStop() {
         platformPopup.dismiss(); playlistActionsPopup.dismiss(); songActionsPopup.dismiss(); choicesPopup.dismiss()
+        detailContent?.setPlaying(false)
         stateJob?.cancel()
         lyricJob?.cancel()
         artworkJob?.cancel()
@@ -1239,7 +1243,6 @@ class MainActivity : FragmentActivity() {
     private fun showNavigationActions() {
         val labels = mutableListOf(getString(R.string.ui_a9531e47b75d), getString(R.string.ui_27c95ec6b766), getString(R.string.ui_87a2113eb66f), getString(R.string.ui_1ee95aa94712), getString(R.string.ui_259597bf6ca7), getString(R.string.ui_3158c8d56b7b), getString(R.string.ui_a5cd0a9169e8), getString(R.string.ui_3facd3e00be5), getString(R.string.ui_599818eb56df), getString(R.string.ui_727036c7fc2a), getString(R.string.ui_2a3ec620e12c), getString(R.string.ui_8c38525734c0), getString(R.string.ui_486b54a7b0af), getString(R.string.ui_6e763b71e69c), getString(R.string.ui_f01b6815d826), getString(R.string.ui_cad84b75d661), getString(R.string.ui_426744e26e7e), getString(R.string.ui_ac7aa03a458f), getString(R.string.settings_title), getString(R.string.ui_788db1cfec2a), getString(R.string.ui_4fd38bc4f6d4), getString(R.string.ui_bb1d19b85634))
         labels.add(getString(R.string.download_page))
-        labels.add(getString(R.string.karaoke_library))
         if (uiLayout.expanded && preferences.showBack) labels.add(getString(R.string.ui_f75a93326a3c))
         if (uiLayout.expanded && preferences.showExit) labels.add(getString(R.string.ui_b0d269c8707c))
         // Keep the original action IDs when filtering so each remaining label dispatches correctly.
@@ -1250,7 +1253,6 @@ class MainActivity : FragmentActivity() {
             navigationDrawer?.close(false)
             val which = id.toInt()
             if (labels[which] == getString(R.string.download_page)) { showDownloads(); return@show }
-            if (labels[which] == getString(R.string.karaoke_library)) { showKaraoke(null); return@show }
             if (labels[which] == getString(R.string.ui_f75a93326a3c)) { moveTaskToBack(true); return@show }
             if (labels[which] == getString(R.string.ui_b0d269c8707c)) {
                 confirmExit()
@@ -1856,13 +1858,15 @@ class MainActivity : FragmentActivity() {
         val content = PlayerDetailContent(this, uiLayout, palette, iconFont, scroll, PlayerDetailActions(
             close = ::closePlayerDetails, lyrics = ::toggleDetailPage,
             previous = { service?.previous() }, play = ::togglePlayback, next = { service?.next() },
-            mode = { service?.cycleMode() }, queue = ::showPlaybackQueue, sleep = ::showSleepTimer,
-            settings = ::showPlaybackSettings,
+            mode = { service?.cycleMode() }, queue = ::showPlaybackQueue,
             karaoke = { showKaraoke(service?.state?.value?.song) },
             collect = { service?.state?.value?.song?.let(::choosePlaylistForSong) },
             comments = { service?.state?.value?.song?.takeIf { it.source != "local" }?.let { showComments(this, it) } },
-            more = { anchor -> service?.state?.value?.song?.let { song -> showSongActionsFor(anchor, song, null, allowConversion = true, play = ::togglePlayback) } },
-        ))
+            more = { anchor ->
+                showSongActionsFor(anchor, service?.state?.value?.song, selected = null, fromPlayer = true, play = ::togglePlayback)
+            },
+        ), readLevel = { service?.playbackLevel() ?: 0f },
+            onRecordMotionChanged = { service?.setPlaybackLevelsEnabled(it) })
         detailContent = content
         detailTitle = content.title; detailTime = content.time; detailSeek = content.seek
         detailToggle = content.toggle; detailMode = content.mode; detailScroll = scroll
@@ -1887,6 +1891,7 @@ class MainActivity : FragmentActivity() {
     internal fun releasePlayerDetailView(view: View?) {
         if (detailContent !== view) return
         detailScroll?.cancelPreview()
+        detailContent?.setPlaying(false)
         detailContent = null; detailTitle = null; detailTime = null; detailSeek = null; detailToggle = null; detailMode = null
         detailScroll = null; detailCover = null; detailCoverImage = null; detailPageToggle = null
         detailRenderedLines = null; detailActiveLine = -1; detailSeeking = false
@@ -1926,9 +1931,10 @@ class MainActivity : FragmentActivity() {
     }
 
     private fun renderDetails(state: PlayerState) {
-        if (detailContent == null) return
-        detailContent?.renderSong(state.song)
-        detailContent?.status?.apply {
+        val content = detailContent ?: return
+        content.renderSong(state.song)
+        content.setPlaying(state.playing && !state.preparing)
+        content.status.apply {
             text = state.error.orEmpty()
             visibility = if (state.error.isNullOrBlank()) View.GONE else View.VISIBLE
         }
@@ -2319,8 +2325,13 @@ class MainActivity : FragmentActivity() {
     private fun showSongActions(anchor: View, song: Song) =
         showSongActionsFor(anchor, song, activePlaylist) { playListedSong(song) }
 
-    private fun showSongActionsFor(anchor: View, song: Song, selected: Playlist?, allowConversion: Boolean = false, play: () -> Unit) {
+    private fun showSongActionsFor(anchor: View, song: Song?, selected: Playlist?, fromPlayer: Boolean = false, play: () -> Unit) {
         val actions = buildList {
+            if (fromPlayer) {
+                add(R.string.ui_8c38525734c0)
+                add(R.string.ui_7afda7dc6745)
+            }
+            if (song == null) return@buildList
             add(R.string.ui_c3396195e91c)
             add(R.string.ui_94ca0a7bf933)
             add(R.string.ui_cc143006b20d)
@@ -2331,7 +2342,7 @@ class MainActivity : FragmentActivity() {
             add(R.string.ui_732807e9a807)
             add(R.string.ui_804151aa3e97)
             add(R.string.song_source_details)
-            if (allowConversion) add(R.string.mp3_convert)
+            if (fromPlayer) add(R.string.mp3_convert)
             if (song.source == "local") add(R.string.metadata_edit) else {
                 add(R.string.song_clear_cache)
                 add(R.string.ui_9be60bb7ddeb)
@@ -2350,7 +2361,11 @@ class MainActivity : FragmentActivity() {
             }
         }
         songActionsPopup.show(anchor, actions.map(Int::toString), actions.map(::getString), "", palette, alignEnd = true) { choice ->
-            runSongAction(choice.toInt(), song, selected, play)
+            when (val action = choice.toInt()) {
+                R.string.ui_8c38525734c0 -> showPlaybackSettings()
+                R.string.ui_7afda7dc6745 -> showSleepTimer()
+                else -> song?.let { runSongAction(action, it, selected, play) }
+            }
         }
     }
 

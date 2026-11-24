@@ -1,6 +1,5 @@
 <resources>
     <string name="player_play_mode">播放模式</string>
-    <string name="player_queue_timer">播放队列；长按定时关闭</string>
     <string name="player_hide_lyrics">隐藏歌词</string>
     <string name="player_metadata_title">歌曲名：%1$s</string>
     <string name="player_metadata_artist">艺术家：%1$s</string>
