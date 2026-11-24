@@ -25,7 +25,7 @@
     <string name="karaoke_rerecord">Record again</string>
     <string name="karaoke_retry">Try again</string>
     <string name="karaoke_mixing">Mixing audio…</string>
-    <string name="karaoke_review">Adjust and preview the mix before saving it to My Karaoke.</string>
+    <string name="karaoke_review">Adjust the mix while previewing, then save it to My Karaoke.</string>
     <string name="karaoke_music_gain">Accompaniment volume</string>
     <string name="karaoke_control_value">%1$s · %2$s</string>
     <string name="karaoke_voice_gain">Vocal recording volume</string>
@@ -34,7 +34,8 @@
     <string name="karaoke_voice_delay">Vocal alignment</string>
     <string name="karaoke_noise">Reduce rumble and quiet background noise</string>
     <string name="karaoke_preview">Preview</string>
-    <string name="karaoke_preview_stop">Stop preview</string>
+    <string name="karaoke_preview_pause">Pause preview</string>
+    <string name="karaoke_preview_resume">Resume preview</string>
     <string name="karaoke_play">Play</string>
     <string name="karaoke_continue_playback">Resume</string>
     <string name="karaoke_playback_position">Playback position</string>

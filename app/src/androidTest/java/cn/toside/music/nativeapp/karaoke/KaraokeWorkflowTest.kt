@@ -9,6 +9,7 @@ import android.view.View
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.inspector.WindowInspector
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.LinearLayout
 import android.widget.ListView
 import android.widget.SeekBar
@@ -132,7 +133,7 @@ class KaraokeWorkflowTest {
             await { model.state.value.stage == KaraokeStage.REVIEW }
             assertTrue(model.state.value.duration in 1..4999)
             instrumentation.runOnMainSync { screen.window.decorView.findViewWithTag<Button>("karaoke-preview").performClick() }
-            await { model.state.value.playingPreview == KaraokeViewModel.DRAFT }
+            await { model.state.value.draftPlayback?.playing == true }
             instrumentation.runOnMainSync { screen.window.decorView.findViewWithTag<Button>("karaoke-save").performClick() }
             await { model.state.value.saved != null }
             saved = checkNotNull(model.state.value.saved)
@@ -150,6 +151,70 @@ class KaraokeWorkflowTest {
             saved?.let { recording -> recording.file.delete(); recording.file.resolveSibling("${recording.id}.json").delete() }
             context.filesDir.resolve("lyrics/${song.id}.lrc").delete()
             lrc.delete()
+            input.delete()
+        }
+    }
+
+    @Test fun draftPreviewSeeksAndRemainsPlayingWhileTheMixChanges() = runBlocking {
+        val input = File.createTempFile("karaoke-draft-seek", ".wav", context.cacheDir).apply { silence(this, 7) }
+        val song = Song(System.nanoTime(), Uri.fromFile(input), "Draft preview fixture", "", 7000)
+        val screen = ForegroundTestActivities.start(KaraokeActivity.intent(context, song)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as KaraokeActivity
+        try {
+            lateinit var model: KaraokeViewModel
+            instrumentation.runOnMainSync { model = ViewModelProvider(screen)[KaraokeViewModel::class.java] }
+            await { model.state.value.stage == KaraokeStage.READY }
+            instrumentation.runOnMainSync { model.record(syntheticCapture()) }
+            await { model.state.value.stage == KaraokeStage.RECORDING && model.state.value.position >= 3600 }
+            instrumentation.runOnMainSync { model.stop() }
+            await { model.state.value.stage == KaraokeStage.REVIEW }
+            val duration = model.state.value.duration
+            val root = screen.window.decorView
+            val bar = root.findViewWithTag<SeekBar>("karaoke-preview-position")
+            val play = root.findViewWithTag<Button>("karaoke-preview")
+            fun change(tag: String, value: Int) {
+                val slider = root.findViewWithTag<SeekBar>(tag)
+                assertTrue(slider.performAccessibilityAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SET_PROGRESS.id,
+                    Bundle().apply { putFloat(AccessibilityNodeInfo.ACTION_ARGUMENT_PROGRESS_VALUE, value.toFloat()) }))
+            }
+            instrumentation.runOnMainSync {
+                assertTrue(bar.isShown && bar.isEnabled)
+                assertEquals(duration, bar.max)
+                change("karaoke-preview-position", 1800)
+                assertEquals(1800, model.state.value.draftPlayback?.positionMs)
+                play.performClick()
+            }
+            await { model.state.value.draftPlayback?.let { it.playing && it.positionMs in 1900..3000 } == true }
+            instrumentation.runOnMainSync {
+                change("karaoke-preview-position", 300)
+                change("karaoke-music-gain", 36)
+                change("karaoke-voice-gain", 64)
+                root.findViewWithTag<CheckBox>("karaoke-noise").performClick()
+                val state = model.state.value
+                assertTrue(state.draftPlayback?.playing == true)
+                assertEquals(36, state.edit.music)
+                assertEquals(64, state.edit.voice)
+                assertTrue(state.edit.reduceNoise)
+            }
+            await { model.state.value.draftPlayback?.let { it.playing && it.positionMs in 450..1200 } == true }
+            instrumentation.runOnMainSync {
+                model.edit { it.copy(trimStartMs = 1600, trimEndMs = 200, voiceDelayMs = 40) }
+                assertTrue(model.state.value.draftPlayback?.playing == true)
+            }
+            await { model.state.value.draftPlayback?.let {
+                it.playing && it.durationMs == duration - 1800 && it.positionMs in 100..1000
+            } == true }
+            instrumentation.runOnMainSync {
+                play.performClick()
+                assertEquals(false, model.state.value.draftPlayback?.playing)
+                change("karaoke-preview-position", duration - 1820)
+                assertEquals(false, model.state.value.draftPlayback?.playing)
+                play.performClick()
+            }
+            await { model.state.value.draftPlayback?.let { !it.playing && it.positionMs == it.durationMs } == true }
+        } finally {
+            instrumentation.runOnMainSync { screen.finish() }
+            AudioStreamCache.get(context).removeSong(AudioStreamCache.key(song, ""))
             input.delete()
         }
     }

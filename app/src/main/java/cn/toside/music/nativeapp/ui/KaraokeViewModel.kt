@@ -17,6 +17,7 @@ import cn.toside.music.nativeapp.karaoke.KaraokeBackingCache
 import cn.toside.music.nativeapp.karaoke.KaraokeCapture
 import cn.toside.music.nativeapp.karaoke.KaraokeEdit
 import cn.toside.music.nativeapp.karaoke.KaraokeLibrary
+import cn.toside.music.nativeapp.karaoke.KaraokePreview
 import cn.toside.music.nativeapp.karaoke.KaraokeRecording
 import cn.toside.music.nativeapp.karaoke.KaraokeTake
 import cn.toside.music.nativeapp.karaoke.MdxParameters
@@ -45,6 +46,8 @@ internal data class KaraokePlayback(
     val status: KaraokePlaybackStatus = KaraokePlaybackStatus.PREPARING,
 )
 
+internal data class KaraokeDraftPlayback(val positionMs: Int, val durationMs: Int, val playing: Boolean = false)
+
 internal data class KaraokeState(
     val stage: KaraokeStage = KaraokeStage.IDLE,
     val prepareProgress: Int = 0,
@@ -61,7 +64,7 @@ internal data class KaraokeState(
     val libraryOpen: Boolean = false,
     val recordings: List<KaraokeRecording> = emptyList(),
     val saved: KaraokeRecording? = null,
-    val playingPreview: String? = null,
+    val draftPlayback: KaraokeDraftPlayback? = null,
     val recordingPlayback: KaraokePlayback? = null,
     val message: Int? = null,
 )
@@ -91,6 +94,9 @@ internal class KaraokeViewModel(application: Application) : AndroidViewModel(app
     private var playerPrepared = false
     private var seekingPosition: Int? = null
     private var playbackProgress: Job? = null
+    private var draftPlayer: KaraokePreview? = null
+    private var draftWork: Job? = null
+    private var draftFrame = 0L
     private var work: Job? = null
     private var originalWork: Job? = null
     private var loadSource: (suspend (File, (Int) -> Unit) -> Uri)? = null
@@ -210,18 +216,21 @@ internal class KaraokeViewModel(application: Application) : AndroidViewModel(app
         if (state.value.stage !in setOf(KaraokeStage.READY, KaraokeStage.REVIEW) || state.value.modelDownload != null) return
         val prepared = backing ?: return
         stopPlayback()
+        val previousPreview = draftWork
         recorder.selectOriginal(prepared.original.takeIf { state.value.originalEnabled })
         capture = recorder
         take = null
         id = UUID.randomUUID().toString()
         recordedAt = 0L
         renderedEdit = null
+        draftFrame = 0L
         mutable.update {
             it.copy(stage = KaraokeStage.RECORDING, edit = KaraokeEdit(), saved = null, position = 0,
-                duration = KaraokeAudio.millis(prepared.frames), message = null)
+                duration = KaraokeAudio.millis(prepared.frames), draftPlayback = null, message = null)
         }
         work = viewModelScope.launch {
             try {
+                previousPreview?.join()
                 var startedAt = 0L
                 val recorded = recorder.record(getApplication(), prepared, files.resolve("voice.pcm")) { frames, paused ->
                     if (!paused && startedAt == 0L) startedAt = System.currentTimeMillis()
@@ -234,9 +243,11 @@ internal class KaraokeViewModel(application: Application) : AndroidViewModel(app
                 }
                 recordedAt = startedAt
                 take = recorded
-                mutable.update { it.copy(stage = KaraokeStage.MIXING, position = 0, duration = KaraokeAudio.millis(recorded.frames)) }
-                render(recorded, state.value.edit)
-                mutable.update { it.copy(stage = KaraokeStage.REVIEW) }
+                val duration = KaraokeAudio.millis(recorded.frames)
+                mutable.update {
+                    it.copy(stage = KaraokeStage.REVIEW, position = 0, duration = duration,
+                        draftPlayback = KaraokeDraftPlayback(0, duration))
+                }
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) {
                 fail(if (take == null) KaraokeStage.READY else KaraokeStage.REVIEW,
@@ -252,37 +263,85 @@ internal class KaraokeViewModel(application: Application) : AndroidViewModel(app
     fun edit(change: (KaraokeEdit) -> KaraokeEdit) {
         val current = state.value
         if (current.stage != KaraokeStage.REVIEW) return
+        val recorded = take ?: return
         val edit = change(current.edit)
         if (edit == current.edit) return
-        stopPlayback()
-        mutable.update { it.copy(edit = edit, saved = null, message = null) }
-    }
-
-    fun previewTake() {
-        if (state.value.playingPreview == DRAFT) { stopPlayback(); return }
-        if (state.value.stage == KaraokeStage.REVIEW) withMix { openPlayback(editedWave) }
-    }
-
-    fun save(song: Song) {
-        if (state.value.stage != KaraokeStage.REVIEW) return
-        val recordingId = id ?: return
-        withMix {
-            val result = library.save(recordingId, song, editedWave, recordedAt)
-            val recordings = library.list()
-            mutable.update { it.copy(saved = result, recordings = recordings, message = R.string.karaoke_saved) }
+        val range = KaraokeAudio.range(recorded, edit)
+        val active = draftPlayer
+        val position = active?.position ?: draftFrame
+        draftFrame = if (active != null && range != KaraokeAudio.range(recorded, current.edit) &&
+            position !in range.start until range.end) range.start else position.coerceIn(range.start, range.end)
+        active?.edit(edit, draftFrame.takeIf { it != position })
+        mutable.update {
+            it.copy(edit = edit, saved = null, message = null, draftPlayback = range.preview(draftFrame, active != null))
         }
     }
 
-    private fun withMix(consume: suspend () -> Unit) {
+    fun previewTake() {
+        val current = state.value
+        if (current.stage != KaraokeStage.REVIEW) return
+        if (draftPlayer != null) { stopPlayback(); return }
         val recorded = take ?: return
-        val edit = state.value.edit
+        val range = KaraokeAudio.range(recorded, current.edit)
+        if (range.end <= range.start) return
+        stopPlayback()
+        val previous = draftWork
+        val frame = draftFrame.takeIf { it in range.start until range.end } ?: range.start
+        val active = KaraokePreview(recorded, current.edit, frame)
+        draftPlayer = active
+        updateDraftPlayback(frame, playing = true)
+        message(null)
+        draftWork = viewModelScope.launch {
+            try {
+                previous?.join()
+                check(audio.requestAudioFocus(focus) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED)
+                active.play(attributes) { position ->
+                    if (active === draftPlayer) updateDraftPlayback(position, playing = true)
+                }
+                if (active === draftPlayer) stopPlayback()
+            } catch (e: CancellationException) { throw e }
+            catch (_: Exception) {
+                if (active === draftPlayer) {
+                    stopPlayback()
+                    message(R.string.karaoke_preview_error)
+                }
+            }
+        }
+    }
+
+    fun seekDraft(positionMs: Int) {
+        if (state.value.stage != KaraokeStage.REVIEW) return
+        val recorded = take ?: return
+        val frame = KaraokeAudio.range(recorded, state.value.edit).seekFrame(positionMs)
+        draftPlayer?.seek(frame)
+        updateDraftPlayback(frame, playing = draftPlayer != null)
+    }
+
+    private fun updateDraftPlayback(frame: Long, playing: Boolean) {
+        val recorded = take ?: return
+        val range = KaraokeAudio.range(recorded, state.value.edit)
+        draftFrame = frame.coerceIn(range.start, range.end)
+        mutable.update { it.copy(draftPlayback = range.preview(draftFrame, playing)) }
+    }
+
+    private fun KaraokeAudio.TrimmedRange.preview(frame: Long, playing: Boolean) =
+        KaraokeDraftPlayback(positionMs(frame), durationMs, playing)
+
+    fun save(song: Song) {
+        val current = state.value
+        if (current.stage != KaraokeStage.REVIEW) return
+        val recordingId = id ?: return
+        val recorded = take ?: return
         stopPlayback()
         mutable.update { it.copy(stage = KaraokeStage.MIXING, message = null) }
         work = viewModelScope.launch {
             try {
-                render(recorded, edit)
-                consume()
-                mutable.update { it.copy(stage = KaraokeStage.REVIEW) }
+                render(recorded, current.edit)
+                val result = library.save(recordingId, song, editedWave, recordedAt)
+                val recordings = library.list()
+                mutable.update {
+                    it.copy(stage = KaraokeStage.REVIEW, saved = result, recordings = recordings, message = R.string.karaoke_saved)
+                }
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) { fail(KaraokeStage.REVIEW, R.string.karaoke_mix_error, e) }
         }
@@ -324,9 +383,9 @@ internal class KaraokeViewModel(application: Application) : AndroidViewModel(app
         if (active != null && playerPrepared && seekingPosition == null) seekPlayer(active, position)
     }
 
-    private fun openPlayback(file: File, recording: KaraokePlayback? = null) {
+    private fun openPlayback(file: File, recording: KaraokePlayback) {
         stopPlayback()
-        mutable.update { it.copy(playingPreview = if (recording == null) DRAFT else null, recordingPlayback = recording) }
+        mutable.update { it.copy(recordingPlayback = recording) }
         try {
             check(audio.requestAudioFocus(focus) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED)
             val active = MediaPlayer().also { player = it }
@@ -404,10 +463,14 @@ internal class KaraokeViewModel(application: Application) : AndroidViewModel(app
     private fun playbackError() {
         val recording = state.value.recordingPlayback
         stopPlayback(recording?.copy(status = KaraokePlaybackStatus.PAUSED))
-        message(if (recording == null) R.string.karaoke_preview_error else R.string.karaoke_playback_error)
+        message(R.string.karaoke_playback_error)
     }
 
     private fun stopPlayback(recording: KaraokePlayback? = null) {
+        val frame = draftPlayer?.position
+        draftPlayer = null
+        draftWork?.cancel()
+        frame?.let { updateDraftPlayback(it, playing = false) }
         playbackProgress?.cancel()
         playbackProgress = null
         player?.release()
@@ -415,7 +478,7 @@ internal class KaraokeViewModel(application: Application) : AndroidViewModel(app
         playerPrepared = false
         seekingPosition = null
         audio.abandonAudioFocusRequest(focus)
-        mutable.update { it.copy(playingPreview = null, recordingPlayback = recording) }
+        mutable.update { it.copy(recordingPlayback = recording) }
     }
 
     fun export(id: String, target: Uri) {
@@ -437,7 +500,7 @@ internal class KaraokeViewModel(application: Application) : AndroidViewModel(app
 
     override fun onCleared() {
         stopPlayback()
-        val running = listOfNotNull(work, originalWork).filterNot { it.isCompleted }
+        val running = listOfNotNull(work, originalWork, draftWork).filterNot { it.isCompleted }
         if (running.isEmpty()) files.deleteRecursively()
         else {
             val remaining = AtomicInteger(running.size)
@@ -449,7 +512,6 @@ internal class KaraokeViewModel(application: Application) : AndroidViewModel(app
     }
 
     companion object {
-        const val DRAFT = "draft"
         private const val DOWNLOAD_SHARE = 45
     }
 }

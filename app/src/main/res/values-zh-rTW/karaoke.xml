@@ -25,7 +25,7 @@
     <string name="karaoke_rerecord">重新錄音</string>
     <string name="karaoke_retry">重新準備</string>
     <string name="karaoke_mixing">正在合成音訊…</string>
-    <string name="karaoke_review">調整混音後可試聽，再儲存到我的 K 歌歌單。</string>
+    <string name="karaoke_review">試聽時可調整混音，完成後儲存到我的 K 歌歌單。</string>
     <string name="karaoke_music_gain">伴奏音量</string>
     <string name="karaoke_control_value">%1$s · %2$s</string>
     <string name="karaoke_voice_gain">錄音人聲音量</string>
@@ -34,7 +34,8 @@
     <string name="karaoke_voice_delay">人聲對齊</string>
     <string name="karaoke_noise">降噪（減弱低頻雜音和安靜處的底噪）</string>
     <string name="karaoke_preview">試聽</string>
-    <string name="karaoke_preview_stop">停止試聽</string>
+    <string name="karaoke_preview_pause">暫停試聽</string>
+    <string name="karaoke_preview_resume">繼續試聽</string>
     <string name="karaoke_play">播放</string>
     <string name="karaoke_continue_playback">繼續播放</string>
     <string name="karaoke_playback_position">播放進度</string>
