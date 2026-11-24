@@ -8,7 +8,6 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.net.Uri
 import android.os.SystemClock
-import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.inspector.WindowInspector
@@ -55,10 +54,13 @@ class PlayerDetailTest {
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
         val open = MainActivity::class.java.getDeclaredMethod("showPlayerDetails").apply { isAccessible = true }
         val timerText = activity.getString(R.string.ui_7afda7dc6745)
-        fun hasText(view: View, text: String): Boolean =
-            view is TextView && view.text.toString() == text ||
-                view is ViewGroup && (0 until view.childCount).any { hasText(view.getChildAt(it), text) }
-        fun timerShown() = WindowInspector.getGlobalWindowViews().any { it.isShown && hasText(it, timerText) }
+        val closeTimerText = activity.getString(R.string.ui_0446dbd36ecc)
+        fun visibleText(text: String): TextView? {
+            val matches = arrayListOf<View>()
+            WindowInspector.getGlobalWindowViews().forEach { it.findViewsWithText(matches, text, View.FIND_VIEWS_WITH_TEXT) }
+            return matches.filterIsInstance<TextView>().firstOrNull { it.isShown && it.text.toString() == text }
+        }
+        fun timerShown() = visibleText(timerText) != null
         fun menu() = WindowInspector.getGlobalWindowViews().firstNotNullOfOrNull {
             it.findViewWithTag<ListView>("song-actions-menu")?.takeIf(View::isShown)
         }
@@ -91,9 +93,14 @@ class PlayerDetailTest {
                 assertFalse(timerShown())
             }
             selectAction(R.string.ui_7afda7dc6745)
-            await("Sleep timer dialog did not open") { timerShown() && menu() == null }
-            instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
-            await("Sleep timer dialog did not close") { !timerShown() && activity.hasWindowFocus() }
+            await("Sleep timer dialog did not open") { timerShown() && menu() == null && visibleText(closeTimerText) != null }
+            main {
+                val row = requireNotNull(visibleText(closeTimerText))
+                val options = generateSequence(row.parent) { it.parent }.filterIsInstance<ListView>().first()
+                val position = options.getPositionForView(row)
+                assertTrue(options.performItemClick(row, position, options.adapter.getItemId(position)))
+            }
+            await("Sleep timer dialog did not close") { !timerShown() }
             selectAction(R.string.ui_8c38525734c0)
             await("Playback settings did not open") { activity.settingsFragment()?.savePageState()?.getString("category") == "playback" }
             main { activity.closeSettings() }

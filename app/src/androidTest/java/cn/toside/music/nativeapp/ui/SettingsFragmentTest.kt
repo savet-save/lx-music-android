@@ -13,6 +13,7 @@ import android.widget.EditText
 import android.widget.Switch
 import android.widget.TextView
 import android.widget.ListView
+import android.widget.PopupWindow
 import android.widget.ScrollView
 import android.net.Uri
 import cn.toside.music.nativeapp.data.Song
@@ -316,15 +317,21 @@ class SettingsFragmentTest {
         try {
             val selected = if (oldStrength == "110") "103" else "110"
             instrumentation.runOnMainSync { activity.openSettings("vocal-separation") }
-            val page = settings(activity).requireView()
+            val fragment = settings(activity)
+            val page = fragment.requireView()
             val row = page.findViewWithTag<View>("settings-$key")
             await { row.isLaidOut }
             instrumentation.runOnMainSync {
                 page.findViewWithTag<ScrollView>("settings-content").scrollTo(0, row.top)
                 row.performClick()
             }
-            fun menu() = WindowInspector.getGlobalWindowViews().flatMap(::descendants).filterIsInstance<ListView>()
-                .firstOrNull { it.tag == "settings-choice-menu" && it.isShown }
+            val controller = SettingsFragment::class.java.getDeclaredField("page").apply { isAccessible = true }.get(fragment)
+            val popup = SettingsPage::class.java.getDeclaredField("choicePopup").apply { isAccessible = true }.get(controller)
+            val windowField = PlatformPopup::class.java.getDeclaredField("window").apply { isAccessible = true }
+            fun menu(): ListView? {
+                val window = windowField.get(popup) as? PopupWindow
+                return (window?.contentView as? ListView)?.takeIf { window.isShowing && it.isShown }
+            }
             await { menu()?.childCount?.let { it > 0 } == true }
             instrumentation.runOnMainSync {
                 val index = MdxParameters.strengths.indexOf(selected.toInt())
