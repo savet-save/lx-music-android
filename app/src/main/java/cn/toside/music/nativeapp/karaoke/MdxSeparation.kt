@@ -18,6 +18,8 @@ import java.io.IOException
 import java.security.MessageDigest
 import java.util.function.IntPredicate
 
+internal const val KARAOKE_MODEL_ASSETS = "karaoke-models"
+
 internal class MdxSeparation(private val context: Context) {
     private val model = context.noBackupFilesDir.resolve("karaoke-models/$MODEL_FILE")
 
@@ -48,7 +50,7 @@ internal class MdxSeparation(private val context: Context) {
 
     private suspend fun installBundledModel(): Boolean {
         val bundled = try {
-            context.assets.open("karaoke-models/$MODEL_FILE")
+            context.assets.open("$KARAOKE_MODEL_ASSETS/$MODEL_FILE")
         } catch (_: FileNotFoundException) {
             return false
         }

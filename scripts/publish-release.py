@@ -26,7 +26,9 @@ SIGNER_SHA256_PATTERN = re.compile(
 )
 ARCHITECTURES = {"all": None, "armv7": "armeabi-v7a", "armv8": "arm64-v8a"}
 MDX_MODEL = dict(line.split("=", 1) for line in (ROOT / "gradle/mdx-model.properties").read_text(encoding="utf-8").splitlines())
-MDX_ASSET = f"assets/karaoke-models/{MDX_MODEL['file']}"
+MDX_DIRECTORY = "assets/karaoke-models/"
+MDX_ASSET = MDX_DIRECTORY + MDX_MODEL["file"]
+LEGACY_BUNDLED_APK = "lx-music-{tag}-with-model.apk"
 
 
 def run(arguments, *, capture=True):
@@ -283,7 +285,8 @@ def verify_apks(version, code, apksigner, *, with_model=False):
     root = ROOT / "app/build/outputs/apk"
     outputs = list(apk_outputs(root / "release", version, ARCHITECTURES))
     if with_model:
-        outputs += list(apk_outputs(root / "modelRelease", version, {"with-model": None}))
+        bundled_architectures = {f"{architecture}-with-model": abi for architecture, abi in ARCHITECTURES.items()}
+        outputs += list(apk_outputs(root / "modelRelease", version, bundled_architectures))
     certificates = None
     result = {}
     for architecture, abi, path, item in outputs:
@@ -296,9 +299,10 @@ def verify_apks(version, code, apksigner, *, with_model=False):
             raise ValueError(f"Wrong ABI metadata: {name}")
         with zipfile.ZipFile(path) as apk:
             packaged = {name.split("/")[1] for name in apk.namelist() if name.startswith("lib/") and name.endswith(".so")}
-            models = [entry for entry in apk.infolist() if entry.filename == MDX_ASSET]
-            if architecture == "with-model":
-                if len(models) != 1 or models[0].file_size != int(MDX_MODEL["size"]):
+            models = [entry for entry in apk.infolist()
+                      if entry.filename.startswith(MDX_DIRECTORY) and entry.filename.endswith(".onnx")]
+            if architecture.endswith("-with-model"):
+                if len(models) != 1 or models[0].filename != MDX_ASSET or models[0].file_size != int(MDX_MODEL["size"]):
                     raise ValueError(f"Missing or invalid bundled MDX-Net model in {name}")
                 with apk.open(models[0]) as stream:
                     if stream_sha256(stream) != MDX_MODEL["sha256"]:
@@ -307,7 +311,7 @@ def verify_apks(version, code, apksigner, *, with_model=False):
                 raise ValueError(f"Unexpected bundled model in standard APK: {name}")
         if (abi and packaged != {abi}) or (not abi and not {"armeabi-v7a", "arm64-v8a"}.issubset(packaged)):
             raise ValueError(f"Wrong native libraries in {name}: {sorted(packaged)}")
-        if architecture != "armv7":
+        if abi != "armeabi-v7a":
             CHECK_NATIVE_APK(path, verbose=False)
         verification = run([apksigner, "verify", "--verbose", "--print-certs", str(path)])
         signers = {digest.lower() for digest in SIGNER_SHA256_PATTERN.findall(verification)}
@@ -356,7 +360,7 @@ def release_notes(repo, tag, previous, checksums):
         body += f"\n\n支持 Android 9 及以上版本。[使用说明]({page}/blob/{quote(tag, safe='')}/DEVELOPMENT.md)"
     body = summary + body
     if any(name.endswith("-with-model.apk") for name in checksums):
-        body += "\n\n`-with-model.apk` 是内置 MDX-Net 的通用安装包，K 歌可直接使用本机模型。"
+        body += "\n\n文件名以 `-with-model.apk` 结尾的安装包内置 MDX-Net，提供 armv8、armv7 和通用版。"
     body += "\n\n## APK SHA-256\n\n| 文件 | SHA-256 |\n| --- | --- |\n"
     for name, digest in checksums.items():
         body += f"| [{name}]({page}/releases/download/{quote(tag, safe='')}/{quote(name, safe='')}) | `{digest}` |\n"
@@ -370,6 +374,9 @@ def prepare_artifacts(repo, tag, previous, apks, output):
         staged = output / path.name
         shutil.copy2(path, staged)
         checksums[staged.name] = sha256(staged)
+    legacy_name = LEGACY_BUNDLED_APK.format(tag=tag)
+    if legacy_name not in checksums and any(name.endswith("-with-model.apk") for name in checksums):
+        (output / legacy_name).unlink(missing_ok=True)
     (output / "SHA256SUMS.txt").write_bytes("".join(f"{digest}  {name}\n" for name, digest in checksums.items()).encode("utf-8"))
     (output / "RELEASE_NOTES.md").write_bytes(release_notes(repo, tag, previous, checksums).encode("utf-8"))
     return checksums
@@ -385,7 +392,10 @@ def publish(repo, tag, version, existing, output, checksums, keep_draft):
             raise ValueError("Release draft changed during the build; nothing was uploaded")
         # All must remain first so older app versions, which select the first APK, can update safely.
         old_apks = [asset["name"] for asset in existing.get("assets", []) if asset["name"].endswith(".apk")]
-        if any(name not in checksums for name in old_apks):
+        replaced = set(checksums)
+        if any(name.endswith("-with-model.apk") for name in checksums):
+            replaced.add(LEGACY_BUNDLED_APK.format(tag=tag))
+        if any(name not in replaced for name in old_apks):
             raise ValueError("Existing draft contains unrelated APKs; remove that draft before retrying")
         run(["gh", "release", "edit", tag, *arguments, "--title", version, "--notes-file", str(output / "RELEASE_NOTES.md")])
         # Replacing only all.apk would move it behind existing ARM assets. Reset our draft APKs first.

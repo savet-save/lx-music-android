@@ -142,22 +142,18 @@ androidComponents {
     beforeVariants(selector().withBuildType("modelRelease")) { variant ->
         variant.enable = bundledMdxModel.isPresent
     }
-    onVariants(selector().withBuildType("modelRelease")) { variant ->
-        variant.sources.assets?.addGeneratedSourceDirectory(stageMdxModel, StageMdxModel::assets)
-        variant.outputs.forEach { output ->
-            if (output.filters.isEmpty()) {
-                (output as VariantOutputImpl).outputFileName.set(
-                    output.versionName.map { "lx-music-native-v$it-with-model.apk" }
-                )
-            } else {
-                output.enabled.set(false)
+    onVariants { variant ->
+        val editionSuffix = when (variant.buildType) {
+            "release" -> ""
+            "modelRelease" -> {
+                variant.sources.assets?.addGeneratedSourceDirectory(stageMdxModel, StageMdxModel::assets)
+                "-with-model"
             }
+            else -> return@onVariants
         }
-    }
-    onVariants(selector().withBuildType("release")) { variant ->
         variant.outputs.forEach { output ->
-            val abi=output.filters.firstOrNull { it.filterType == FilterConfiguration.FilterType.ABI }?.identifier
-            if(abi in setOf("x86", "x86_64")) {
+            val abi = output.filters.firstOrNull { it.filterType == FilterConfiguration.FilterType.ABI }?.identifier
+            if (abi == "x86" || abi == "x86_64") {
                 output.enabled.set(false)
                 return@forEach
             }
@@ -169,7 +165,7 @@ androidComponents {
             }
             // AGP 8.13 exposes APK filenames on its output implementation.
             (output as VariantOutputImpl).outputFileName.set(
-                output.versionName.map { "lx-music-native-v$it-$architecture.apk" }
+                output.versionName.map { "lx-music-native-v$it-$architecture$editionSuffix.apk" }
             )
         }
     }

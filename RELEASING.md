@@ -52,10 +52,12 @@ Release APK 输出到 `app/build/outputs/apk/release/`，保留原文件名前�
 从 [UVR 官方模型发布页](https://github.com/TRvlvr/model_repo/releases/tag/all_public_uvr_models) 取得 `UVR_MDXNET_1_9703.onnx` 后，可额外构建一个含模型的通用 APK。
 
 ```powershell
-.\gradlew.bat :app:assembleModelRelease "-PnativeBundledMdxModel=C:/models/UVR_MDXNET_1_9703.onnx"
+.\gradlew.bat :app:assembleModelRelease -PnativeSplitApks=true "-PnativeBundledMdxModel=C:/models/UVR_MDXNET_1_9703.onnx"
 ```
 
-产物为 `app/build/outputs/apk/modelRelease/lx-music-native-vVERSION-with-model.apk`。构建会核对模型大小和 SHA-256，权重放在本地构建输入目录。该 APK 沿用正式包的包名、签名和版本，首次进入 K 歌时可以离线加载模型，仍可在设置中关闭模型。应用内更新沿用普通版附件；已加载到应用数据目录的模型可在覆盖更新后继续使用。APK 内包含 UVR 署名和 MIT 许可。
+产物位于 `app/build/outputs/apk/modelRelease/`，文件名为 `lx-music-native-vVERSION-armv8-with-model.apk`、`lx-music-native-vVERSION-armv7-with-model.apk` 和 `lx-music-native-vVERSION-all-with-model.apk`。未启用 ABI 拆分时仅构建内置模型通用包。构建会核对模型大小和 SHA-256，权重放在本地构建输入目录。三种架构的 APK 均沿用正式包的包名、签名和版本。首次进入 K 歌时可以离线加载模型，仍可在设置中关闭模型。APK 内包含 UVR 署名和 MIT 许可。
+
+应用内更新按当前 APK 的模型类型和设备架构选包。普通版（含旧版）升级仍使用普通包，内置版升级使用带 `with-model` 后缀的包。缺少对应架构时使用同类型的通用包，缺少同类型的可用安装包时等待对应附件上传。已安装上一版单一内置通用包的用户需先手动覆盖到包含此规则的内置版，此后即可沿内置版更新。
 
 缺少密码、密钥别名或签名文件时，Release 构建会失败，并提示缺失项和配置位置；不会生成未签名 Release，也不会自动改用调试签名。Debug 构建不要求 Release 签名配置。
 
@@ -83,13 +85,13 @@ python scripts/publish-release.py --prepare-only --mdx-model C:/models/UVR_MDXNE
 
 标签同步默认使用 `origin`，可用 `--remote github` 指定其他 Git remote。该远程的拉取地址及唯一推送地址必须均对应所选 GitHub 仓库。本地已有标签但远程缺失时自动推送；远程已有同一提交的标签时自动获取并复用，支持轻量标签和附注标签。已有标签指向其他提交时停止，不覆盖或移动标签。网络、认证、写入或推送失败时，提示包含具体错误、仓库目录、创建命令 `git tag native-vVERSION COMMIT` 和推送命令 `git push origin refs/tags/native-vVERSION:refs/tags/native-vVERSION`；推送失败保留本地标签，排除原因后可直接重试。仅准备模式缺少标签时也会给出手动命令。
 
-Actions 运行单元测试及 Release Lint，构建三个普通 APK 和一个内置模型 APK。模型输入取自 UVR 上游，并在构建前及打包后校验 SHA-256。脚本验证各 APK 的包名、版本、ABI 内容和一致的签名证书，兼容 Build Tools 36 及以前的 `Signer #1` 和 37 的 `V2 Signer:` 等证书输出格式。上传前再次核对工作区及远程标签仍对应本次发布提交。产物保存在 `build/releases/native-vVERSION/`，包括 APK、`SHA256SUMS.txt` 和 `RELEASE_NOTES.md`。
+Actions 运行单元测试及 Release Lint，构建三个普通 APK 和三个内置模型 APK。模型输入取自 UVR 上游，并在构建前及打包后校验 SHA-256。脚本验证各 APK 的包名、版本、ABI 内容和一致的签名证书，兼容 Build Tools 36 及以前的 `Signer #1` 和 37 的 `V2 Signer:` 等证书输出格式。上传前再次核对工作区及远程标签仍对应本次发布提交。产物保存在 `build/releases/native-vVERSION/`，包括六个 APK、`SHA256SUMS.txt` 和 `RELEASE_NOTES.md`。
 
 - Release 标题只有版本名，例如 `0.9.3`。
 - `doc/release-notes/native-vVERSION.md` 中的简短说明作为「更新摘要」置于完整正文前；仍生成下述提交记录、比较链接和 APK SHA-256 表，并提供 `SHA256SUMS.txt` 下载附件。已有说明文件为空时停止发布；没有说明文件时直接生成完整记录。客户端接收原始正文后优先展示摘要，无摘要时提取有效改动、隐藏提交链接和校验表；「完整更新说明」打开原始发布页。
 - 首个原生正式 Release 使用 README 的项目介绍，后面附 APK 的 SHA-256。
 - 后续 Release 使用上一个原生正式 Release 标签以来的非合并提交记录，包含提交链接、完整比较链接和 APK 的 SHA-256。旧 RN Release、预发布和草稿不作为前一版本。
-- 先创建草稿，再上传普通通用 APK、两个 ARM APK、内置模型 APK 和校验文件，核对上传状态、大小及 GitHub 返回的哈希后才公开发布。失败保留草稿，可重试；已公开的版本不覆盖。普通通用包先上传，兼容旧版应用按第一个 APK 更新的逻辑；新版应用优先选择设备对应的 ARM 包，缺少对应包时回退通用包，仍兼容旧版单 APK。
+- 先创建草稿，再上传普通通用 APK、两个普通 ARM APK、三个内置模型 APK 和校验文件，核对上传状态、大小及 GitHub 返回的哈希后才公开发布。失败保留草稿，可重试；已公开的版本不覆盖。普通通用包先上传，兼容旧版应用按第一个 APK 更新的逻辑。
 
 ## Actions 发布
 

@@ -101,6 +101,33 @@ class AboutDiagnosticsTest {
         data.getJSONObject(0).getJSONArray("assets").getJSONObject(2).put("digest", "invalid")
         assertTrue(NativeReleases.parse(data.toString(), listOf("arm64-v8a"))!!.apkUrl!!.endsWith("-all.apk"))
     }
+    @Test fun nativeUpdateKeepsModelEditionAndChoosesTheCompatibleAbi() {
+        fun release(version: String, vararg suffixes: String) = JSONObject().put("tag_name", "native-v$version")
+            .put("assets", JSONArray().apply {
+                suffixes.forEach { suffix -> put(JSONObject().put("name", "lx-music-native-v$version-$suffix.apk")) }
+            })
+        val arm64 = listOf("arm64-v8a", "armeabi-v7a")
+        val arm32 = listOf("armeabi-v7a")
+        val x86 = listOf("x86_64", "x86")
+        val allSix = JSONArray().put(release("0.9.22", "all-with-model", "armv7-with-model", "armv8-with-model",
+            "all", "armv7", "armv8")).toString()
+        for ((abis, suffix) in listOf(arm64 to "armv8", arm32 to "armv7", x86 to "all")) {
+            val standard = checkNotNull(NativeReleases.parse(allSix, abis))
+            assertFalse(standard.withModel)
+            assertTrue(standard.apkUrl!!.endsWith("-$suffix.apk"))
+            val bundled = checkNotNull(NativeReleases.parse(allSix, abis, withModel = true))
+            assertTrue(bundled.withModel)
+            assertTrue(bundled.apkUrl!!.endsWith("-$suffix-with-model.apk"))
+        }
+        val fallback = JSONArray().put(release("0.9.22", "armv8", "all-with-model")).toString()
+        assertTrue(NativeReleases.parse(fallback, arm64, withModel = true)!!.apkUrl!!.endsWith("-all-with-model.apk"))
+        val standardOnly = JSONArray().put(release("0.9.22", "all", "armv8")).toString()
+        assertNull(NativeReleases.parse(standardOnly, arm64, withModel = true))
+        val bundledOnly = JSONArray().put(release("0.9.22", "all-with-model", "armv8-with-model")).toString()
+        assertNull(NativeReleases.parse(bundledOnly, arm64))
+        val legacy = JSONArray().put(release("0.9.20", "with-model")).put(release("0.9.21", "all")).toString()
+        assertTrue(NativeReleases.parse(legacy, arm64, withModel = true)!!.apkUrl!!.endsWith("v0.9.20-with-model.apk"))
+    }
     @Test fun nativeFontPreferencePreservesSystemScaleAndAboutShowsInstalledVersionAndLicense() {
         val settings = target.getSharedPreferences("app-settings", 0)
         val original = settings.getString("common.fontScale", null)

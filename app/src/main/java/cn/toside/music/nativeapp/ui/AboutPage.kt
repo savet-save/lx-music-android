@@ -44,7 +44,7 @@ internal object NativeUpdateNotice {
     @Synchronized fun checks(context: Context): UpdateChecker = checker ?: run {
         val application = context.applicationContext
         UpdateChecker(CoroutineScope(SupervisorJob() + Dispatchers.IO), UpdateCheckPreferences(application),
-            NativeReleases::latest, { remember(application, it) }).also { checker = it }
+            { NativeReleases.latest(application) }, { remember(application, it) }).also { checker = it }
     }
     @Synchronized fun restore(context: Context) {
         if (release.value != null) return
@@ -52,14 +52,17 @@ internal object NativeUpdateNotice {
             val saved = context.getSharedPreferences("native-updates", Context.MODE_PRIVATE).getString("release-notice", null) ?: return
             val json = JSONObject(saved)
             NativeRelease(json.getString("version"), json.getString("url"), json.getString("notes"),
-                json.optString("apkUrl").takeIf { it.isNotBlank() }, json.optLong("size"), json.optString("digest").takeIf { it.isNotBlank() })
+                json.optString("apkUrl").takeIf { it.isNotBlank() }, json.optLong("size"),
+                json.optString("digest").takeIf { it.isNotBlank() }, json.optBoolean("withModel"))
+                .takeIf { it.withModel == NativeReleases.hasBundledModel(context) }
         }.getOrNull()
     }
     @Synchronized fun remember(context: Context, value: NativeRelease?) {
         context.getSharedPreferences("native-updates", Context.MODE_PRIVATE).edit().apply {
             if (value == null) remove("release-notice")
             else putString("release-notice", JSONObject().put("version", value.version).put("url", value.url).put("notes", value.notes)
-                .put("apkUrl", value.apkUrl.orEmpty()).put("size", value.size).put("digest", value.digest.orEmpty()).toString())
+                .put("apkUrl", value.apkUrl.orEmpty()).put("size", value.size).put("digest", value.digest.orEmpty())
+                .put("withModel", value.withModel).toString())
         }.apply()
         release.value = value
     }

@@ -1,16 +1,34 @@
 package cn.toside.music.nativeapp.update
 
-import cn.toside.music.nativeapp.utils.NativeHttp
-
+import android.content.Context
 import android.os.Build
+import cn.toside.music.nativeapp.karaoke.KARAOKE_MODEL_ASSETS
+import cn.toside.music.nativeapp.utils.NativeHttp
 import org.json.JSONArray
 
-internal data class NativeRelease(val version: String, val url: String, val notes: String, val apkUrl: String? = null, val size: Long = 0, val digest: String? = null)
+internal data class NativeRelease(
+    val version: String,
+    val url: String,
+    val notes: String,
+    val apkUrl: String? = null,
+    val size: Long = 0,
+    val digest: String? = null,
+    val withModel: Boolean = false,
+)
 internal object NativeReleases {
     const val REPOSITORY = "savet-save/lx-music-android"
     const val PAGE = "https://github.com/$REPOSITORY/releases"
+    private const val MODEL_APK_SUFFIX = "-with-model.apk"
+
+    fun hasBundledModel(context: Context): Boolean =
+        context.assets.list(KARAOKE_MODEL_ASSETS).orEmpty().any { it.endsWith(".onnx") }
+
     // Separate tags keep existing React Native releases out of the native update channel.
-    internal fun parse(json: String, supportedAbis: List<String> = Build.SUPPORTED_ABIS.toList()): NativeRelease? {
+    internal fun parse(
+        json: String,
+        supportedAbis: List<String> = Build.SUPPORTED_ABIS.toList(),
+        withModel: Boolean = false,
+    ): NativeRelease? {
         val releases = JSONArray(json)
         return (0 until releases.length()).mapNotNull { index ->
             val item = releases.getJSONObject(index)
@@ -23,19 +41,23 @@ internal object NativeReleases {
                     it.optString("state", "uploaded") == "uploaded" &&
                     it.optString("digest").let { digest -> digest.isBlank() || digest == "null" || digest.matches(Regex("sha256:[a-fA-F0-9]{64}")) }
             }
-            fun priority(name: String): Int? = when {
-                name.endsWith("-armv8.apk") -> supportedAbis.indexOf("arm64-v8a").takeIf { it >= 0 }
-                name.endsWith("-armv7.apk") -> supportedAbis.indexOf("armeabi-v7a").takeIf { it >= 0 }
-                name.endsWith("-all.apk") || name.endsWith("-universal.apk") -> supportedAbis.size
-                name == "lx-music-native-v$version.apk" -> supportedAbis.size + 1
-                else -> null
+            fun priority(name: String): Int? {
+                if (name.endsWith(MODEL_APK_SUFFIX) != withModel) return null
+                val base = if (withModel) name.removeSuffix(MODEL_APK_SUFFIX) else name.removeSuffix(".apk")
+                return when {
+                    base.endsWith("-armv8") -> supportedAbis.indexOf("arm64-v8a").takeIf { it >= 0 }
+                    base.endsWith("-armv7") -> supportedAbis.indexOf("armeabi-v7a").takeIf { it >= 0 }
+                    base.endsWith("-all") || base.endsWith("-universal") -> supportedAbis.size
+                    base == "lx-music-native-v$version" -> supportedAbis.size + 1
+                    else -> null
+                }
             }
             val asset = candidates.mapNotNull { asset -> priority(asset.getString("name"))?.let { it to asset } }
                 .minByOrNull { it.first }?.second ?: return@mapNotNull null
             val digest = asset.optString("digest").takeIf { it.isNotBlank() && it != "null" }
             if (digest != null && !digest.matches(Regex("sha256:[a-fA-F0-9]{64}"))) return@mapNotNull null
             NativeRelease(version, "$PAGE/tag/$tag", item.optString("body").take(32_000),
-                "https://github.com/$REPOSITORY/releases/download/$tag/${asset.getString("name")}", asset.optLong("size"), digest)
+                "https://github.com/$REPOSITORY/releases/download/$tag/${asset.getString("name")}", asset.optLong("size"), digest, withModel)
         }.maxWithOrNull { a, b -> compare(a.version, b.version) }
     }
     internal fun compare(first: String, second: String): Int {
@@ -45,6 +67,9 @@ internal object NativeReleases {
             (a.getOrElse(index) { 0 }).compareTo(b.getOrElse(index) { 0 }).takeIf { it != 0 }
         } ?: 0
     }
-    suspend fun latest(): NativeRelease? = parse(NativeHttp.text("https://api.github.com/repos/$REPOSITORY/releases?per_page=100",
-        headers = mapOf("Accept" to "application/vnd.github+json"), maxBytes = 2 * 1024 * 1024))
+    suspend fun latest(context: Context): NativeRelease? = parse(
+        NativeHttp.text("https://api.github.com/repos/$REPOSITORY/releases?per_page=100",
+            headers = mapOf("Accept" to "application/vnd.github+json"), maxBytes = 2 * 1024 * 1024),
+        withModel = hasBundledModel(context),
+    )
 }

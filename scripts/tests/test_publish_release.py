@@ -392,31 +392,45 @@ class PublishReleaseTest(unittest.TestCase):
         standard = self.artifacts()
         directory = standard["all"].parent.with_name("modelRelease")
         directory.mkdir()
-        bundled = directory / "lx-music-native-v0.9.3-with-model.apk"
         metadata = json.loads((standard["all"].parent / "output-metadata.json").read_text(encoding="utf-8"))
-        metadata["elements"] = [
-            dict(item, outputFile=bundled.name) for item in metadata["elements"] if not item["filters"]
-        ]
+        bundled = {arch: directory / f"{path.stem}-with-model.apk" for arch, path in standard.items()}
+        for item in metadata["elements"]:
+            item["outputFile"] = item["outputFile"].replace(".apk", "-with-model.apk")
         (directory / "output-metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
 
-        def write_bundled(model):
-            shutil.copyfile(standard["all"], bundled)
-            with zipfile.ZipFile(bundled, "a") as apk:
+        def write_bundled(arch, model):
+            shutil.copyfile(standard[arch], bundled[arch])
+            with zipfile.ZipFile(bundled[arch], "a") as apk:
                 apk.writestr(release.MDX_ASSET, model)
 
         certificate = "Signer #1 certificate SHA-256 digest: " + "a" * 64
         weights = b"test weights"
         expected = {"size": str(len(weights)), "sha256": hashlib.sha256(weights).hexdigest()}
         with patch.object(release, "run", return_value=certificate), patch.dict(release.MDX_MODEL, expected):
-            write_bundled(weights)
+            for arch in bundled:
+                write_bundled(arch, weights)
             apks = release.verify_apks("0.9.3", 9003, "apksigner", with_model=True)
-            self.assertEqual(["all", "armv7", "armv8", "with-model"], list(apks))
+            self.assertEqual(["all", "armv7", "armv8", "all-with-model", "armv7-with-model", "armv8-with-model"], list(apks))
             output = self.root / "prepared"
+            output.mkdir()
+            legacy = output / "lx-music-native-v0.9.3-with-model.apk"
+            legacy.touch()
             checksums = release.prepare_artifacts("owner/repo", "native-v0.9.3", None, apks, output)
-            self.assertIn(bundled.name, checksums)
+            self.assertEqual(set(checksums), {path.name for path in output.glob("*.apk")})
+            self.assertIn(bundled["armv7"].name, checksums)
+            self.assertFalse(legacy.exists())
             self.assertIn("内置 MDX-Net", (output / "RELEASE_NOTES.md").read_text(encoding="utf-8"))
-            write_bundled(bytes(len(weights)))
-            with self.assertRaisesRegex(ValueError, "model SHA-256 differs"):
+            remote = self.uploaded(output, checksums)
+            draft = dict(remote, assets=[{"name": legacy.name}])
+            with patch.object(release, "get_releases", side_effect=[[draft], [remote]]), patch.object(release, "run") as command:
+                release.publish("owner/repo", "native-v0.9.3", "0.9.3", draft, output, checksums, True)
+            commands = [call.args[0] for call in command.call_args_list]
+            self.assertTrue(any(args[2] == "delete-asset" and args[4] == legacy.name for args in commands))
+            uploads = [args for args in commands if args[2] == "upload"]
+            self.assertTrue(uploads[0][4].endswith("-all.apk"))
+            self.assertTrue(all(str(output / path.name) in uploads[1] for path in bundled.values()))
+            write_bundled("armv8", bytes(len(weights)))
+            with self.assertRaisesRegex(ValueError, "model SHA-256 differs.*armv8-with-model"):
                 release.verify_apks("0.9.3", 9003, "apksigner", with_model=True)
             with zipfile.ZipFile(standard["armv7"], "a") as apk:
                 apk.writestr(release.MDX_ASSET, weights)
