@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import cn.toside.music.nativeapp.data.PcmDecoder
 import cn.toside.music.nativeapp.data.PcmFormat
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -23,7 +24,10 @@ internal data class KaraokeBacking(
     val stereo: Boolean,
     val original: File? = null,
     val cacheKey: String? = null,
-)
+    val separation: MdxParameters? = null,
+) {
+    val separated get() = separation != null
+}
 internal data class KaraokeTake(val backing: KaraokeBacking, val voice: File, val frames: Long)
 internal data class KaraokeEdit(
     val music: Int = 70,
@@ -50,12 +54,29 @@ internal object KaraokeAudio {
         target: File,
         songDurationMs: Long,
         original: File? = null,
+        model: File? = null,
+        parameters: MdxParameters = MdxParameters.Default,
+        onSeparationError: (Exception) -> Unit = {},
         progress: (Int) -> Unit,
-    ): KaraokeBacking = render(context, source, target, songDurationMs, original, removeCenter = true, progress = progress)
+    ): KaraokeBacking {
+        val tryModel = model != null && original != null
+        val backing = render(context, source, target, songDurationMs, original, removeCenter = true) {
+            progress(if (tryModel) it * 45 / 100 else it)
+        }
+        if (model == null || original == null) return backing
+        return try {
+            MdxSeparation(context).run(model, backing, parameters) { progress(45 + it * 55 / 100) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            onSeparationError(e)
+            backing
+        }
+    }
 
     suspend fun prepareOriginal(context: Context, source: Uri, target: File, frames: Long): File {
         val original = render(context, source, target, 0, null, removeCenter = false) {}
-        check(original.stereo && original.frames == frames) { "Original audio does not match the accompaniment" }
+        check(original.frames == frames) { "Original audio does not match the accompaniment" }
         return target
     }
 
@@ -93,7 +114,7 @@ internal object KaraokeAudio {
                 checkNotNull(resampler).flush()
                 check(writer.frames > 0) { "No decoded audio" }
                 val stereo = checkNotNull(format).channels >= 2
-                KaraokeBacking(target, writer.frames, stereo, original.takeIf { stereo })
+                KaraokeBacking(target, writer.frames, stereo, original)
             }
         }
     }
@@ -187,7 +208,7 @@ internal object KaraokeAudio {
     ) {
         private val reducer = if (removeCenter && format.channels >= 2) StereoCenterReduction() else null
         private val chunk = ShortArray(BLOCK_FRAMES * 2)
-        private val originalChunk = if (original != null && format.channels >= 2) ShortArray(chunk.size) else null
+        private val originalChunk = if (original != null) ShortArray(chunk.size) else null
         private var used = 0
         private var inputFrame = 0L
         private var nextOutput = 0L
@@ -230,17 +251,17 @@ internal object KaraokeAudio {
         }
     }
 
-    /** Removes the shared middle-band signal while preserving stereo sides and center bass. */
+    /** Removes the shared vocal band while preserving sub-bass and extreme-high stereo content. */
     internal class StereoCenterReduction {
         private var bass = 0.0
-        private var midrange = 0.0
-        private val bassWeight = 1 - exp(-2 * PI * 150 / RATE)
-        private val midWeight = 1 - exp(-2 * PI * 6000 / RATE)
+        private var fullBand = 0.0
+        private val bassWeight = 1 - exp(-2 * PI * 80 / RATE)
+        private val fullBandWeight = 1 - exp(-2 * PI * 12000 / RATE)
 
         fun center(input: Double): Double {
             bass += (input - bass) * bassWeight
-            midrange += (input - midrange) * midWeight
-            return midrange - bass
+            fullBand += (input - fullBand) * fullBandWeight
+            return fullBand - bass
         }
     }
 

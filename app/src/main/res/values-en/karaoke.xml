@@ -4,8 +4,14 @@
     <string name="karaoke_empty_library">No saved recordings yet</string>
     <string name="karaoke_preparing">Preparing accompaniment…</string>
     <string name="karaoke_preparing_progress">Preparing accompaniment… %1$d%%</string>
-    <string name="karaoke_ready">Accompaniment is ready. Wear headphones to keep it out of the microphone.</string>
+    <string name="karaoke_ready">Basic accompaniment is ready. Wear headphones to keep it out of the microphone.</string>
     <string name="karaoke_mono">Stereo vocal reduction is unavailable for mono songs. The original audio will play as accompaniment.</string>
+    <string name="karaoke_model_download">Download vocal separation model (about 30 MB)</string>
+    <string name="karaoke_model_retry">Retry vocal separation</string>
+    <string name="karaoke_model_downloading">Downloading model… %1$d%%</string>
+    <string name="karaoke_model_ready">Accompaniment separated with MDX-Net. Wear headphones while recording.</string>
+    <string name="karaoke_model_fallback">On-device separation failed. Basic accompaniment processing was used.</string>
+    <string name="karaoke_model_download_error">Could not download or verify the vocal separation model. Try again.</string>
     <string name="karaoke_record">Start recording</string>
     <string name="karaoke_recording">Playing accompaniment and recording</string>
     <string name="karaoke_recording_original">Playing original vocals and recording</string>

@@ -4,8 +4,14 @@
     <string name="karaoke_empty_library">還沒有儲存的 K 歌作品</string>
     <string name="karaoke_preparing">正在準備伴奏…</string>
     <string name="karaoke_preparing_progress">正在準備伴奏… %1$d%%</string>
-    <string name="karaoke_ready">已產生伴奏。建議戴耳機錄唱，減少麥克風收進伴奏。</string>
+    <string name="karaoke_ready">已產生基本伴奏。建議戴耳機錄唱，減少麥克風收進伴奏。</string>
     <string name="karaoke_mono">單聲道歌曲無法做立體聲消音，將使用原音作為伴奏。</string>
+    <string name="karaoke_model_download">下載人聲分離模型（約 30 MB）</string>
+    <string name="karaoke_model_retry">重新分離人聲</string>
+    <string name="karaoke_model_downloading">正在下載模型… %1$d%%</string>
+    <string name="karaoke_model_ready">已使用 MDX-Net 分離伴奏。建議戴耳機錄唱。</string>
+    <string name="karaoke_model_fallback">本機分離失敗，已退回基本伴奏處理。</string>
+    <string name="karaoke_model_download_error">無法下載或驗證人聲分離模型，請重試。</string>
     <string name="karaoke_record">開始錄音</string>
     <string name="karaoke_recording">正在播放伴奏並錄音</string>
     <string name="karaoke_recording_original">正在播放原唱並錄音</string>

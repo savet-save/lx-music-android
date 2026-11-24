@@ -1,7 +1,9 @@
 import importlib.util
+import hashlib
 import json
 from pathlib import Path
 import subprocess
+import shutil
 import struct
 import tempfile
 import unittest
@@ -384,6 +386,41 @@ class PublishReleaseTest(unittest.TestCase):
                 release.verify_apks("0.9.3", 93, "apksigner")
         with patch.object(release, "run", side_effect=[certificate, certificate.replace("a" * 64, "b" * 64)]):
             with self.assertRaisesRegex(ValueError, "signing certificates differ"):
+                release.verify_apks("0.9.3", 9003, "apksigner")
+
+    def test_bundled_apk_is_verified_and_listed_as_an_extra(self):
+        standard = self.artifacts()
+        directory = standard["all"].parent.with_name("modelRelease")
+        directory.mkdir()
+        bundled = directory / "lx-music-native-v0.9.3-with-model.apk"
+        metadata = json.loads((standard["all"].parent / "output-metadata.json").read_text(encoding="utf-8"))
+        metadata["elements"] = [
+            dict(item, outputFile=bundled.name) for item in metadata["elements"] if not item["filters"]
+        ]
+        (directory / "output-metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
+
+        def write_bundled(model):
+            shutil.copyfile(standard["all"], bundled)
+            with zipfile.ZipFile(bundled, "a") as apk:
+                apk.writestr(release.MDX_ASSET, model)
+
+        certificate = "Signer #1 certificate SHA-256 digest: " + "a" * 64
+        weights = b"test weights"
+        expected = {"size": str(len(weights)), "sha256": hashlib.sha256(weights).hexdigest()}
+        with patch.object(release, "run", return_value=certificate), patch.dict(release.MDX_MODEL, expected):
+            write_bundled(weights)
+            apks = release.verify_apks("0.9.3", 9003, "apksigner", with_model=True)
+            self.assertEqual(["all", "armv7", "armv8", "with-model"], list(apks))
+            output = self.root / "prepared"
+            checksums = release.prepare_artifacts("owner/repo", "native-v0.9.3", None, apks, output)
+            self.assertIn(bundled.name, checksums)
+            self.assertIn("内置 MDX-Net", (output / "RELEASE_NOTES.md").read_text(encoding="utf-8"))
+            write_bundled(bytes(len(weights)))
+            with self.assertRaisesRegex(ValueError, "model SHA-256 differs"):
+                release.verify_apks("0.9.3", 9003, "apksigner", with_model=True)
+            with zipfile.ZipFile(standard["armv7"], "a") as apk:
+                apk.writestr(release.MDX_ASSET, weights)
+            with self.assertRaisesRegex(ValueError, "Unexpected bundled model in standard APK"):
                 release.verify_apks("0.9.3", 9003, "apksigner")
 
     def test_verification_accepts_old_and_build_tools_37_signer_labels(self):

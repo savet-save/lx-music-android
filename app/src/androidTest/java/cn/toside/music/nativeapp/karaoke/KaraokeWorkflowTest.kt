@@ -328,6 +328,36 @@ class KaraokeWorkflowTest {
         }
     }
 
+    @Test fun separatedAccompanimentCacheMatchesAudioParameters() = runBlocking {
+        val directory = context.cacheDir.resolve("karaoke-mdx-cache-test-${UUID.randomUUID()}").apply { mkdir() }
+        val input = directory.resolve("input.wav").apply { silence(this, 1) }
+        val target = directory.resolve("output.wav")
+        val song = Song(System.nanoTime(), Uri.fromFile(input), "MDX cache fixture", "", 0)
+        val cache = KaraokeBackingCache(context)
+        var generations = 0
+        suspend fun using(parameters: MdxParameters?) = cache.reuseOrPrepare(song, target, separation = parameters) {
+            generations++
+            KaraokeAudio.prepare(context, song.uri, target, song.duration) {}.copy(separation = parameters)
+        }
+        val defaults = MdxParameters.Default
+        val stronger = defaults.copy(strengthPercent = 110)
+        val longerOverlap = stronger.copy(overlapMs = 500)
+        try {
+            assertTrue(using(defaults).separated)
+            assertTrue(using(stronger).separated)
+            assertTrue(using(longerOverlap).separated)
+            assertEquals(3, generations)
+            assertTrue(using(longerOverlap.copy(threads = 1)).separated)
+            assertTrue(using(defaults).separated)
+            assertEquals(3, generations)
+            assertFalse(using(null).separated)
+            assertEquals(4, generations)
+        } finally {
+            AudioStreamCache.get(context).removeSong(AudioStreamCache.key(song, ""))
+            directory.deleteRecursively()
+        }
+    }
+
     @Test fun audioClockPausesAndResumesCaptureThenStopsAtSongEnd() = runBlocking {
         val activity = mainActivity()
         val input = File.createTempFile("karaoke-timeline", ".wav", context.cacheDir).apply { silence(this, 2) }

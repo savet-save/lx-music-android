@@ -9,6 +9,7 @@ import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import cn.toside.music.nativeapp.R
+import cn.toside.music.nativeapp.data.AppPreferences
 import cn.toside.music.nativeapp.data.Song
 import cn.toside.music.nativeapp.karaoke.KaraokeAudio
 import cn.toside.music.nativeapp.karaoke.KaraokeBacking
@@ -18,6 +19,8 @@ import cn.toside.music.nativeapp.karaoke.KaraokeEdit
 import cn.toside.music.nativeapp.karaoke.KaraokeLibrary
 import cn.toside.music.nativeapp.karaoke.KaraokeRecording
 import cn.toside.music.nativeapp.karaoke.KaraokeTake
+import cn.toside.music.nativeapp.karaoke.MdxParameters
+import cn.toside.music.nativeapp.karaoke.MdxSeparation
 import cn.toside.music.nativeapp.utils.DiagnosticLog
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -48,6 +51,10 @@ internal data class KaraokeState(
     val duration: Int = 0,
     val position: Int = 0,
     val mono: Boolean = false,
+    val modelEnabled: Boolean = true,
+    val modelInstalled: Boolean = false,
+    val modelDownload: Int? = null,
+    val separated: Boolean = false,
     val originalEnabled: Boolean = false,
     val originalLoading: Boolean = false,
     val edit: KaraokeEdit = KaraokeEdit(),
@@ -62,6 +69,8 @@ internal data class KaraokeState(
 internal class KaraokeViewModel(application: Application) : AndroidViewModel(application) {
     private val files = application.cacheDir.resolve("karaoke-drafts/${UUID.randomUUID()}")
     private val backingCache = KaraokeBackingCache(application)
+    private val preferences = AppPreferences(application)
+    private val mdx = MdxSeparation(application)
     private val originalWave = files.resolve("original.wav")
     private val library = KaraokeLibrary(application)
     private val editedWave = files.resolve("preview.wav")
@@ -95,17 +104,27 @@ internal class KaraokeViewModel(application: Application) : AndroidViewModel(app
             try {
                 check(files.mkdirs() || files.isDirectory)
                 val target = files.resolve("backing.wav")
-                val prepared = backingCache.reuseOrPrepare(song, target, originalWave) {
+                val modelEnabled = preferences.bool(MdxParameters.ENABLED_KEY, true)
+                val parameters = MdxParameters.read(preferences)
+                val model = if (modelEnabled) mdx.installedModel() else null
+                val prepared = backingCache.reuseOrPrepare(song, target, originalWave, separation = parameters.takeIf { model != null }) {
                     val source = input(downloaded) { updatePreparation(it * DOWNLOAD_SHARE / 100) }
                     val offset = if (source == Uri.fromFile(downloaded)) DOWNLOAD_SHARE else 0
                     updatePreparation(offset)
-                    KaraokeAudio.prepare(getApplication(), source, target, song.duration, originalWave) {
+                    KaraokeAudio.prepare(getApplication(), source, target, song.duration, originalWave, model, parameters, onSeparationError = {
+                        DiagnosticLog(getApplication()).record("playback", "Karaoke MDX-Net: ${it.message}", "WARN")
+                    }) {
                         updatePreparation(offset + it * (100 - offset) / 100)
                     }
                 }
                 backing = prepared
                 mutable.update {
-                    it.copy(stage = KaraokeStage.READY, prepareProgress = 100, duration = KaraokeAudio.millis(prepared.frames), mono = !prepared.stereo)
+                    it.copy(
+                        stage = KaraokeStage.READY, prepareProgress = 100, duration = KaraokeAudio.millis(prepared.frames),
+                        mono = !prepared.stereo && !prepared.separated, separated = prepared.separated,
+                        modelEnabled = modelEnabled, modelInstalled = model != null,
+                        message = R.string.karaoke_model_fallback.takeIf { model != null && !prepared.separated },
+                    )
                 }
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) { fail(KaraokeStage.IDLE, R.string.karaoke_prepare_error, e) }
@@ -117,10 +136,48 @@ internal class KaraokeViewModel(application: Application) : AndroidViewModel(app
         mutable.update { if (it.stage == KaraokeStage.PREPARING && percent > it.prepareProgress) it.copy(prepareProgress = percent) else it }
     }
 
+    fun useSeparationModel(song: Song) {
+        val input = loadSource ?: return
+        val available = backing ?: return
+        val current = state.value
+        if (current.stage != KaraokeStage.READY || !current.modelEnabled || current.separated || current.modelDownload != null ||
+            originalWork?.isActive == true) return
+        mutable.update {
+            if (current.modelInstalled) it.copy(stage = KaraokeStage.PREPARING, prepareProgress = 0, message = null)
+            else it.copy(modelDownload = 0, message = null)
+        }
+        work = viewModelScope.launch {
+            val downloaded = files.resolve("mdx-source.audio")
+            try {
+                val parameters = MdxParameters.read(preferences)
+                mdx.install { percent -> mutable.update { if (it.modelDownload != null) it.copy(modelDownload = percent) else it } }
+                val model = checkNotNull(mdx.installedModel())
+                mutable.update {
+                    it.copy(stage = KaraokeStage.PREPARING, prepareProgress = 0, modelDownload = null, modelInstalled = true)
+                }
+                val original = available.original ?: KaraokeAudio.prepareOriginal(
+                    getApplication(), input(downloaded) { updatePreparation(it / 5) }, originalWave, available.frames,
+                )
+                val separated = mdx.run(model, available.copy(original = original), parameters) { updatePreparation(20 + it * 80 / 100) }
+                backing = separated
+                backingCache.remember(song, separated)
+                mutable.update { it.copy(stage = KaraokeStage.READY, prepareProgress = 100, mono = false, separated = true) }
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) {
+                DiagnosticLog(getApplication()).record("playback", "Karaoke MDX-Net: ${e.message}", "WARN")
+                mutable.update {
+                    it.copy(stage = KaraokeStage.READY, modelDownload = null,
+                        message = if (it.modelInstalled) R.string.karaoke_model_fallback else R.string.karaoke_model_download_error)
+                }
+            } finally { downloaded.delete() }
+        }
+    }
+
     fun selectOriginal(song: Song, enabled: Boolean) {
         val prepared = backing ?: return
         val input = loadSource ?: return
-        if (!prepared.stereo || state.value.originalEnabled == enabled) return
+        if ((!prepared.stereo && !prepared.separated) || state.value.originalEnabled == enabled ||
+            state.value.modelDownload != null) return
         mutable.update {
             it.copy(originalEnabled = enabled, message = it.message.takeUnless { message -> message == R.string.karaoke_original_error })
         }
@@ -150,7 +207,7 @@ internal class KaraokeViewModel(application: Application) : AndroidViewModel(app
     }
 
     fun record(recorder: KaraokeCapture = KaraokeCapture()) {
-        if (state.value.stage !in setOf(KaraokeStage.READY, KaraokeStage.REVIEW)) return
+        if (state.value.stage !in setOf(KaraokeStage.READY, KaraokeStage.REVIEW) || state.value.modelDownload != null) return
         val prepared = backing ?: return
         stopPlayback()
         recorder.selectOriginal(prepared.original.takeIf { state.value.originalEnabled })

@@ -22,6 +22,8 @@ import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
 import androidx.test.runner.lifecycle.Stage
 import cn.toside.music.nativeapp.R
+import cn.toside.music.nativeapp.data.AppPreferences
+import cn.toside.music.nativeapp.karaoke.MdxParameters
 import cn.toside.music.nativeapp.player.PlaybackService
 import cn.toside.music.nativeapp.source.SourceHttpFixture
 import cn.toside.music.nativeapp.update.NativeRelease
@@ -85,7 +87,7 @@ class SettingsFragmentTest {
                     val page = SettingsPage(activity, scope, { field(activity, "service") as? PlaybackService }, noActions, layout) {}
                     root = page.createContent()
                 }
-                listOf("basic", "playback", "sources", "list", "theme", "cache", "sync", "about", "desktop-lyrics", "diagnostics").forEach { category ->
+                listOf("basic", "playback", "vocal-separation", "sources", "list", "theme", "cache", "sync", "about", "desktop-lyrics", "diagnostics").forEach { category ->
                     instrumentation.runOnMainSync {
                         descendants(root).first { it.tag == "settings-category-$category" }.performClick()
                     }
@@ -110,7 +112,7 @@ class SettingsFragmentTest {
                             assertTrue(input.width > 150 * activity.resources.displayMetrics.density)
                             assertEquals(1, input.maxLines)
                         }
-                        if (category in listOf("basic", "sources")) capture("${layout.widthDp}x${layout.heightDp}-$category", root)
+                        if (category in listOf("basic", "sources", "vocal-separation")) capture("${layout.widthDp}x${layout.heightDp}-$category", root)
                     }
                 }
             }
@@ -303,6 +305,42 @@ class SettingsFragmentTest {
         } finally {
             instrumentation.runOnMainSync { activity.finish() }
             preferences.edit().apply { if (previous == null) remove("quality") else putString("quality", previous) }.commit()
+        }
+    }
+    @Test fun vocalSeparationControlsSaveTheValuesUsedByKaraoke() {
+        val activity = start()
+        val preferences = AppPreferences(activity)
+        val key = MdxParameters.STRENGTH_KEY
+        val raw = activity.getSharedPreferences("app-settings", 0)
+        val oldStrength = raw.getString(key, null)
+        try {
+            val selected = if (oldStrength == "110") "103" else "110"
+            instrumentation.runOnMainSync { activity.openSettings("vocal-separation") }
+            val page = settings(activity).requireView()
+            val row = page.findViewWithTag<View>("settings-$key")
+            await { row.isLaidOut }
+            instrumentation.runOnMainSync {
+                page.findViewWithTag<ScrollView>("settings-content").scrollTo(0, row.top)
+                row.performClick()
+            }
+            fun menu() = WindowInspector.getGlobalWindowViews().flatMap(::descendants).filterIsInstance<ListView>()
+                .firstOrNull { it.tag == "settings-choice-menu" && it.isShown }
+            await { menu()?.childCount?.let { it > 0 } == true }
+            instrumentation.runOnMainSync {
+                val index = MdxParameters.strengths.indexOf(selected.toInt())
+                val popup = menu()!!
+                popup.performItemClick(popup.findViewWithTag("settings-choice-$selected"), index, index.toLong())
+                assertEquals(selected.toInt(), MdxParameters.read(preferences).strengthPercent)
+                activity.openSettings("basic")
+                activity.openSettings("vocal-separation")
+                val updatedRow = page.findViewWithTag<View>("settings-$key")
+                assertTrue(descendants(updatedRow).filterIsInstance<TextView>().any {
+                    it.text.toString() == activity.getString(R.string.mdx_value_percent, selected.toInt())
+                })
+            }
+        } finally {
+            raw.edit().apply { if (oldStrength == null) remove(key) else putString(key, oldStrength) }.commit()
+            instrumentation.runOnMainSync { activity.finish() }
         }
     }
     @Test fun onlineImportReportsFailureAllowsRetryAndRefreshesEnabledSource() = runBlocking {

@@ -21,6 +21,7 @@ internal object KaraokeSource {
         headers: Map<String, String>,
         target: File,
         progress: (Int) -> Unit,
+        limitBytes: Long = MAX_BYTES,
     ): Uri = suspendCancellableCoroutine { continuation ->
         val request = Request.Builder().url(url).apply { headers.forEach { (key, value) -> header(key, value) } }.build()
         val call = client.newCall(request)
@@ -34,7 +35,7 @@ internal object KaraokeSource {
                         check(result.isSuccessful) { "HTTP ${result.code}" }
                         val body = requireNotNull(result.body)
                         val length = body.contentLength()
-                        require(length <= MAX_BYTES)
+                        require(length <= limitBytes)
                         check(continuation.isActive)
                         target.outputStream().buffered().use { output ->
                             val buffer = ByteArray(64 * 1024)
@@ -44,7 +45,7 @@ internal object KaraokeSource {
                                 val count = input.read(buffer)
                                 if (count < 0) break
                                 bytes += count
-                                require(bytes <= MAX_BYTES)
+                                require(bytes <= limitBytes)
                                 output.write(buffer, 0, count)
                                 if (length > 0) progress((bytes * 100 / length).coerceAtMost(99).toInt())
                             }

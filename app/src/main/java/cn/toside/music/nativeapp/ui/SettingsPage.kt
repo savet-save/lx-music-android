@@ -23,6 +23,8 @@ import cn.toside.music.nativeapp.R
 import cn.toside.music.nativeapp.data.AppPreferences
 import cn.toside.music.nativeapp.data.CacheMaintenance
 import cn.toside.music.nativeapp.data.PlaylistCredentials
+import cn.toside.music.nativeapp.karaoke.MdxParameters
+import cn.toside.music.nativeapp.karaoke.MdxSeparation
 import cn.toside.music.nativeapp.player.PlaybackService
 import cn.toside.music.nativeapp.source.OnlineSourceImport
 import cn.toside.music.nativeapp.source.UserSourceEntry
@@ -194,6 +196,7 @@ internal class SettingsPage(
         when (current) {
             "basic" -> basic()
             "playback" -> playback()
+            "vocal-separation" -> vocalSeparation()
             "desktop-lyrics" -> content.addView(desktopLyricSettingsContent(activity, choicePopup) { player()?.refreshLyricPreferences() })
             "list" -> lists()
             "sources" -> sources()
@@ -277,6 +280,73 @@ internal class SettingsPage(
         toggle(R.string.ui_d5b0714beafd, "player.isShowBluetoothLyric")
         toggle(R.string.ui_7a36a9f3c4ab, "player.isShowBluetoothFullLyric")
     }
+
+    private fun vocalSeparation() {
+        note(text(R.string.mdx_settings_intro))
+        val model = MdxSeparation(activity)
+        val status = note(text(R.string.mdx_settings_checking)).apply {
+            accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
+        }
+        lateinit var download: TextView
+        var downloading = false
+        download = button(text(R.string.karaoke_model_download), primary = true) {
+            if (downloading) return@button
+            downloading = true
+            download.isEnabled = false
+            status.text = activity.getString(R.string.karaoke_model_downloading, 0)
+            pageJob = scope.launch {
+                try {
+                    model.install { percent ->
+                        status.post {
+                            if (downloading) status.text = activity.getString(R.string.karaoke_model_downloading, percent)
+                        }
+                    }
+                    status.setText(R.string.mdx_settings_installed)
+                    download.visibility = View.GONE
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    status.setText(R.string.karaoke_model_download_error)
+                    download.isEnabled = true
+                } finally {
+                    downloading = false
+                }
+            }
+        }.apply {
+            tag = "settings-mdx-download"
+            visibility = View.GONE
+        }
+        content.addView(download, LinearLayout.LayoutParams(if (layout.expanded) -2 else -1, -2))
+        pageJob = scope.launch {
+            val installed = try {
+                model.installedModel() != null
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                false
+            }
+            status.setText(if (installed) R.string.mdx_settings_installed else R.string.mdx_settings_missing)
+            download.visibility = if (installed) View.GONE else View.VISIBLE
+        }
+
+        toggle(R.string.mdx_settings_enabled, MdxParameters.ENABLED_KEY, true)
+        note(text(R.string.mdx_settings_enabled_hint))
+        section(text(R.string.mdx_settings_parameters))
+        fun parameter(title: Int, key: String, values: List<Int>, default: Int, unit: Int, help: Int) {
+            choice(title, key, values.map { activity.getString(unit, it) }.toTypedArray(),
+                values.map(Int::toString).toTypedArray(), default.toString())
+            note(text(help))
+        }
+        val defaults = MdxParameters.Default
+        parameter(R.string.mdx_settings_strength, MdxParameters.STRENGTH_KEY, MdxParameters.strengths,
+            defaults.strengthPercent, R.string.mdx_value_percent, R.string.mdx_settings_strength_hint)
+        parameter(R.string.mdx_settings_overlap, MdxParameters.OVERLAP_KEY, MdxParameters.overlaps,
+            defaults.overlapMs, R.string.mdx_value_millis, R.string.mdx_settings_overlap_hint)
+        parameter(R.string.mdx_settings_threads, MdxParameters.THREADS_KEY, MdxParameters.threadCounts,
+            defaults.threads, R.string.mdx_value_threads, R.string.mdx_settings_threads_hint)
+        note(text(R.string.mdx_settings_apply_hint))
+    }
+
     private fun lists() {
         toggle(R.string.ui_0aec06d42251, "list.isClickPlayList")
         toggle(R.string.ui_c41fc8ebc9bb, "list.isShowSource", true)
@@ -515,9 +585,10 @@ internal class SettingsPage(
         content.addView(row, LinearLayout.LayoutParams(-1, -2)); divider(content)
     }
     private fun choice(title: Int, key: String, labels: Array<String>, values: Array<String>, fallback: String) {
+        fun selected() = preferences.string(key, fallback).takeIf { it in values } ?: fallback
         lateinit var row: LinearLayout
-        row = action(text(title), labels[values.indexOf(preferences.string(key, fallback)).coerceAtLeast(0)]) {
-            choicePopup.show(row, values.toList(), labels.toList(), preferences.string(key, fallback), palette) { value ->
+        row = action(text(title), labels[values.indexOf(selected()).coerceAtLeast(0)]) {
+            choicePopup.show(row, values.toList(), labels.toList(), selected(), palette) { value ->
                 val index = values.indexOf(value)
                 preferences.set(key, value); refresh()
                 ((row.getChildAt(0) as LinearLayout).getChildAt(1) as TextView).text = labels[index]
@@ -529,6 +600,7 @@ internal class SettingsPage(
     private fun dp(value: Int) = styles.dp(value)
     companion object {
         private val categories = listOf("basic" to R.string.settings_basic, "playback" to R.string.settings_playback,
+            "vocal-separation" to R.string.mdx_settings_title,
             "sources" to R.string.settings_sources, "list" to R.string.ui_6e34875b6fe3, "theme" to R.string.ui_788db1cfec2a,
             "cache" to R.string.ui_e3ca04a9cb13, "sync" to R.string.ui_727036c7fc2a, "about" to R.string.settings_about,
             "desktop-lyrics" to R.string.ui_486b54a7b0af, "diagnostics" to R.string.ui_bb1d19b85634)

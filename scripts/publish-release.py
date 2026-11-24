@@ -25,6 +25,8 @@ SIGNER_SHA256_PATTERN = re.compile(
     r" certificate SHA-256 digest:[ \t]*([a-fA-F0-9]{64})[ \t\r]*$", re.MULTILINE
 )
 ARCHITECTURES = {"all": None, "armv7": "armeabi-v7a", "armv8": "arm64-v8a"}
+MDX_MODEL = dict(line.split("=", 1) for line in (ROOT / "gradle/mdx-model.properties").read_text(encoding="utf-8").splitlines())
+MDX_ASSET = f"assets/karaoke-models/{MDX_MODEL['file']}"
 
 
 def run(arguments, *, capture=True):
@@ -237,35 +239,72 @@ def find_apksigner():
     return str(max(candidates, key=lambda path: tuple(map(int, path.parent.name.split(".")))))
 
 
-def build_apks(version, code):
+def download_mdx_model():
+    destination = ROOT / "build/release-inputs" / MDX_MODEL["file"]
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.is_file() and destination.stat().st_size == int(MDX_MODEL["size"]) and sha256(destination) == MDX_MODEL["sha256"]:
+        return destination
+    staged = destination.with_suffix(".part")
+    try:
+        run(["curl", "--fail", "--location", "--retry", "3", "--max-time", "180",
+             "--proto", "=https", "--proto-redir", "=https", "--max-filesize", MDX_MODEL["size"],
+             "--output", str(staged), MDX_MODEL["url"]], capture=False)
+        if staged.stat().st_size != int(MDX_MODEL["size"]) or sha256(staged) != MDX_MODEL["sha256"]:
+            raise ValueError("Downloaded MDX-Net model does not match the pinned release")
+        staged.replace(destination)
+    finally:
+        staged.unlink(missing_ok=True)
+    return destination
+
+
+def build_apks(version, code, mdx_model=None):
     gradle = [str(ROOT / "gradlew.bat")] if os.name == "nt" else ["bash", "./gradlew"]
-    run(gradle + ["--no-daemon", ":app:testDebugUnitTest", ":app:lintRelease", ":app:assembleRelease",
-                  "-PnativeSplitApks=true", f"-PnativeVersionName={version}", f"-PnativeVersionCode={code}"], capture=False)
+    arguments = ["--no-daemon", ":app:testDebugUnitTest", ":app:lintRelease", ":app:assembleRelease",
+                 "-PnativeSplitApks=true", f"-PnativeVersionName={version}", f"-PnativeVersionCode={code}"]
+    if mdx_model is not None:
+        arguments += [":app:assembleModelRelease", f"-PnativeBundledMdxModel={mdx_model.resolve(strict=True)}"]
+    run(gradle + arguments, capture=False)
 
 
-def verify_apks(version, code, apksigner):
-    directory = ROOT / "app/build/outputs/apk/release"
+def apk_outputs(directory, version, architectures):
     metadata = json.loads((directory / "output-metadata.json").read_text(encoding="utf-8"))
     if metadata.get("applicationId") != "cn.toside.music.nativeapp":
         raise ValueError("Release APK applicationId does not match the native app")
     elements = metadata["elements"]
-    expected_names = {f"lx-music-native-v{version}-{architecture}.apk" for architecture in ARCHITECTURES}
-    if len(elements) != 3 or {item["outputFile"] for item in elements} != expected_names:
-        raise ValueError("Expected exactly armv7, armv8 and all release APK outputs")
+    expected = {f"lx-music-native-v{version}-{architecture}.apk": (architecture, abi)
+                for architecture, abi in architectures.items()}
+    if len(elements) != len(expected) or {item["outputFile"] for item in elements} != expected.keys():
+        raise ValueError(f"Unexpected APK outputs in {directory.name}: expected {', '.join(expected)}")
+    for name, (architecture, abi) in expected.items():
+        yield architecture, abi, directory / name, next(item for item in elements if item["outputFile"] == name)
+
+
+def verify_apks(version, code, apksigner, *, with_model=False):
+    root = ROOT / "app/build/outputs/apk"
+    outputs = list(apk_outputs(root / "release", version, ARCHITECTURES))
+    if with_model:
+        outputs += list(apk_outputs(root / "modelRelease", version, {"with-model": None}))
     certificates = None
     result = {}
-    for architecture, abi in ARCHITECTURES.items():
-        name = f"lx-music-native-v{version}-{architecture}.apk"
-        item = next(value for value in elements if value["outputFile"] == name)
+    for architecture, abi, path, item in outputs:
+        name = path.name
         filters = item.get("filters", [])
         if item.get("versionName") != version or item.get("versionCode") != code:
             raise ValueError(f"Stale or mismatched APK version: {name}")
         expected_filters = [{"filterType": "ABI", "value": abi}] if abi else []
         if filters != expected_filters:
             raise ValueError(f"Wrong ABI metadata: {name}")
-        path = directory / name
         with zipfile.ZipFile(path) as apk:
             packaged = {name.split("/")[1] for name in apk.namelist() if name.startswith("lib/") and name.endswith(".so")}
+            models = [entry for entry in apk.infolist() if entry.filename == MDX_ASSET]
+            if architecture == "with-model":
+                if len(models) != 1 or models[0].file_size != int(MDX_MODEL["size"]):
+                    raise ValueError(f"Missing or invalid bundled MDX-Net model in {name}")
+                with apk.open(models[0]) as stream:
+                    if stream_sha256(stream) != MDX_MODEL["sha256"]:
+                        raise ValueError(f"Bundled MDX-Net model SHA-256 differs in {name}")
+            elif models:
+                raise ValueError(f"Unexpected bundled model in standard APK: {name}")
         if (abi and packaged != {abi}) or (not abi and not {"armeabi-v7a", "arm64-v8a"}.issubset(packaged)):
             raise ValueError(f"Wrong native libraries in {name}: {sorted(packaged)}")
         if architecture != "armv7":
@@ -281,12 +320,16 @@ def verify_apks(version, code, apksigner):
     return result
 
 
-def sha256(path):
+def stream_sha256(stream):
     digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(block)
+    for block in iter(lambda: stream.read(1024 * 1024), b""):
+        digest.update(block)
     return digest.hexdigest()
+
+
+def sha256(path):
+    with path.open("rb") as stream:
+        return stream_sha256(stream)
 
 
 def release_notes(repo, tag, previous, checksums):
@@ -312,6 +355,8 @@ def release_notes(repo, tag, previous, checksums):
         body = (ROOT / "README.md").read_text(encoding="utf-8").split("## 构建与验证", 1)[0].strip()
         body += f"\n\n支持 Android 9 及以上版本。[使用说明]({page}/blob/{quote(tag, safe='')}/DEVELOPMENT.md)"
     body = summary + body
+    if any(name.endswith("-with-model.apk") for name in checksums):
+        body += "\n\n`-with-model.apk` 是内置 MDX-Net 的通用安装包，K 歌可直接使用本机模型。"
     body += "\n\n## APK SHA-256\n\n| 文件 | SHA-256 |\n| --- | --- |\n"
     for name, digest in checksums.items():
         body += f"| [{name}]({page}/releases/download/{quote(tag, safe='')}/{quote(name, safe='')}) | `{digest}` |\n"
@@ -377,6 +422,7 @@ def main():
     parser.add_argument("--remote", default="origin", help="Git remote used to fetch and push release tags (default: origin)")
     parser.add_argument("--draft", action="store_true", help="Keep the complete release as a draft when run by Actions")
     parser.add_argument("--prepare-only", action="store_true", help="Build APKs and notes without creating or modifying a remote release")
+    parser.add_argument("--mdx-model", type=Path, help="Build an additional APK with the pinned MDX-Net model from this local file")
     options = parser.parse_args()
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", options.remote):
         raise ValueError("--remote must be a Git remote name, for example origin")
@@ -413,8 +459,14 @@ def main():
         verify_release_remote(repo, options.remote)
         verify_remote_release_tag(tag, commit, options.remote)
     apksigner = find_apksigner()
-    build_apks(version, code)
-    apks = verify_apks(version, code, apksigner)
+    mdx_model = options.mdx_model
+    if mdx_model is None and os.environ.get("NATIVE_BUNDLE_MDX") == "true":
+        mdx_model = download_mdx_model()
+    if mdx_model is None:
+        build_apks(version, code)
+    else:
+        build_apks(version, code, mdx_model)
+    apks = verify_apks(version, code, apksigner, with_model=mdx_model is not None)
     output = ROOT / "build/releases" / tag
     checksums = prepare_artifacts(repo, tag, previous, apks, output)
     print(f"Prepared {len(apks)} signed APKs: {output}")

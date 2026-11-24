@@ -33,6 +33,24 @@ class KaraokeAudioTest {
         assertTrue(after / before < .05)
     }
 
+    @Test fun centerReductionAlsoAttenuatesVocalBodyAndSibilance() {
+        val frequencies = listOf(100 to 0.40, 1000 to 0.05, 9000 to 0.18)
+        frequencies.forEach { (frequency, maximumRatio) ->
+            val reducer = KaraokeAudio.StereoCenterReduction()
+            var before = 0.0
+            var after = 0.0
+            repeat(KaraokeAudio.RATE / 2) { frame ->
+                val center = 8000 * sin(2 * PI * frequency * frame / KaraokeAudio.RATE)
+                val cut = reducer.center(center)
+                if (frame > KaraokeAudio.RATE / 10) {
+                    before += center * center
+                    after += (center - cut) * (center - cut)
+                }
+            }
+            assertTrue("center vocal at $frequency Hz should be reduced", after / before < maximumRatio)
+        }
+    }
+
     @Test fun mixingAlignsAndTrimsBothTracksWithIndependentGain() = runBlocking {
         val rate = KaraokeAudio.RATE
         val backing = files.newFile("backing.wav")

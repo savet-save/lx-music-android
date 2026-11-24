@@ -128,10 +128,18 @@ internal class AboutPage(
         content.addView(button(R.string.ui_038ad816c53f) {
             if (license.visibility == View.VISIBLE) license.visibility = View.GONE
             else {
+                val separationLicenses = listOf(
+                    "ONNX Runtime 1.22.0 — MIT\nhttps://github.com/microsoft/onnxruntime",
+                    activity.assets.open("licenses/ONNX-Runtime-MIT.txt").bufferedReader().use { it.readText() },
+                    "ONNX Runtime third-party notices\nhttps://github.com/microsoft/onnxruntime/blob/v1.22.0/ThirdPartyNotices.txt",
+                    "MDX-Net — KUIELab\nhttps://github.com/kuielab/mdx-net",
+                    activity.assets.open("licenses/Ultimate-Vocal-Remover-MIT.txt").bufferedReader().use { it.readText() },
+                ).joinToString("\n\n")
                 license.text = "LX Music — Apache License 2.0\n\n" + activity.assets.open("licenses/Apache-2.0.txt").use { it.readBytes().toString(Charsets.UTF_8) } +
                     "\n\nJAudiotagger 3.0.1 — LGPL 2.1 or later\nhttps://www.jthink.net/jaudiotagger/\nSource: https://repo.maven.apache.org/maven2/net/jthink/jaudiotagger/3.0.1/jaudiotagger-3.0.1-sources.jar\n\n" +
                     activity.assets.open("licenses/LGPL-2.1.txt").use { it.readBytes().toString(Charsets.UTF_8) } + "\n\nLAME — LGPL 2.0 or later\nhttps://github.com/lameproject/lame\n\n" + activity.assets.open("licenses/LAME-LGPL-2.0.txt").use { it.readBytes().toString(Charsets.UTF_8) } +
-                    "\n\nZXing — Apache License 2.0\nhttps://github.com/zxing/zxing\n\n" + activity.assets.open("licenses/ZXing-APACHE-2.0.txt").use { it.readBytes().toString(Charsets.UTF_8) }
+                    "\n\nZXing — Apache License 2.0\nhttps://github.com/zxing/zxing\n\n" + activity.assets.open("licenses/ZXing-APACHE-2.0.txt").use { it.readBytes().toString(Charsets.UTF_8) } +
+                    "\n\n" + separationLicenses
                 license.visibility = View.VISIBLE
             }
         }); content.addView(license)

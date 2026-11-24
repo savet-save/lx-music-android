@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="mdx_settings_title">Vocal separation</string>
+    <string name="mdx_settings_intro">Karaoke uses MDX-Net (UVR 9703) to separate vocals on this device. The bundled edition is ready to use. The standard edition needs a one-time model download.</string>
+    <string name="mdx_settings_checking">Checking model…</string>
+    <string name="mdx_settings_installed">MDX-Net model installed</string>
+    <string name="mdx_settings_missing">Download the model to use it in Karaoke.</string>
+    <string name="mdx_settings_enabled">Use the separation model in Karaoke</string>
+    <string name="mdx_settings_enabled_hint">The model can remove more vocals, but the first separation takes more time and memory. When the model is off or memory is low, Karaoke uses faster basic processing that may leave more vocals audible.</string>
+    <string name="mdx_settings_parameters">Separation parameters</string>
+    <string name="mdx_settings_strength">Vocal removal strength</string>
+    <string name="mdx_settings_strength_hint">Default is 103%. Higher values subtract more of the estimated vocal and can reduce instrument levels or introduce artifacts. Lower values preserve more backing detail and may leave more of the original vocal.</string>
+    <string name="mdx_settings_overlap">Chunk overlap</string>
+    <string name="mdx_settings_overlap_hint">Default is 250 ms. More overlap can smooth transitions between audio chunks. It requires more inference passes and takes longer.</string>
+    <string name="mdx_settings_threads">Inference threads</string>
+    <string name="mdx_settings_threads_hint">Default is 2. More threads may speed up separation and can increase heat and battery use. Speed depends on the device.</string>
+    <string name="mdx_settings_apply_hint">Changes apply the next time Karaoke prepares a backing track. Cached tracks are reused when removal strength and chunk overlap match.</string>
+    <string name="mdx_value_millis">%1$d ms</string>
+</resources>

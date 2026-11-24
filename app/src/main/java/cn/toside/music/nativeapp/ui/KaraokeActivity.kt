@@ -73,6 +73,7 @@ class KaraokeActivity : FragmentActivity() {
     private lateinit var timing: TextView
     private lateinit var progress: ProgressBar
     private lateinit var originalSwitch: Switch
+    private lateinit var modelButton: Button
     private lateinit var captureButton: Button
     private lateinit var stopButton: Button
     private lateinit var editor: LinearLayout
@@ -367,6 +368,9 @@ class KaraokeActivity : FragmentActivity() {
             }
             originalSwitch = toggle
             addView(originalSwitch, LinearLayout.LayoutParams(-1, -2))
+            modelButton = button(R.string.karaoke_model_download) { selected?.let(studio::useSeparationModel) }
+                .apply { tag = "karaoke-model-download" }
+            addView(modelButton, LinearLayout.LayoutParams(-1, -2))
         }
         addView(songCard, LinearLayout.LayoutParams(-1, -2))
         lyricPanel = column().apply {
@@ -436,7 +440,11 @@ class KaraokeActivity : FragmentActivity() {
         val statusText = when (state.stage) {
             KaraokeStage.IDLE -> getString(R.string.karaoke_preparing)
             KaraokeStage.PREPARING -> getString(R.string.karaoke_preparing_progress, state.prepareProgress)
-            KaraokeStage.READY -> getString(if (state.mono) R.string.karaoke_mono else R.string.karaoke_ready)
+            KaraokeStage.READY -> getString(when {
+                state.separated -> R.string.karaoke_model_ready
+                state.mono -> R.string.karaoke_mono
+                else -> R.string.karaoke_ready
+            })
             KaraokeStage.RECORDING -> getString(
                 if (state.originalEnabled && !state.originalLoading) R.string.karaoke_recording_original else R.string.karaoke_recording,
             )
@@ -451,11 +459,15 @@ class KaraokeActivity : FragmentActivity() {
         progress.progress = if (preparing) state.prepareProgress else state.position
         val monitoring = state.stage == KaraokeStage.READY || state.stage == KaraokeStage.RECORDING || state.stage == KaraokeStage.PAUSED
         originalSwitch.visibility = if (monitoring) View.VISIBLE else View.GONE
-        originalSwitch.isEnabled = monitoring && !state.mono
+        originalSwitch.isEnabled = monitoring && !state.mono && state.modelDownload == null
         originalSwitch.isChecked = state.originalEnabled
         originalSwitch.setText(if (state.originalLoading && state.originalEnabled) R.string.karaoke_original_loading else R.string.karaoke_original)
         renderLyrics(state)
-        captureButton.isEnabled = state.stage !in setOf(KaraokeStage.PREPARING, KaraokeStage.MIXING)
+        modelButton.visibility = if (state.stage == KaraokeStage.READY && state.modelEnabled && !state.separated) View.VISIBLE else View.GONE
+        modelButton.isEnabled = state.modelDownload == null && !state.originalLoading
+        modelButton.text = state.modelDownload?.let { getString(R.string.karaoke_model_downloading, it) }
+            ?: getString(if (state.modelInstalled) R.string.karaoke_model_retry else R.string.karaoke_model_download)
+        captureButton.isEnabled = state.stage !in setOf(KaraokeStage.PREPARING, KaraokeStage.MIXING) && state.modelDownload == null
         captureButton.setText(when (state.stage) {
             KaraokeStage.IDLE -> R.string.karaoke_retry
             KaraokeStage.RECORDING -> R.string.karaoke_pause
