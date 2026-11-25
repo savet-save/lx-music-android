@@ -829,6 +829,22 @@ class PlaybackSettingsTest {
         override fun close() { releaseAudio.countDown(); server.close(); sockets.forEach { it.close() }; worker.join(1000) }
     }
 
+    @Test fun missingPlaybackUrlsExhaust320kAnd128kOnce() = runBlocking {
+        withQualityPlayback { fixture, song ->
+            context.getSharedPreferences("player", 0).edit().putString("quality", "320k").commit()
+            QualityAudioServer(fixture.file.readBytes()).use { server ->
+                fixture.player.importExclusiveTestSource(qualityScript("""
+                    return new Promise((_, reject) => lx.request('${server.address}/' + info.type,
+                        {method:'get'}, () => reject(Error('no URL ' + info.type))));
+                """.trimIndent()))
+                main { fixture.player.play(listOf(song), 0) }
+                waitFor { fixture.player.state.value.error != null }
+                assertFalse(fixture.player.state.value.preparing)
+                assertEquals(listOf("320k", "128k"), server.requests.toList())
+            }
+        }
+    }
+
     @Test fun httpAndDecoderFailuresLowerBitrateUseSeparateCachesAndStopWhenExhaustedOrDisabled() = runBlocking {
         withQualityPlayback { fixture, song ->
             QualityAudioServer(fixture.file.readBytes()).use { server ->
@@ -915,7 +931,7 @@ class PlaybackSettingsTest {
     @Test fun sourceTimeoutLowersBitrateWhileCallerCancellationStopsTheRequest() = runBlocking {
         withQualityPlayback { fixture, song ->
             fixture.player.importExclusiveTestSource(qualityScript("if (info.type === 'flac24bit') return new Promise(() => {}); return Promise.resolve('http://127.0.0.1/' + attempts.join(','));"))
-            assertEquals("http://127.0.0.1/flac24bit,flac", withTimeout(26_000) { fixture.player.resolveUrl(song) })
+            assertEquals("http://127.0.0.1/flac24bit,flac", withTimeout(7_000) { fixture.player.resolveUrl(song) })
             val cancelled = kotlinx.coroutines.withTimeoutOrNull(150) { fixture.player.resolveUrl(song) }
             assertNull(cancelled)
             // The cancelled request must not try the next quality in the background.

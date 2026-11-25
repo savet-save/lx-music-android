@@ -185,35 +185,39 @@ class UserSource(private val context: Context) {
         val actions = sourceInfo.optJSONObject("sources")?.optJSONObject(source)?.optJSONArray("actions") ?: return@withContext false
         (0 until actions.length()).any { actions.optString(it) == action }
     }
-    internal suspend fun hasQuality(quality: String): Boolean = withContext(dispatcher) {
-        val sources = sourceInfo.optJSONObject("sources") ?: return@withContext false
-        sources.keys().asSequence().any { source ->
-            val info = sources.optJSONObject(source) ?: return@any false
-            val actions = info.optJSONArray("actions") ?: return@any false
+    internal suspend fun audioPlatforms(quality: String): Set<String> = withContext(dispatcher) {
+        val sources = sourceInfo.optJSONObject("sources") ?: return@withContext emptySet()
+        sources.keys().asSequence().filterTo(mutableSetOf()) { source ->
+            val info = sources.optJSONObject(source) ?: return@filterTo false
+            val actions = info.optJSONArray("actions") ?: return@filterTo false
             val qualities = info.optJSONArray("qualitys") ?: JSONArray()
             (0 until actions.length()).any { actions.optString(it) == "musicUrl" } &&
                 ((0 until qualities.length()).any { qualities.optString(it) == quality } || qualities.length() == 0 && quality == "128k")
         }
     }
     internal suspend fun sourceRequest(source: String, action: String, info: JSONObject, quality: String = "128k", exactQuality: Boolean = false): JSONObject {
-        val result = withContext(dispatcher) {
-            check(runtime != null) { "请先导入并启用自定义音源" }
-            val supported = sourceInfo.optJSONObject("sources")?.optJSONObject(source)?.optJSONArray("qualitys") ?: JSONArray()
-            val available = (0 until supported.length()).map { supported.optString(it) }.toSet()
-            val selectedQuality = if (exactQuality) {
-                check(quality in available || available.isEmpty() && quality == "128k") { "音源不支持所选音质" }
-                quality
-            } else selectQuality(quality, info.optJSONObject("_types") ?: JSONObject(), available)
-            val requestKey = UUID.randomUUID().toString()
-            val deferred = CompletableDeferred<JSONObject>()
-            pending[requestKey] = deferred
-            val data = JSONObject().put("requestKey", requestKey).put("data", JSONObject().put("source", source)
-                .put("action", action).put("info", JSONObject().put("type", selectedQuality).put("musicInfo", info)))
-            try { callJs("request", data.toString()) } catch (e: Exception) { pending.remove(requestKey); deferred.completeExceptionally(e) }
-            requestKey to deferred
+        var pendingKey: String? = null
+        try {
+            val result = withContext(dispatcher) {
+                check(runtime != null) { "请先导入并启用自定义音源" }
+                val supported = sourceInfo.optJSONObject("sources")?.optJSONObject(source)?.optJSONArray("qualitys") ?: JSONArray()
+                val available = (0 until supported.length()).map { supported.optString(it) }.toSet()
+                val selectedQuality = if (exactQuality) {
+                    check(quality in available || available.isEmpty() && quality == "128k") { "音源不支持所选音质" }
+                    quality
+                } else selectQuality(quality, info.optJSONObject("_types") ?: JSONObject(), available)
+                val requestKey = UUID.randomUUID().toString().also { pendingKey = it }
+                val deferred = CompletableDeferred<JSONObject>()
+                pending[requestKey] = deferred
+                val data = JSONObject().put("requestKey", requestKey).put("data", JSONObject().put("source", source)
+                    .put("action", action).put("info", JSONObject().put("type", selectedQuality).put("musicInfo", info)))
+                try { callJs("request", data.toString()) } catch (e: Exception) { pending.remove(requestKey); deferred.completeExceptionally(e) }
+                deferred
+            }
+            return withTimeout(20_000) { result.await() }
+        } finally {
+            pendingKey?.let { requestKey -> withContext(dispatcher + NonCancellable) { pending.remove(requestKey) } }
         }
-        return try { withTimeout(20_000) { result.second.await() } }
-        finally { withContext(dispatcher) { pending.remove(result.first) } }
     }
 
     private fun callJs(action: String, data: String) {

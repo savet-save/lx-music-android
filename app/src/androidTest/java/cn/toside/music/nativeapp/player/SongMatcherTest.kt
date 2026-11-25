@@ -11,6 +11,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.CompletableDeferred
@@ -56,6 +57,25 @@ class SongMatcherTest {
         assertEquals(4, request.await().size); assertEquals(0, matcher.cacheCount)
         assertEquals(4, matcher.find(song).size); assertEquals(1, matcher.cacheCount)
     }
+    @Test fun playbackSearchOnlyUsesCompatiblePlatformsAndKeepsFastMatchesWhenOneStalls() = runBlocking {
+        val song = Song(1, Uri.EMPTY, "Song", "Artist", 1000, "kw")
+        val calls = mutableSetOf<String>()
+        val canceled = CompletableDeferred<Unit>()
+        val matcher = SongMatcher(context, this) { _, source ->
+            calls.add(source)
+            if (source == "wy") try { awaitCancellation() } finally { canceled.complete(Unit) }
+            listOf(song.copy(source = source))
+        }
+        assertEquals(listOf("tx"), matcher.find(song, setOf("kw", "tx", "wy", "unknown")).map { it.source })
+        canceled.await()
+        assertEquals(setOf("tx", "wy"), calls)
+        assertEquals(0, matcher.cacheCount)
+        assertEquals(listOf("tx"), matcher.find(song, setOf("tx")).map { it.source })
+        assertEquals(1, matcher.cacheCount)
+        matcher.clearSong(song)
+        assertEquals(0, matcher.cacheCount)
+    }
+
     @Test fun shareLinksRoundTripWithoutChangingNamesOrExposingLocalFilePaths() {
         val online = Song(42, Uri.EMPTY, "A & B + C", "Singer", 1000, "kw", """{"songmid":"42","types":[{"type":"128k"}],"_types":{"128k":{}}}""")
         val intent = SongShare.intent(online)

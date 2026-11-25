@@ -174,6 +174,74 @@ class UserSourceLibraryTest {
                 .put("_types", JSONObject().put("320k", JSONObject())), "320k"))
         }
     }
+    @Test fun versionFiveUpgradesBundledKuwoAndKeepsEnabledOrderAndPreferences() = runBlocking {
+        isolated { context, source ->
+            val old = InstrumentationRegistry.getInstrumentation().context.assets.open("oiapi-kuwo-1.0.0.js")
+                .bufferedReader().use { it.readText() }.replace("\r\n", "\n")
+            val updated = context.assets.open(UserSourceLibrary.BUNDLED_KUWO_ASSET).bufferedReader().use { it.readText() }
+            val custom = old.replace("LX Music Native", "Custom author")
+            val customId = UserSourceLibrary.metadata(custom).id
+            val updatedId = UserSourceLibrary.metadata(updated).id
+            val target = File(context.filesDir, "user-sources.json")
+            for (legacy in listOf(old, old.replace("\n", "\r\n"))) {
+                val legacyId = UserSourceLibrary.metadata(legacy).id
+                for (enabled in listOf(listOf(customId, legacyId), listOf(customId))) {
+                    target.writeText(JSONObject().put("version", 5).put("enabled", JSONArray(enabled))
+                        .put("sources", JSONArray().put(JSONObject().put("script", legacy).put("allowUpdateAlert", false))
+                            .put(JSONObject().put("script", custom))).toString())
+                    val catalog = source.catalog()
+                    assertEquals(listOf(updatedId, customId), catalog.entries.map { it.id })
+                    assertFalse(catalog.entries.first().allowUpdateAlert)
+                    assertEquals(custom, catalog.entries.last().script)
+                    assertEquals(enabled.map { if (it == legacyId) updatedId else it }, catalog.enabled)
+                    assertEquals(catalog, UserSourceLibrary(context).read())
+                }
+            }
+            target.writeText(JSONObject().put("version", 5).put("enabled", JSONArray(listOf(customId)))
+                .put("sources", JSONArray().put(JSONObject().put("script", custom))).toString())
+            assertEquals(listOf(customId), source.catalog().entries.map { it.id })
+        }
+    }
+
+    @Test fun bundledKuwoReusesCatalogAcrossBitratesAndRefreshesAfterExpiryOrMismatchedAudio() = runBlocking {
+        isolated { context, source ->
+            val original = context.assets.open(UserSourceLibrary.BUNDLED_KUWO_ASSET).bufferedReader().use { it.readText() }
+            val fixture = """
+                const { EVENT_NAMES, on, send } = globalThis.lx;
+                let clock = 0, catalogsRequested = 0, mismatched = false;
+                function request(url, options, callback) {
+                  if (!url.includes('&br=')) {
+                    catalogsRequested++;
+                    const data = { items: [{rid:'MUSIC_42', types:[{bitrate:320,format:'mp3'},{bitrate:128,format:'mp3'}]}] };
+                    return callback(null, {statusCode:200,body:{code:1,data}});
+                  }
+                  const high = url.endsWith('&br=1');
+                  const expire = url.includes('expire');
+                  if (high && expire && !mismatched) {
+                    mismatched = true;
+                    return callback(null, {statusCode:200,body:{code:1,data:{rid:'MUSIC_43'}}});
+                  }
+                  if (high) return callback(null, {statusCode:200,body:{code:-2,message:'unavailable'}});
+                  const data = {rid:'MUSIC_42',bitrate:128,format:'mp3',url:'https://example.org/' + catalogsRequested + '.mp3'};
+                  callback(null, {statusCode:200,body:{code:1,data}});
+                  clock += 15_001;
+                }
+            """.trimIndent()
+            source.import(original.replace("const { EVENT_NAMES, request, on, send } = globalThis.lx;", fixture)
+                .replace("Date.now()", "clock"))
+            val song = JSONObject().put("songmid", 42).put("name", "Example")
+            try { source.musicUrl("kw", song, "320k", exactQuality = true); fail("320K unavailable") }
+            catch (e: IllegalStateException) { assertTrue(e.message.orEmpty().contains("unavailable")) }
+            assertEquals("https://example.org/1.mp3", source.musicUrl("kw", song, "128k", exactQuality = true))
+            assertEquals("https://example.org/1.mp3", source.musicUrl("kw", song, "128k", exactQuality = true))
+            assertEquals("https://example.org/2.mp3", source.musicUrl("kw", song, "128k", exactQuality = true))
+            song.put("name", "expire")
+            try { source.musicUrl("kw", song, "320k", exactQuality = true); fail("Wrong recording") }
+            catch (e: IllegalStateException) { assertTrue(e.message.orEmpty().contains("歌曲版本发生变化")) }
+            assertEquals("https://example.org/4.mp3", source.musicUrl("kw", song, "128k", exactQuality = true))
+        }
+    }
+
     @Test fun bundledKuwoResolvesTheRequested320kUsingTheNativeRuntime() = runBlocking {
         assumeTrue("Pass liveKuwoSource=true to check the public Kuwo API",
             InstrumentationRegistry.getArguments().getString("liveKuwoSource") == "true")

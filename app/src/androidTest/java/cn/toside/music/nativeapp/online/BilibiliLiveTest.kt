@@ -28,7 +28,7 @@ class BilibiliLiveTest {
             assertTrue("Bilibili search returned no videos",results.isNotEmpty())
             val song=results.firstOrNull { it.duration in 260000..280000 } ?: results.first()
             val entry=before.entries.single { it.name=="B站音源" };sources.setEnabledOrder(listOf(entry.id))
-            val resolver=SourceAudioResolver(sources,{emptyList()},false)
+            val resolver=SourceAudioResolver(sources,{ _, _ -> emptyList()},false)
             downloads.startWithSources(song,"mp3") { item,_,excluded -> resolver.resolve(item,"original",excluded) }
             key=downloads.list().first { it.song.id==song.id }.key
             val task=BilibiliMp3Test().waitFor(downloads,key)

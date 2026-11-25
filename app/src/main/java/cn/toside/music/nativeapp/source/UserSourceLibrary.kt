@@ -26,7 +26,7 @@ internal class UserSourceLibrary(private val context: Context) {
             val legacy = File(context.filesDir, "user-source.js")
             val bundled = listOf(bundled(BUNDLED_ASSET), bundled(BUNDLED_KUWO_ASSET), bundled(BUNDLED_BILIBILI_ASSET))
             val entry = if (legacy.isFile) metadata(legacy.inputStream().use { it.readBounded(2 * 1024 * 1024) }.toString(Charsets.UTF_8)) else bundled.first()
-            return@synchronized UserSourceCatalog(entry.id, (listOf(entry) + bundled).distinctBy { it.id }).also(::write)
+            return@synchronized updateBundledKuwo(UserSourceCatalog(entry.id, (listOf(entry) + bundled).distinctBy { it.id })).also(::write)
         }
         val data = target.openRead().use { JSONObject(it.readBounded(32 * 1024 * 1024).toString(Charsets.UTF_8)) }
         val values = data.getJSONArray("sources")
@@ -49,10 +49,21 @@ internal class UserSourceLibrary(private val context: Context) {
                 if (version < 3) add(bundled(BUNDLED_KUWO_ASSET))
                 if (version < 5) add(bundled(BUNDLED_BILIBILI_ASSET))
             }
-            return@synchronized catalog.copy(entries = (entries + additions).distinctBy { it.id }).also(::write)
+            return@synchronized updateBundledKuwo(catalog.copy(entries = (entries + additions).distinctBy { it.id })).also(::write)
         }
         catalog
     }
+
+    private fun updateBundledKuwo(catalog: UserSourceCatalog): UserSourceCatalog {
+        val legacy = catalog.entries.firstOrNull { it.id in LEGACY_KUWO_IDS } ?: return catalog
+        val updated = bundled(BUNDLED_KUWO_ASSET).copy(allowUpdateAlert = legacy.allowUpdateAlert)
+        val entries = catalog.entries.filterNot { it.id == updated.id }.map {
+            if (it.id in LEGACY_KUWO_IDS) updated else it
+        }.distinctBy { it.id }
+        val enabled = catalog.enabled.map { if (it in LEGACY_KUWO_IDS) updated.id else it }.distinct()
+        return catalog.copy(entries = entries).withEnabled(enabled)
+    }
+
     fun selected(): UserSourceEntry? = read().let { data -> data.entries.firstOrNull { it.id == data.selected } }
     fun isBilibili(id: String) = id == bundled(BUNDLED_BILIBILI_ASSET).id
     fun isBundled(id: String) = listOf(BUNDLED_ASSET, BUNDLED_KUWO_ASSET, BUNDLED_BILIBILI_ASSET).any { id == bundled(it).id }
@@ -122,7 +133,14 @@ internal class UserSourceLibrary(private val context: Context) {
         const val BUNDLED_KUWO_ASSET = "script/oiapi-kuwo.js"
         const val BUNDLED_BILIBILI_ASSET = "script/bilibili.js"
         const val MAX_ENABLED = 3
-        private const val CATALOG_VERSION = 5
+        private const val CATALOG_VERSION = 7
+        // Previous bundled scripts (1.0.0 and 1.0.1), with LF or CRLF line endings.
+        private val LEGACY_KUWO_IDS = setOf(
+            "f491d9760eb1d8f8d788bd5863e8ef07cb89e55a1c88e76d7277f6bbc21e08b5",
+            "ea9f11fe9fb043eada025882de4eb6be97d5897fa74e09f6667db1fc2d0e48e1",
+            "509403a3912edd238124c7272ca2a20ea317110e6492d3a60d54fd17fbf774e5",
+            "c3b76a28843b50b43164cb450da88b6864eaa2aea3a3ad85f677a700178f053e",
+        )
         private val lock = Any()
         fun metadata(script: String): UserSourceEntry {
             require(script.toByteArray(Charsets.UTF_8).size <= 2 * 1024 * 1024) { "音源文件超过 2 MB" }
