@@ -13,7 +13,8 @@
     <string name="mdx_settings_overlap">分塊重疊</string>
     <string name="mdx_settings_overlap_hint">預設 250 毫秒。增加相鄰音訊區塊的重疊可讓接縫更平滑，但會增加推論次數和處理時間。</string>
     <string name="mdx_settings_threads">推論執行緒數</string>
-    <string name="mdx_settings_threads_hint">預設 2。更多執行緒可能加快分離，也可能增加發熱和耗電。實際速度取決於裝置。</string>
+    <string name="mdx_settings_threads_hint">預設使用裝置可用的 CPU 核心數。更多執行緒可能加快分離，也可能增加發熱和耗電。實際速度取決於裝置。</string>
+    <string name="mdx_value_threads_auto">依核心數（%1$d）</string>
     <string name="mdx_settings_apply_hint">設定會在下次準備伴奏時生效。只有消除強度和分塊重疊相同時，才會重複使用分離後的伴奏快取。</string>
     <string name="mdx_value_millis">%1$d 毫秒</string>
 </resources>

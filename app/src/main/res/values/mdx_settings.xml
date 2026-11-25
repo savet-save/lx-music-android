@@ -13,9 +13,10 @@
     <string name="mdx_settings_overlap">分块重叠</string>
     <string name="mdx_settings_overlap_hint">默认 250 毫秒。增加相邻音频块的交叠可让接缝更平滑，但会增加推理次数和处理时间。</string>
     <string name="mdx_settings_threads">推理线程数</string>
-    <string name="mdx_settings_threads_hint">默认 2。更多线程可能加快分离，也可能增加发热和耗电。实际速度取决于设备。</string>
+    <string name="mdx_settings_threads_hint">默认使用设备可用的 CPU 核心数。更多线程可能加快分离，也可能增加发热和耗电。实际速度取决于设备。</string>
     <string name="mdx_settings_apply_hint">设置在下次准备伴奏时生效。只有消除强度和分块重叠一致时，才会复用分离后的伴奏缓存。</string>
     <string name="mdx_value_percent" translatable="false">%1$d%%</string>
     <string name="mdx_value_millis">%1$d 毫秒</string>
     <string name="mdx_value_threads" translatable="false">%1$d</string>
+    <string name="mdx_value_threads_auto">按核心数（%1$d）</string>
 </resources>

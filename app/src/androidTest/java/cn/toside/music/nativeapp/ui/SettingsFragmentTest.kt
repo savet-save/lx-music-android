@@ -316,19 +316,20 @@ class SettingsFragmentTest {
         val activity = start()
         val preferences = AppPreferences(activity)
         val key = MdxParameters.STRENGTH_KEY
+        val threadKey = MdxParameters.THREADS_KEY
         val raw = activity.getSharedPreferences("app-settings", 0)
         val oldStrength = raw.getString(key, null)
+        val oldThreads = raw.getString(threadKey, null)
         try {
+            raw.edit().putString(threadKey, "2").commit()
+            assertEquals(2, MdxParameters.read(preferences).threads)
+            raw.edit().remove(threadKey).commit()
+            val coreCount = Runtime.getRuntime().availableProcessors()
+            assertEquals(coreCount, MdxParameters.read(preferences).threads)
             val selected = if (oldStrength == "110") "103" else "110"
             instrumentation.runOnMainSync { activity.openSettings("vocal-separation") }
             val fragment = settings(activity)
             val page = fragment.requireView()
-            val row = page.findViewWithTag<View>("settings-$key")
-            await { row.isLaidOut }
-            instrumentation.runOnMainSync {
-                page.findViewWithTag<ScrollView>("settings-content").scrollTo(0, row.top)
-                row.performClick()
-            }
             val controller = SettingsFragment::class.java.getDeclaredField("page").apply { isAccessible = true }.get(fragment)
             val popup = SettingsPage::class.java.getDeclaredField("choicePopup").apply { isAccessible = true }.get(controller)
             val windowField = PlatformPopup::class.java.getDeclaredField("window").apply { isAccessible = true }
@@ -336,7 +337,15 @@ class SettingsFragmentTest {
                 val window = windowField.get(popup) as? PopupWindow
                 return (window?.contentView as? ListView)?.takeIf { window.isShowing && it.isShown }
             }
-            await { menu()?.childCount?.let { it > 0 } == true }
+            fun openChoice(row: View) {
+                await { row.isLaidOut }
+                instrumentation.runOnMainSync {
+                    page.findViewWithTag<ScrollView>("settings-content").scrollTo(0, row.top)
+                    row.performClick()
+                }
+                await { menu()?.childCount?.let { it > 0 } == true }
+            }
+            openChoice(page.findViewWithTag("settings-$key"))
             instrumentation.runOnMainSync {
                 val index = MdxParameters.strengths.indexOf(selected.toInt())
                 val popup = menu()!!
@@ -349,8 +358,41 @@ class SettingsFragmentTest {
                     it.text.toString() == activity.getString(R.string.mdx_value_percent, selected.toInt())
                 })
             }
+
+            val threadRow = page.findViewWithTag<View>("settings-$threadKey")
+            val autoLabel = activity.getString(R.string.mdx_value_threads_auto, coreCount)
+            instrumentation.runOnMainSync {
+                assertTrue(descendants(threadRow).filterIsInstance<TextView>().any { it.text.toString() == autoLabel })
+            }
+            openChoice(threadRow)
+            val manualChoices = listOf(1, 2, 4, 8, 16, 32)
+            instrumentation.runOnMainSync {
+                val menu = menu()!!
+                val expected = listOf(autoLabel) + manualChoices.map { activity.getString(R.string.mdx_value_threads, it) }
+                assertEquals(expected, (0 until menu.count).map { menu.adapter.getItem(it) })
+                menu.setSelection(manualChoices.size)
+            }
+            await { menu()?.findViewWithTag<View>("settings-choice-32") != null }
+            instrumentation.runOnMainSync {
+                val menu = menu()!!
+                menu.performItemClick(menu.findViewWithTag("settings-choice-32"), manualChoices.size, manualChoices.size.toLong())
+                assertEquals(32, MdxParameters.read(preferences).threads)
+            }
+            openChoice(threadRow)
+            instrumentation.runOnMainSync { menu()!!.setSelection(0) }
+            val autoTag = "settings-choice-${MdxParameters.AUTO_THREADS}"
+            await { menu()?.findViewWithTag<View>(autoTag) != null }
+            instrumentation.runOnMainSync {
+                val menu = menu()!!
+                menu.performItemClick(menu.findViewWithTag(autoTag), 0, 0L)
+                assertEquals(MdxParameters.AUTO_THREADS, raw.getString(threadKey, null))
+                assertEquals(coreCount, MdxParameters.read(preferences).threads)
+            }
         } finally {
-            raw.edit().apply { if (oldStrength == null) remove(key) else putString(key, oldStrength) }.commit()
+            raw.edit().apply {
+                if (oldStrength == null) remove(key) else putString(key, oldStrength)
+                if (oldThreads == null) remove(threadKey) else putString(threadKey, oldThreads)
+            }.commit()
             instrumentation.runOnMainSync { activity.finish() }
         }
     }

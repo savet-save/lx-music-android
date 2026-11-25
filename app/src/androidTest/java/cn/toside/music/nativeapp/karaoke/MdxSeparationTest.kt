@@ -76,7 +76,7 @@ class MdxSeparationTest {
                     assertTrue(kotlin.math.abs(java.lang.Short.reverseBytes(wave.readShort()).toInt()) < 700)
                 }
             }
-            val tuned = MdxParameters(strengthPercent = 90, overlapMs = 1000, threads = 1)
+            val tuned = MdxParameters(strengthPercent = 90, overlapMs = 1000, threads = 32)
             separate(model, input, output, frames, tuned) {}
             assertEquals(input.length(), output.length())
             // An identity prediction subtracted at 90% should leave 10% of the original, including across the join.

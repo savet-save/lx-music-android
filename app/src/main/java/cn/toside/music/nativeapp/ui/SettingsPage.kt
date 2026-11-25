@@ -346,8 +346,12 @@ internal class SettingsPage(
             defaults.strengthPercent, R.string.mdx_value_percent, R.string.mdx_settings_strength_hint)
         parameter(R.string.mdx_settings_overlap, MdxParameters.OVERLAP_KEY, MdxParameters.overlaps,
             defaults.overlapMs, R.string.mdx_value_millis, R.string.mdx_settings_overlap_hint)
-        parameter(R.string.mdx_settings_threads, MdxParameters.THREADS_KEY, MdxParameters.threadCounts,
-            defaults.threads, R.string.mdx_value_threads, R.string.mdx_settings_threads_hint)
+        val threadCounts = MdxParameters.threadCounts
+        val automatic = activity.getString(R.string.mdx_value_threads_auto, MdxParameters.availableThreads)
+        choice(R.string.mdx_settings_threads, MdxParameters.THREADS_KEY,
+            (listOf(automatic) + threadCounts.map { activity.getString(R.string.mdx_value_threads, it) }).toTypedArray(),
+            (listOf(MdxParameters.AUTO_THREADS) + threadCounts.map(Int::toString)).toTypedArray(), MdxParameters.AUTO_THREADS)
+        note(text(R.string.mdx_settings_threads_hint))
         note(text(R.string.mdx_settings_apply_hint))
     }
 

@@ -99,8 +99,7 @@ jboolean separate_audio(
     };
 
     try {
-        if (strength_percent < 90 || strength_percent > 120 || overlap_ms < 125 || overlap_ms > 1000 ||
-            threads < 1 || threads > 4) {
+        if (strength_percent < 90 || strength_percent > 120 || overlap_ms < 125 || overlap_ms > 1000 || threads < 1) {
             throw std::invalid_argument("Unsupported MDX-Net parameters");
         }
         if (!progress(0)) return JNI_FALSE;

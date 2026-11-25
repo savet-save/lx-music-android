@@ -13,7 +13,8 @@
     <string name="mdx_settings_overlap">Chunk overlap</string>
     <string name="mdx_settings_overlap_hint">Default is 250 ms. More overlap can smooth transitions between audio chunks. It requires more inference passes and takes longer.</string>
     <string name="mdx_settings_threads">Inference threads</string>
-    <string name="mdx_settings_threads_hint">Default is 2. More threads may speed up separation and can increase heat and battery use. Speed depends on the device.</string>
+    <string name="mdx_settings_threads_hint">The default uses the CPU cores available on the device. More threads may speed up separation and can increase heat and battery use. Speed depends on the device.</string>
+    <string name="mdx_value_threads_auto">By CPU core count (%1$d)</string>
     <string name="mdx_settings_apply_hint">Changes apply the next time Karaoke prepares a backing track. Cached tracks are reused when removal strength and chunk overlap match.</string>
     <string name="mdx_value_millis">%1$d ms</string>
 </resources>
