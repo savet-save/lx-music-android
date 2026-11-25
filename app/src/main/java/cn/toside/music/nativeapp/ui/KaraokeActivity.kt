@@ -90,7 +90,6 @@ class KaraokeActivity : FragmentActivity() {
     private var displayedRecordings: List<KaraokeRecording>? = null
     private val recordingRows = mutableMapOf<String, RecordingRow>()
     private var renderedPlaybackId: String? = null
-    private var service: PlaybackService? = null
     private var bound = false
     private var lyricJob: Job? = null
     private var lyrics = PlayerLyrics()
@@ -118,8 +117,6 @@ class KaraokeActivity : FragmentActivity() {
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName, binder: IBinder) {
             val player = (binder as PlaybackService.LocalBinder).service
-            service = player
-            prepareSong()
             lyricJob = lifecycleScope.launch {
                 player.lyricState.collect {
                     lyrics = it
@@ -127,7 +124,7 @@ class KaraokeActivity : FragmentActivity() {
                 }
             }
         }
-        override fun onServiceDisconnected(name: ComponentName) { service = null; lyricJob?.cancel() }
+        override fun onServiceDisconnected(name: ComponentName) { lyricJob?.cancel() }
     }
 
     override fun attachBaseContext(base: Context) = super.attachBaseContext(UiPreferences.context(base))
@@ -156,9 +153,8 @@ class KaraokeActivity : FragmentActivity() {
     override fun onStart() {
         super.onStart()
         if (song != null) {
-            prepareSong()
+            prepareSong(automatic = true)
             bound = bindService(Intent(this, PlaybackService::class.java), connection, BIND_AUTO_CREATE)
-            if (!bound && song?.source != "local") studio.message(R.string.karaoke_prepare_error)
         }
     }
 
@@ -168,7 +164,6 @@ class KaraokeActivity : FragmentActivity() {
         lyricJob?.cancel()
         if (bound) unbindService(connection)
         bound = false
-        service = null
         super.onStop()
     }
 
@@ -177,16 +172,13 @@ class KaraokeActivity : FragmentActivity() {
         super.onSaveInstanceState(outState)
     }
 
-    private fun prepareSong() {
+    private fun prepareSong(automatic: Boolean = false) {
         val selected = song ?: return
         if (PermissionPolicy.requiresLibraryAccess(this, selected) && checkSelfPermission(PermissionPolicy.audio(Build.VERSION.SDK_INT)) != PackageManager.PERMISSION_GRANTED) {
             studio.message(R.string.karaoke_prepare_error)
             return
         }
-        if (selected.source == "local") studio.prepare(selected) { _, _ -> selected.uri }
-        else service?.let { player ->
-            studio.prepare(selected) { file, progress -> player.karaokeInput(selected, file, progress) }
-        }
+        studio.prepare(selected, automatic = automatic)
     }
 
     private fun record() {
@@ -309,6 +301,9 @@ class KaraokeActivity : FragmentActivity() {
             addView(headerTitle, LinearLayout.LayoutParams(0, -2, 1f))
             sectionButton = button(R.string.karaoke_library) { studio.showLibrary(!studio.state.value.libraryOpen) }
             addView(sectionButton, LinearLayout.LayoutParams(-2, -2))
+            addView(button(R.string.karaoke_queue_button) {
+                startActivity(Intent(this@KaraokeActivity, KaraokeQueueActivity::class.java))
+            }.apply { tag = "karaoke-open-queue" }, LinearLayout.LayoutParams(-2, -2))
         }
         addView(toolbar, LinearLayout.LayoutParams(-1, dp(56)))
         addView(View(context).apply { setBackgroundColor(palette.divider) }, LinearLayout.LayoutParams(-1, dp(1)))
@@ -448,9 +443,10 @@ class KaraokeActivity : FragmentActivity() {
             return
         }
         val preparing = state.stage == KaraokeStage.PREPARING
+        val cancelled = state.stage == KaraokeStage.IDLE && state.message == R.string.karaoke_preparation_cancelled
         val statusText = when (state.stage) {
-            KaraokeStage.IDLE -> getString(R.string.karaoke_preparing)
-            KaraokeStage.PREPARING -> getString(R.string.karaoke_preparing_progress, state.prepareProgress)
+            KaraokeStage.IDLE -> if (cancelled) "" else getString(R.string.karaoke_preparing)
+            KaraokeStage.PREPARING -> karaokePreparationStatus(state.preparation)
             KaraokeStage.READY -> getString(when {
                 state.separated -> R.string.karaoke_model_ready
                 state.mono -> R.string.karaoke_mono
@@ -464,9 +460,10 @@ class KaraokeActivity : FragmentActivity() {
             KaraokeStage.REVIEW -> getString(R.string.karaoke_review)
         }
         if (status.text != statusText) status.text = statusText
+        status.visibility = if (statusText.isEmpty()) View.GONE else View.VISIBLE
         val editing = state.stage == KaraokeStage.REVIEW
         val draft = state.draftPlayback.takeIf { editing || state.stage == KaraokeStage.MIXING }
-        timing.visibility = if (preparing) View.GONE else View.VISIBLE
+        timing.visibility = if (preparing || cancelled) View.GONE else View.VISIBLE
         if (draft != null) {
             if (!draftSeek.dragging) updateTiming(timing, draft.positionMs, draft.durationMs)
             draftSeek.update(draft.positionMs, draft.durationMs)
@@ -481,9 +478,9 @@ class KaraokeActivity : FragmentActivity() {
             else -> R.string.karaoke_preview
         })
         if (preview.text != previewLabel) preview.text = previewLabel
-        progress.visibility = if (draft == null) View.VISIBLE else View.GONE
+        progress.visibility = if (draft == null && !cancelled) View.VISIBLE else View.GONE
         progress.max = if (preparing) 100 else state.duration.coerceAtLeast(1)
-        progress.progress = if (preparing) state.prepareProgress else state.position
+        progress.progress = if (preparing) state.modelDownload ?: state.prepareProgress else state.position
         val monitoring = state.stage == KaraokeStage.READY || state.stage == KaraokeStage.RECORDING || state.stage == KaraokeStage.PAUSED
         originalSwitch.visibility = if (monitoring) View.VISIBLE else View.GONE
         originalSwitch.isEnabled = monitoring && !state.mono && state.modelDownload == null

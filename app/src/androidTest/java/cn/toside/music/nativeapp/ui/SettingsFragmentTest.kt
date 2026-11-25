@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.os.Bundle
 import android.os.SystemClock
+import android.text.format.Formatter
 import android.view.View
 import android.view.ViewGroup
 import android.view.KeyEvent
@@ -24,7 +25,10 @@ import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
 import androidx.test.runner.lifecycle.Stage
 import cn.toside.music.nativeapp.R
 import cn.toside.music.nativeapp.data.AppPreferences
+import cn.toside.music.nativeapp.karaoke.KaraokeAudio
+import cn.toside.music.nativeapp.karaoke.KaraokeBackingCache
 import cn.toside.music.nativeapp.karaoke.MdxParameters
+import cn.toside.music.nativeapp.player.AudioStreamCache
 import cn.toside.music.nativeapp.player.PlaybackService
 import cn.toside.music.nativeapp.source.SourceHttpFixture
 import cn.toside.music.nativeapp.update.NativeRelease
@@ -350,6 +354,57 @@ class SettingsFragmentTest {
             instrumentation.runOnMainSync { activity.finish() }
         }
     }
+
+    @Test fun cachePageReportsAndClearsKaraokeAccompanimentIndependently() = runBlocking {
+        val activity = start()
+        val context = instrumentation.targetContext
+        val directory = context.cacheDir.resolve("settings-cache-test-${System.nanoTime()}").apply { mkdir() }
+        val input = directory.resolve("audio.wav")
+        val backing = directory.resolve("backing.wav")
+        val original = directory.resolve("original.wav")
+        val song = Song(System.nanoTime(), Uri.fromFile(input), "Cache fixture", "", 1000)
+        val stream = AudioStreamCache.get(context)
+        val playbackKey = AudioStreamCache.key(song.copy(source = "kw"), "128k")
+        val karaoke = KaraokeBackingCache(context)
+        try {
+            KaraokeAudio.WavWriter(input).use { it.write(ShortArray(KaraokeAudio.RATE * 2), KaraokeAudio.RATE * 2) }
+            val before = stream.usage()
+            stream.storeFile(playbackKey, input)
+            val prepared = karaoke.reuseOrPrepare(song, backing, original) {
+                KaraokeAudio.prepare(context, song.uri, backing, song.duration, original) {}
+            }
+            val karaokeSize = backing.length() + original.length()
+            val playbackSize = before.playbackBytes + input.length()
+            val restored = karaoke.reuseOrPrepare(song, directory.resolve("restored.wav"), directory.resolve("monitor.wav")) {
+                error("The generated accompaniment should be reusable")
+            }
+            instrumentation.runOnMainSync { activity.openSettings("cache") }
+            val page = settings(activity).requireView()
+            fun checkUsage(playback: Long, accompaniment: Long) {
+                val expected = activity.getString(R.string.ui_31b0dd704fee,
+                    Formatter.formatShortFileSize(activity, playback), Formatter.formatShortFileSize(activity, accompaniment), "", "")
+                    .lineSequence().take(2).toList()
+                await { page.findViewWithTag<TextView>("settings-cache-usage").text.lineSequence().take(2).toList() == expected }
+                assertEquals(AudioStreamCache.Usage(playback, accompaniment), stream.usage())
+            }
+            checkUsage(playbackSize, before.karaokeBytes + karaokeSize)
+
+            instrumentation.runOnMainSync { page.findViewWithTag<View>("settings-clear-karaoke-cache").performClick() }
+            checkUsage(playbackSize, 0)
+            assertEquals(backing.length(), restored.file.length())
+            assertEquals(original.length(), checkNotNull(restored.original).length())
+
+            karaoke.remember(song, prepared)
+            instrumentation.runOnMainSync { page.findViewWithTag<View>("settings-clear-playback-cache").performClick() }
+            checkUsage(0, karaokeSize)
+        } finally {
+            instrumentation.runOnMainSync { activity.finish() }
+            stream.remove(playbackKey)
+            stream.removeSong(AudioStreamCache.key(song, ""))
+            directory.deleteRecursively()
+        }
+    }
+
     @Test fun onlineImportReportsFailureAllowsRetryAndRefreshesEnabledSource() = runBlocking {
         val activity = start()
         val player = field(activity, "service") as PlaybackService

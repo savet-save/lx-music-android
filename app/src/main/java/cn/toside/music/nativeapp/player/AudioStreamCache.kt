@@ -45,8 +45,23 @@ internal class AudioStreamCache(private val context: Context, directory: File = 
         if(headers.isEmpty()) upstream else DefaultDataSource.Factory(context, OkHttpDataSource.Factory(httpClient).setDefaultRequestProperties(headers)))
         .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
     fun updateLimit(bytes: Long) = synchronized(cache) { evictor.update(cache, bytes) }
-    fun clear() { cache.keys.toList().forEach { cache.removeResource(it) } }
     val bytes: Long get() = cache.cacheSpace
+
+    internal data class Usage(val playbackBytes: Long, val karaokeBytes: Long)
+
+    internal fun usage(): Usage = synchronized(cache) {
+        val karaokeBytes = cache.keys.asSequence().filter { it.startsWith(KARAOKE_PREFIX) }
+            .sumOf { key -> cache.getCachedSpans(key).sumOf { it.length } }
+        Usage(cache.cacheSpace - karaokeBytes, karaokeBytes)
+    }
+
+    internal fun clearPlayback() = clearCategory(karaoke = false)
+    internal fun clearKaraoke() = clearCategory(karaoke = true)
+
+    private fun clearCategory(karaoke: Boolean) = synchronized(cache) {
+        cache.keys.filter { it.startsWith(KARAOKE_PREFIX) == karaoke }.forEach(cache::removeResource)
+    }
+
     internal fun remove(key: String) {
         cache.removeResource(key)
         if (key in cache.keys) cache.applyContentMetadataMutations(key, ContentMetadataMutations().remove("native_uri").also {
@@ -55,7 +70,7 @@ internal class AudioStreamCache(private val context: Context, directory: File = 
         })
     }
     internal fun removeSong(prefix: String) {
-        cache.keys.filter { it.startsWith(prefix) || it.startsWith("karaoke:$prefix") }.forEach(cache::removeResource)
+        cache.keys.filter { it.startsWith(prefix) || it.startsWith(KARAOKE_PREFIX + prefix) }.forEach(cache::removeResource)
     }
     fun cachedUri(key: String): Uri? {
         val metadata = cache.getContentMetadata(key)
@@ -183,6 +198,7 @@ internal class AudioStreamCache(private val context: Context, directory: File = 
     }
     override fun close() { cache.release(); database.close() }
     companion object {
+        const val KARAOKE_PREFIX = "karaoke:"
         @Volatile private var instance: AudioStreamCache? = null
         fun get(context: Context): AudioStreamCache = instance ?: synchronized(this) {
             instance ?: AudioStreamCache(context.applicationContext).also { instance = it }

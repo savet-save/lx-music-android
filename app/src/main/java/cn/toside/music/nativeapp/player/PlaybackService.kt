@@ -489,12 +489,11 @@ class PlaybackService : Service() {
     private fun preferredQuality() = getSharedPreferences("player", MODE_PRIVATE).getString("quality", "128k") ?: "128k"
     private fun audioResolver() = SourceAudioResolver(userSource, matcher::find, preferences.bool("player.autoSwitchSource", true))
     suspend fun resolveUrl(song: Song): String = resolveAudio(song, preferredQuality()).url
-    internal suspend fun karaokeInput(song: Song, target: java.io.File, progress: (Int) -> Unit): Uri {
-        if (song.source == "local") return song.uri
-        Downloads(applicationContext).playbackUri(song, preferredQuality())?.let { return it }
+    internal suspend fun karaokeInput(song: Song, quality: String, target: java.io.File, progress: (Int) -> Unit): Uri {
+        Downloads(applicationContext).playbackUri(song, quality)?.let { return it }
         val cache = AudioStreamCache.existing()
         val cached = cache != null && withContext(Dispatchers.IO) {
-            val complete = cache.completeAudio(song, if (song.source == "bili") "original" else preferredQuality())
+            val complete = cache.completeAudio(song, if (song.source == "bili") "original" else quality)
                 ?: cache.completeAudios(song).firstOrNull()?.second
             complete != null && complete.length <= KaraokeSource.MAX_BYTES &&
                 target.outputStream().buffered().use { output ->
@@ -507,7 +506,7 @@ class PlaybackService : Service() {
         val input = if (song.source == "bili" && JSONObject(song.sourceInfo ?: "{}").optLong("cid") <= 0)
             cn.toside.music.nativeapp.online.BilibiliApi(applicationContext).firstPart(song) else song
         val headers = if (input.source == "bili") cn.toside.music.nativeapp.online.BilibiliApi.audioHeaders else emptyMap()
-        return KaraokeSource.copy(resolveUrl(input), headers, target, progress)
+        return KaraokeSource.copy(resolveAudio(input, quality).url, headers, target, progress)
     }
     internal suspend fun resolveDownloadUrl(song: Song, quality: String): String = resolveDownloadAddress(song, quality).url
     internal suspend fun resolveDownloadAddress(song: Song, quality: String, excluded: Set<String> = emptySet()): SourceAudio =

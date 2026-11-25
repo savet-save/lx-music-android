@@ -7,6 +7,7 @@ import android.graphics.Typeface
 import android.os.Bundle
 import android.text.InputFilter
 import android.text.InputType
+import android.text.format.Formatter
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -40,6 +41,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 internal class SettingsActions(
@@ -74,6 +77,7 @@ internal class SettingsPage(
     private val scope = CoroutineScope(parentScope.coroutineContext + SupervisorJob(parentScope.coroutineContext[Job]))
     private var pageJob: Job? = null
     private var importJob: Job? = null
+    private val cacheOperations = Mutex()
     private var current = state?.getString("category")?.takeIf { id -> categories.any { it.first == id } } ?: "basic"
     private var sourceUrl = state?.getString("source-url").orEmpty()
     private val positions = categories.associate { it.first to (state?.getInt("scroll-${it.first}") ?: 0) }.toMutableMap()
@@ -525,19 +529,35 @@ internal class SettingsPage(
         note(text(R.string.settings_apply_hint))
     }
     private fun cache() {
-        choice(R.string.ui_0269e7020043, "player.cacheSize", arrayOf(text(R.string.ui_363b6afc345c), "128 MB", "512 MB", "1 GB", "2 GB", "4 GB", "8 GB"), arrayOf("0", "128", "512", "1024", "2048", "4096", "8192"), "1024")
-        val status = note(text(R.string.ui_3ea7896aff54))
+        val cache = CacheMaintenance(activity)
+        val status = noteView(text(R.string.ui_3ea7896aff54)).apply { tag = "settings-cache-usage" }
+        fun size(bytes: Long) = Formatter.formatShortFileSize(activity, bytes)
         suspend fun updateSize() {
-            val cache = CacheMaintenance(activity)
-            status.text = activity.getString(R.string.ui_31b0dd704fee, (cache.audioBytes() / 1024 / 1024).toString(), (cache.resourceBytes() / 1024).toString(), (cache.lyricBytes() / 1024).toString())
+            val audio = cache.audioUsage()
+            status.text = activity.getString(R.string.ui_31b0dd704fee, size(audio.playbackBytes), size(audio.karaokeBytes),
+                size(cache.resourceBytes()), size(cache.lyricBytes()))
         }
-        pageJob = scope.launch { try { updateSize() } catch (e: CancellationException) { throw e } catch (e: Exception) { status.text = e.localizedMessage } }
-        fun clear(title: Int, block: suspend () -> Unit) { action(text(title)) {
-            scope.launch { try { block(); updateSize() } catch (e: CancellationException) { throw e } catch (e: Exception) { status.text = activity.getString(R.string.ui_ca88f243ff2a, e.localizedMessage.orEmpty()) } }
-        } }
-        clear(R.string.ui_12ccb655405b) { CacheMaintenance(activity).clearResources() }
-        clear(R.string.ui_26cc8d0af3e5) { CacheMaintenance(activity).clearAudio() }
-        clear(R.string.ui_a84c68e6881a) { CacheMaintenance(activity).clearLyrics(); refresh() }
+        fun updateAfter(block: suspend () -> Unit) {
+            scope.launch {
+                try { cacheOperations.withLock { block(); updateSize() } }
+                catch (e: CancellationException) { throw e }
+                catch (e: Exception) { status.text = activity.getString(R.string.ui_ca88f243ff2a, e.localizedMessage.orEmpty()) }
+            }
+        }
+        choice(R.string.ui_0269e7020043, "player.cacheSize",
+            arrayOf(text(R.string.ui_363b6afc345c), "128 MB", "512 MB", "1 GB", "2 GB", "4 GB", "8 GB"),
+            arrayOf("0", "128", "512", "1024", "2048", "4096", "8192"), "1024") { updateAfter(cache::updateAudioLimit) }
+        content.addView(status)
+        pageJob = scope.launch {
+            try { cacheOperations.withLock { updateSize() } }
+            catch (e: CancellationException) { throw e }
+            catch (e: Exception) { status.text = e.localizedMessage }
+        }
+        fun clear(title: Int, block: suspend () -> Unit) = action(text(title)) { updateAfter(block) }
+        clear(R.string.ui_12ccb655405b, cache::clearResources)
+        clear(R.string.ui_26cc8d0af3e5, cache::clearPlayback).tag = "settings-clear-playback-cache"
+        clear(R.string.karaoke_cache_clear, cache::clearKaraoke).tag = "settings-clear-karaoke-cache"
+        clear(R.string.ui_a84c68e6881a) { cache.clearLyrics(); refresh() }
         val matches = note(activity.getString(R.string.matching_cache_count, player()?.matchingCacheCount ?: 0))
         action(text(R.string.matching_cache_clear)) { player()?.clearMatchingCache(); matches.text = activity.getString(R.string.matching_cache_count, player()?.matchingCacheCount ?: 0) }
         action(text(R.string.ui_e4272bc9fe9f)) { scope.launch {
@@ -584,7 +604,7 @@ internal class SettingsPage(
         row.addView(toggle); row.setOnClickListener { toggle.toggle() }
         content.addView(row, LinearLayout.LayoutParams(-1, -2)); divider(content)
     }
-    private fun choice(title: Int, key: String, labels: Array<String>, values: Array<String>, fallback: String) {
+    private fun choice(title: Int, key: String, labels: Array<String>, values: Array<String>, fallback: String, onChanged: () -> Unit = {}) {
         fun selected() = preferences.string(key, fallback).takeIf { it in values } ?: fallback
         lateinit var row: LinearLayout
         row = action(text(title), labels[values.indexOf(selected()).coerceAtLeast(0)]) {
@@ -592,6 +612,7 @@ internal class SettingsPage(
                 val index = values.indexOf(value)
                 preferences.set(key, value); refresh()
                 ((row.getChildAt(0) as LinearLayout).getChildAt(1) as TextView).text = labels[index]
+                onChanged()
             }
         }
         row.tag = "settings-$key"

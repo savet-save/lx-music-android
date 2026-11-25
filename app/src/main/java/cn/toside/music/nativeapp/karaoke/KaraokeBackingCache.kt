@@ -23,12 +23,13 @@ internal class KaraokeBackingCache(private val context: Context) {
         target: File,
         original: File? = null,
         separation: MdxParameters? = null,
+        quality: String = preferredQuality(),
         prepare: suspend () -> KaraokeBacking,
     ): KaraokeBacking {
         val key = withContext(Dispatchers.IO) {
             check(target.delete() || !target.exists())
             original?.let { check(it.delete() || !it.exists()) }
-            cacheAttempt { key(song) }
+            key(song, quality)
         }
         if (key != null) {
             val reused = withContext(Dispatchers.IO) { cacheAttempt { restore(key, target, separation) } }
@@ -96,16 +97,19 @@ internal class KaraokeBackingCache(private val context: Context) {
         return null
     }
 
-    private fun key(song: Song): String? {
-        if (preferences.audioCacheBytes == 0L) return null
+    internal fun preferredQuality() = context.getSharedPreferences("player", Context.MODE_PRIVATE)
+        .getString("quality", "128k") ?: "128k"
+
+    private fun key(song: Song, quality: String = preferredQuality()): String? =
+        if (preferences.audioCacheBytes == 0L) null else sourceKey(song, quality)
+
+    internal fun sourceKey(song: Song, quality: String): String? = cacheAttempt {
         val identity = JSONArray().put(song.uri.toString())
-        if (song.source == "local") identity.put(localRevision(song.uri) ?: return null)
-        else identity.put(song.sourceInfo).put(song.duration).put(
-            context.getSharedPreferences("player", Context.MODE_PRIVATE).getString("quality", "128k"),
-        )
+        if (song.source == "local") identity.put(localRevision(song.uri) ?: return@cacheAttempt null)
+        else identity.put(song.sourceInfo).put(song.duration).put(quality)
         val digest = MessageDigest.getInstance("SHA-256").digest(identity.toString().toByteArray())
             .joinToString("") { "%02x".format(it.toInt() and 255) }
-        return "karaoke:${AudioStreamCache.key(song, "")}$FORMAT_VERSION:$digest"
+        "${AudioStreamCache.KARAOKE_PREFIX}${AudioStreamCache.key(song, "")}$FORMAT_VERSION:$digest"
     }
 
     private fun localRevision(uri: Uri): String? {

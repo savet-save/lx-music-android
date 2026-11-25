@@ -2,6 +2,14 @@
     <string name="karaoke_title">K 歌</string>
     <string name="karaoke_library">我的 K 歌歌单</string>
     <string name="karaoke_empty_library">还没有保存的 K 歌作品</string>
+    <string name="karaoke_queue_title">转换队列</string>
+    <string name="karaoke_queue_button">队列</string>
+    <string name="karaoke_queue_empty">没有正在转换或等待的歌曲</string>
+    <string name="karaoke_queue_waiting">等待转换 · 第 %1$d 位</string>
+    <string name="karaoke_queue_cancelling">正在取消…</string>
+    <string name="karaoke_queue_cancel_song">取消转换《%1$s》</string>
+    <string name="karaoke_preparation_cancelled">已取消伴奏转换</string>
+    <string name="karaoke_cache_clear">清理 K 歌伴奏缓存</string>
     <string name="karaoke_preparing">正在准备伴奏…</string>
     <string name="karaoke_preparing_progress">正在准备伴奏… %1$d%%</string>
     <string name="karaoke_ready">已生成基础伴奏。建议戴耳机录唱，减少伴奏串入麦克风。</string>
