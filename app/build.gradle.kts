@@ -55,6 +55,8 @@ val releaseSigningValues = listOf("NATIVE_STORE_PASSWORD", "NATIVE_KEY_ALIAS", "
 val releaseKeystore = rootProject.file(
     localProperties.getProperty("NATIVE_KEYSTORE_PATH")?.takeIf { it.isNotBlank() } ?: "NewKeyStrore.jks"
 )
+val onnxRuntimeVersion = "1.29.0"
+val onnxRuntimeOnline = providers.gradleProperty("nativeOnnxRuntimeOnline").map { it.toBooleanStrict() }.orElse(false)
 val onnxRuntime = configurations.create("onnxRuntime") { isTransitive = false }
 val onnxRuntimeDir = layout.buildDirectory.dir("generated/onnxruntime")
 val extractOnnxRuntime = tasks.register<Sync>("extractOnnxRuntime") {
@@ -98,6 +100,7 @@ android {
         versionCode = providers.gradleProperty("nativeVersionCode").get().toInt().also { require(it > 0) }
         versionName = providers.gradleProperty("nativeVersionName").get().also { require(it.matches(Regex("\\d+\\.\\d+\\.\\d+"))) }
         testInstrumentationRunner = "cn.toside.music.nativeapp.NativeTestRunner"
+        resValue("string", "onnx_runtime_version", onnxRuntimeVersion)
         // The universal APK also includes the x86 QuickJS libraries from its AAR.
         // Build every matching encoder ABI even when separate ARM APKs are requested.
         externalNativeBuild {
@@ -183,7 +186,11 @@ tasks.matching {
 }
 
 dependencies {
-    add(onnxRuntime.name, "com.microsoft.onnxruntime:onnxruntime-android:1.22.0@aar")
+    if (onnxRuntimeOnline.get()) {
+        add(onnxRuntime.name, "com.microsoft.onnxruntime:onnxruntime-android:$onnxRuntimeVersion@aar")
+    } else {
+        add(onnxRuntime.name, files(rootProject.file("third_party/onnxruntime/onnxruntime-android-$onnxRuntimeVersion.aar")))
+    }
     implementation(libs.jaudiotagger)
     implementation(libs.androidx.core)
     implementation(libs.androidx.fragment.ktx)

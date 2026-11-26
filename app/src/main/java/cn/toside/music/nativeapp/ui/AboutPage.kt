@@ -131,10 +131,11 @@ internal class AboutPage(
         content.addView(button(R.string.ui_038ad816c53f) {
             if (license.visibility == View.VISIBLE) license.visibility = View.GONE
             else {
+                val onnxRuntimeVersion = activity.getString(R.string.onnx_runtime_version)
                 val separationLicenses = listOf(
-                    "ONNX Runtime 1.22.0 — MIT\nhttps://github.com/microsoft/onnxruntime",
+                    "ONNX Runtime $onnxRuntimeVersion — MIT\nhttps://github.com/microsoft/onnxruntime",
                     activity.assets.open("licenses/ONNX-Runtime-MIT.txt").bufferedReader().use { it.readText() },
-                    "ONNX Runtime third-party notices\nhttps://github.com/microsoft/onnxruntime/blob/v1.22.0/ThirdPartyNotices.txt",
+                    "ONNX Runtime third-party notices\nhttps://cdn.jsdelivr.net/gh/microsoft/onnxruntime@v$onnxRuntimeVersion/ThirdPartyNotices.txt",
                     "MDX-Net — KUIELab\nhttps://github.com/kuielab/mdx-net",
                     activity.assets.open("licenses/Ultimate-Vocal-Remover-MIT.txt").bufferedReader().use { it.readText() },
                 ).joinToString("\n\n")

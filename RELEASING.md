@@ -47,6 +47,18 @@ Release APK 输出到 `app/build/outputs/apk/release/`，保留原文件名前�
 
 只有显式传入 `-PnativeSplitApks=true` 时才拆分三个 APK；不传时仍生成一个 `-all.apk`，Debug 构建保持原来的单包行为。
 
+### ONNX Runtime 运行库
+
+仓库随源码提供 [ONNX Runtime Android 1.29.0 的官方 AAR](https://repo.maven.apache.org/maven2/com/microsoft/onnxruntime/onnxruntime-android/1.29.0/)。`gradle.properties` 中 `nativeOnnxRuntimeOnline=false` 时，Debug、Release、内置模型版及 CI 均直接读取 `third_party/onnxruntime/onnxruntime-android-1.29.0.aar`，从中提取 C/C++ 头文件和四种 ABI 的 `libonnxruntime.so`。文件大小为 `51897836` 字节，SHA-256 为 `e97540ca78fe36f6fe2013f82843414fb843b6c7681fb04644cba5e1406662dd`。
+
+将该设置改为 `true`，或在构建时传入 `-PnativeOnnxRuntimeOnline=true`，即可由 Gradle 从 Maven Central 解析同一版本的 AAR。开关用于选择构建期运行库来源。首次构建仍需取得 Gradle 和其他依赖。MDX-Net 模型的下载和打包见下一节。
+
+```powershell
+.\gradlew.bat :app:assembleDebug -PnativeOnnxRuntimeOnline=true
+```
+
+ONNX Runtime 的 [MIT 许可](app/src/main/assets/licenses/ONNX-Runtime-MIT.txt) 和 [第三方声明](app/src/main/assets/licenses/ONNX-Runtime-ThirdPartyNotices.txt) 随 APK 分发。升级运行库时，同步更新 AAR、构建版本、许可及第三方声明，并记录新的文件校验值。
+
 ### 内置 MDX-Net 模型版
 
 从 [UVR 官方模型发布页](https://github.com/TRvlvr/model_repo/releases/tag/all_public_uvr_models) 取得 `UVR_MDXNET_1_9703.onnx` 后，可额外构建一个含模型的通用 APK。
