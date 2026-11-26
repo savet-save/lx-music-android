@@ -89,6 +89,24 @@ class MultiSourceTest {
             assertEquals(3,library.read().entries.size)
         }
     }
+    @Test fun refreshingSelectedAddressRetainsItsPlatformAndQualityBeforeFallingBack() = runBlocking {
+        isolated { _, sources, _ ->
+            val first = script("address refresh", "if (info.type !== '320k' || info.musicInfo.songmid !== 82) throw Error('wrong recording');\n" +
+                "if (calls === 1) return 'https://example.org/old.mp3'; throw Error('expired');", platform = "tx")
+            val second = script("fallback", "return 'https://example.org/backup.mp3';", platform = "tx")
+            listOf(first, second).forEach { sources.import(it) }
+            sources.setEnabledOrder(listOf(id(first), id(second)))
+            val match = song.copy(id = 82, source = "tx", sourceInfo = """{"songmid":82}""")
+            SourceAudioResolver(sources, { _, _ -> listOf(match) }, true).Playback(song, listOf("320k"), this).use { search ->
+                assertEquals("https://example.org/old.mp3", search.next().url)
+                assertNull(search.refresh())
+                assertEquals(id(second), search.next().sourceId)
+                try { search.next(); fail("No untried source remains") }
+                catch (e: SourceResolutionException) { assertEquals(listOf(id(first), id(second)), e.attemptedSources) }
+            }
+        }
+    }
+
     @Test fun requestAndBadLinkFailuresAdvanceInTheConfiguredOrder() = runBlocking {
         isolated { _, sources, _ ->
             val a = script("unavailable", "throw Error('unavailable');")

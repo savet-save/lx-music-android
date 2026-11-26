@@ -4,6 +4,7 @@ package cn.toside.music.nativeapp.player
 
 import android.content.Context
 import android.net.Uri
+import android.os.SystemClock
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.Format
@@ -19,14 +20,19 @@ import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.audio.ForwardingAudioSink
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.datasource.HttpDataSource
+import androidx.media3.datasource.DataSource
+import androidx.media3.datasource.DataSpec
+import androidx.media3.datasource.TransferListener
+import okhttp3.Call
 import java.nio.ByteBuffer
+import java.util.concurrent.atomic.AtomicReference
 
 /** Native Media3 path for cached streaming and optional hardware audio offload. */
 internal class NativeAudioPlayer(context: Context, cache: AudioStreamCache?, private val offload: Boolean,
     private val changed: (NativeAudioPlayer) -> Unit, private val completed: (NativeAudioPlayer) -> Unit,
     private val failed: (NativeAudioPlayer, String) -> Unit, headers: Map<String,String> = emptyMap(),
     retryBudget: PlaybackRetryBudget = PlaybackRetryBudget(), audioSessionId: Int = C.AUDIO_SESSION_ID_UNSET,
-    equalizerEnabled: Boolean = false) {
+    equalizerEnabled: Boolean = false, readFromStart: Boolean = false, freshConnection: Boolean = false) {
     private val retryPolicy = StreamingRetryPolicy(retryBudget)
     internal val streamRetriesExhausted get() = retryPolicy.exhausted
     internal var failedHttpStatus: Int? = null
@@ -35,6 +41,24 @@ internal class NativeAudioPlayer(context: Context, cache: AudioStreamCache?, pri
         private set
     private val levels = PlaybackLevels()
     @Volatile var measureAudioLevels = false
+    @Volatile private var released = false
+    @Volatile private var readFullResponse = readFromStart
+    @Volatile var reconnecting = freshConnection
+        private set
+    @Volatile var lastUpstreamActivity = 0L
+        private set
+    private val upstreamCall = AtomicReference<Call?>()
+    private var callBeforeSeek: Call? = null
+    private val transferListener = object : TransferListener {
+        override fun onTransferInitializing(source: DataSource, dataSpec: DataSpec, isNetwork: Boolean) = Unit
+        override fun onTransferStart(source: DataSource, dataSpec: DataSpec, isNetwork: Boolean) {
+            if (isNetwork) lastUpstreamActivity = SystemClock.elapsedRealtime()
+        }
+        override fun onTransferEnd(source: DataSource, dataSpec: DataSpec, isNetwork: Boolean) = Unit
+        override fun onBytesTransferred(source: DataSource, dataSpec: DataSpec, isNetwork: Boolean, bytesTransferred: Int) {
+            if (isNetwork && bytesTransferred > 0) lastUpstreamActivity = SystemClock.elapsedRealtime()
+        }
+    }
     private val renderers = object : DefaultRenderersFactory(context) {
         override fun buildAudioSink(context: Context, enableFloatOutput: Boolean, enableAudioOutputPlaybackParams: Boolean): AudioSink? =
             super.buildAudioSink(context, enableFloatOutput, enableAudioOutputPlaybackParams)?.let { sink ->
@@ -42,7 +66,12 @@ internal class NativeAudioPlayer(context: Context, cache: AudioStreamCache?, pri
             }
     }
     internal val engine = ExoPlayer.Builder(context, renderers).setMediaSourceFactory(if (cache == null) DefaultMediaSourceFactory(context)
-        else DefaultMediaSourceFactory(cache.dataSource(headers)).setLoadErrorHandlingPolicy(retryPolicy)).build()
+        else DefaultMediaSourceFactory(cache.dataSource(headers, transferListener, readFromStart = { readFullResponse },
+            freshConnection = { reconnecting }) { call ->
+            lastUpstreamActivity = SystemClock.elapsedRealtime()
+            upstreamCall.set(call)
+            if (released) call.cancel()
+        }).setLoadErrorHandlingPolicy(retryPolicy)).build()
     var recorded = false
     init {
         engine.setWakeMode(C.WAKE_MODE_NETWORK)
@@ -50,7 +79,13 @@ internal class NativeAudioPlayer(context: Context, cache: AudioStreamCache?, pri
         if (audioSessionId > 0) engine.setAudioSessionId(audioSessionId)
         setEqualizerEnabled(equalizerEnabled)
         engine.addListener(object : Player.Listener {
-            override fun onPlaybackStateChanged(state: Int) { if (state == Player.STATE_ENDED) completed(this@NativeAudioPlayer) else changed(this@NativeAudioPlayer) }
+            override fun onPlaybackStateChanged(state: Int) {
+                if (state == Player.STATE_READY) {
+                    readFullResponse = false
+                    reconnecting = false
+                }
+                if (state == Player.STATE_ENDED) completed(this@NativeAudioPlayer) else changed(this@NativeAudioPlayer)
+            }
             override fun onIsPlayingChanged(isPlaying: Boolean) { changed(this@NativeAudioPlayer) }
             override fun onPlayerError(error: PlaybackException) {
                 failedHttpStatus = generateSequence<Throwable>(error) { it.cause }
@@ -82,10 +117,28 @@ internal class NativeAudioPlayer(context: Context, cache: AudioStreamCache?, pri
     fun playbackLevel() = levels.at(engine.currentPosition)
     fun play() { if (engine.playbackState == Player.STATE_ENDED) engine.seekTo(0); engine.play() }
     fun pause() { engine.pause() }
-    fun seekTo(value: Int) { engine.seekTo(value.toLong()) }
+    fun seekTo(value: Int) {
+        callBeforeSeek = upstreamCall.get()
+        engine.seekTo(value.toLong())
+    }
+    fun restartBlockedSeek(position: Int): Boolean {
+        val call = callBeforeSeek ?: return false
+        callBeforeSeek = null
+        if (!upstreamCall.compareAndSet(call, null)) return false
+        engine.stop()
+        call.cancel()
+        engine.seekTo(position.toLong())
+        engine.prepare()
+        return true
+    }
+    fun failSeek() = failed(this, "Seek buffer timeout")
     fun rate(value: Float) { engine.playbackParameters = PlaybackParameters(value, 1f) }
     fun volume(value: Float) { engine.volume = value }
-    fun release() { engine.release() }
+    fun release() {
+        released = true
+        upstreamCall.getAndSet(null)?.cancel()
+        engine.release()
+    }
 }
 
 /** Observe the decoded buffers without changing their contents, volume, or playback path. */

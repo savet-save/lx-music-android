@@ -35,10 +35,11 @@ internal class KaraokePreparation(private val context: Context) {
     data class QueueEntry(val id: String, val song: Song, val progress: Progress)
     class Cancelled : Exception()
 
-    private data class Key(val source: Any, val quality: String, val parameters: MdxParameters?, val installModel: Boolean)
+    private data class Key(val source: String, val recording: String)
 
     private class Task(val directory: File, val key: Key, val song: Song,
-        val input: KaraokeInput, val previous: KaraokeBacking?) {
+        val input: KaraokeInput, val previous: KaraokeBacking?, val quality: String,
+        val parameters: MdxParameters?, val installModel: Boolean) {
         val id get() = directory.name
         val progress = MutableStateFlow(Progress())
         val sourceStaged = CompletableDeferred<Unit>()
@@ -76,14 +77,18 @@ internal class KaraokePreparation(private val context: Context) {
     ): Prepared = withContext(Dispatchers.IO) {
         val quality = if (song.source == "local") "" else cache.preferredQuality()
         val parameters = MdxParameters.read(preferences).takeIf { preferences.bool(MdxParameters.ENABLED_KEY, true) }
-        val key = Key(cache.sourceKey(song, quality) ?: song, quality, parameters, installModel && parameters != null)
+        val key = Key(song.source, if (song.source == "local" && song.uri != Uri.EMPTY) song.uri.normalizeScheme().toString() else song.id.toString())
+        if (!installModel && synchronized(tasks) { key !in tasks }) {
+            val separation = parameters?.takeIf { mdx.hasModelInput() }
+            val restored = cache.restoreCached(song, directory, separation, quality)
+            if (restored != null) return@withContext Prepared(restored, parameters != null, separation != null, null)
+        }
+        val seed = previous?.takeIf { it.cacheKey == null || it.cacheKey == cache.sourceKey(song, quality) }
         val (task, stagingPrevious) = synchronized(tasks) {
-            // Opening the studio also joins a model download or separation started by the retry button.
-            val modelTask = tasks[key.copy(installModel = true)].takeIf { parameters != null }
-            val running = modelTask ?: tasks[key]
-            val seed = previous?.takeIf { it.cacheKey == null || it.cacheKey == key.source }
+            // Metadata and preparation settings can change while the same recording is in the queue.
+            val running = tasks[key]
             val task = running ?: Task(root.resolve(UUID.randomUUID().toString()), key, song,
-                input ?: source(song, quality), seed).also { tasks[key] = it }
+                input ?: source(song, quality), seed, quality, parameters, installModel && parameters != null).also { tasks[key] = it }
             task.readers++
             startNextLocked()
             publishLocked()
@@ -193,19 +198,18 @@ internal class KaraokePreparation(private val context: Context) {
     }
 
     private suspend fun convert(task: Task, previous: KaraokeBacking?): Prepared {
-        val key = task.key
         val song = task.song
         val input = task.input
         val target = task.directory.resolve("backing.wav")
         val original = task.directory.resolve("original.wav")
         val downloaded = task.directory.resolve("source.audio")
-        val parameters = key.parameters
+        val parameters = task.parameters
         var message: Int? = null
         fun report(percent: Int) = updateProgress(task) { it.copy(percent = maxOf(it.percent, percent)) }
         fun logModelError(error: Exception) {
             DiagnosticLog(context).record("playback", "Karaoke MDX-Net: ${error.message}", "WARN")
         }
-        val model = if (parameters == null) null else if (!key.installModel) mdx.installedModel() else try {
+        val model = if (parameters == null) null else if (!task.installModel) mdx.installedModel() else try {
             if (mdx.installedModel() == null) {
                 updateProgress(task) { it.copy(modelDownload = 0) }
                 mdx.install { percent -> updateProgress(task) { it.copy(modelDownload = percent) } }
@@ -238,11 +242,11 @@ internal class KaraokePreparation(private val context: Context) {
         }
 
         try {
-            val backing = cache.reuseOrPrepare(song, target, original, parameters.takeIf { model != null }, key.quality) {
-                if (!key.installModel) generate(model)
+            val backing = cache.reuseOrPrepare(song, target, original, parameters.takeIf { model != null }, task.quality) {
+                if (!task.installModel) generate(model)
                 else if (model == null) generateBasic(100)
                 else {
-                    val basic = cache.reuseOrPrepare(song, target, original, quality = key.quality) { generateBasic(20) }
+                    val basic = cache.reuseOrPrepare(song, target, original, quality = task.quality) { generateBasic(20) }
                     try {
                         val monitor = basic.original ?: KaraokeAudio.prepareOriginal(context,
                             input(downloaded) { report(it / 5) }, original, basic.frames)

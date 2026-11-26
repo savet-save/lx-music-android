@@ -99,8 +99,12 @@ internal class SourceAudioResolver(private val sources: UserSources,
         private val pending = mutableMapOf<Candidate, Deferred<SourceAudio?>>()
         private val consumed = mutableSetOf<Candidate>()
         private var alternatives: List<Song>? = null
+        private var selected: Request? = null
 
         override fun close() = job.cancel()
+
+        /** Re-request the address for the selected recording without advancing the fallback list. */
+        suspend fun refresh(): SourceAudio? = selected?.let { attempt(it.entry, it.song, it.quality, refresh = true) }
 
         suspend fun next(): SourceAudio {
             val enabled = sources.catalog().enabledEntries
@@ -155,7 +159,12 @@ internal class SourceAudioResolver(private val sources: UserSources,
                     running.remove(key)
                     pending.remove(key)
                     consumed.add(key)
-                    if (audio != null) return audio
+                    if (audio != null) {
+                        val entry = enabled.first { it.id == key.provider }
+                        val candidate = songs.first { it.source == key.platform && it.id == key.songId }
+                        selected = Request(entry, candidate, quality)
+                        return audio
+                    }
                     hedgeAt = SystemClock.elapsedRealtime()
                 }
             }
@@ -175,7 +184,7 @@ internal class SourceAudioResolver(private val sources: UserSources,
             return found
         }
 
-        private suspend fun attempt(entry: UserSourceEntry, candidate: Song, quality: String): SourceAudio? {
+        private suspend fun attempt(entry: UserSourceEntry, candidate: Song, quality: String, refresh: Boolean = false): SourceAudio? {
             val key = entry.id to quality
             if (key in rateLimited) return null
             val started = SystemClock.elapsedRealtime()
@@ -183,7 +192,7 @@ internal class SourceAudioResolver(private val sources: UserSources,
             try {
                 return withTimeout(ATTEMPT_TIMEOUT_MS) {
                     val supported = platforms.getOrPut(key) { sources.audioPlatformsFrom(entry.id, quality) }
-                    if (candidate.source !in supported || !checked.add(Candidate(entry.id, candidate.source, candidate.id, quality))) return@withTimeout null
+                    if (candidate.source !in supported || !refresh && !checked.add(Candidate(entry.id, candidate.source, candidate.id, quality))) return@withTimeout null
                     address(entry, candidate, quality).also { outcome = "resolved" }
                 }
             } catch (e: TimeoutCancellationException) {
@@ -196,7 +205,7 @@ internal class SourceAudioResolver(private val sources: UserSources,
                 errors.putIfAbsent(entry.id, e)
                 if (e.message?.contains("429") == true) rateLimited.add(key)
             } finally {
-                trace("lookup source=${entry.name} platform=${candidate.source} quality=$quality outcome=$outcome elapsedMs=${SystemClock.elapsedRealtime() - started}")
+                trace("${if (refresh) "refresh" else "lookup"} source=${entry.name} platform=${candidate.source} quality=$quality outcome=$outcome elapsedMs=${SystemClock.elapsedRealtime() - started}")
             }
             return null
         }

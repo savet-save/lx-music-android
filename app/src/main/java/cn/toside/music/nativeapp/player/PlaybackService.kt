@@ -79,7 +79,7 @@ import org.json.JSONObject
 
 data class PlayerState(val song: Song? = null, val playing: Boolean = false, val preparing: Boolean = false,
     val position: Int = 0, val duration: Int = 0, val error: String? = null, val mode: PlayMode = PlayMode.LIST_LOOP,
-    val playbackRate: Float = 1f, val volume: Float = 1f)
+    val playbackRate: Float = 1f, val volume: Float = 1f, val playRequested: Boolean = false)
 internal data class PlayerLyrics(val key: String? = null, val lines: List<LyricLine> = emptyList(), val error: String? = null)
 internal data class PlayerArtwork(val key: String? = null, val bitmap: Bitmap? = null)
 
@@ -103,7 +103,11 @@ class PlaybackService : Service() {
     internal val queueState: StateFlow<QueueSnapshot?> = mutableQueue
     private var foreground = false
     private var resumeOnFocus = false
-    private var playWhenReady = false
+    private val playWhenReady get() = mutableState.value.playRequested
+    private var pendingSeek: Int? = null
+    private data class Seek(var target: Int, var refreshed: Boolean = false)
+    private var activeSeek: Seek? = null
+    private var seekRecovery: Job? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val localLevels = LocalPlaybackLevels(this, scope)
     private var playbackLevelsEnabled = false
@@ -133,7 +137,8 @@ class PlaybackService : Service() {
         if (preferences.handleAudioFocus) when (change) {
             AudioManager.AUDIOFOCUS_LOSS -> { resumeOnFocus = false; pause() }
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT, AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
-                resumeOnFocus = mutableState.value.playing || mutableState.value.preparing && playWhenReady; pause()
+                resumeOnFocus = resumeOnFocus || playWhenReady
+                pausePlayback()
             }
             AudioManager.AUDIOFOCUS_GAIN -> if (resumeOnFocus) { resumeOnFocus = false; resume() }
         }
@@ -212,7 +217,7 @@ class PlaybackService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_EXIT -> { pause(); stopForeground(STOP_FOREGROUND_REMOVE); foreground = false; stopSelf() }
-            ACTION_TOGGLE -> if (mutableState.value.playing) pause() else resume()
+            ACTION_TOGGLE -> if (playWhenReady) pause() else resume()
             ACTION_NEXT -> next()
             ACTION_PREVIOUS -> previous()
         }
@@ -262,7 +267,8 @@ class PlaybackService : Service() {
         } else saveQueue()
     }
     private fun selectPausedQueueSong() {
-        resolveJob?.cancel(); releasePlayback(); playWhenReady = false
+        resolveJob?.cancel(); releasePlayback(); pendingSeek = null
+        activeSeek = null
         playbackSourceSearch?.close(); playbackSourceSearch = null; startup = null
         val song = queue.getOrNull(index)
         mutableState.value = PlayerState(song = song, duration = song?.duration?.coerceIn(0, Int.MAX_VALUE.toLong())?.toInt() ?: 0,
@@ -270,7 +276,8 @@ class PlaybackService : Service() {
         saveQueue(); publish()
     }
     internal fun clearQueue() {
-        queueEpoch++; resolveJob?.cancel(); releasePlayback(); playWhenReady = false; resumeOnFocus = false
+        queueEpoch++; resolveJob?.cancel(); releasePlayback(); pendingSeek = null; resumeOnFocus = false
+        activeSeek = null
         playbackSourceSearch?.close(); playbackSourceSearch = null; startup = null
         queue = emptyList(); index = -1; mutableQueue.value = null
         mutableState.value = PlayerState(mode = mode, playbackRate = settings.playbackRate, volume = settings.volume)
@@ -544,6 +551,8 @@ class PlaybackService : Service() {
     }
 
     private fun openCurrent(resumePosition: Int = 0) {
+        pendingSeek = null
+        activeSeek = null
         playbackSourceSearch?.close()
         playbackSourceSearch = null
         startup = null
@@ -564,8 +573,8 @@ class PlaybackService : Service() {
             return
         }
         releasePlayback()
-        playWhenReady = true
-        mutableState.value = PlayerState(song = song, preparing = true, duration = song.duration.coerceIn(0, Int.MAX_VALUE.toLong()).toInt(), mode = mode,
+        mutableState.value = PlayerState(song = song, preparing = true, playRequested = true, position = resumePosition,
+            duration = song.duration.coerceIn(0, Int.MAX_VALUE.toLong()).toInt(), mode = mode,
             playbackRate = settings.playbackRate, volume = settings.volume)
         saveQueue(resumePosition)
         val serviceIntent = Intent(this, PlaybackService::class.java)
@@ -584,6 +593,7 @@ class PlaybackService : Service() {
         }
     }
     private fun releasePlayback() {
+        seekRecovery?.cancel(); seekRecovery = null
         localLevels.close()
         player?.release(); player = null
         val previous = nativePlayer; nativePlayer = null; previous?.release()
@@ -615,27 +625,40 @@ class PlaybackService : Service() {
                 .also { playbackSourceSearch = it }
             search.next().resolved()
         }
+        prepareResolvedStream(song, resolved, position, cache, cached != null)
+    }
+
+    private suspend fun prepareResolvedStream(song: Song, resolved: ResolvedAudio, position: Int, cache: AudioStreamCache,
+        cached: Boolean = false, refreshFrom: String? = null) {
         val key = AudioStreamCache.key(song, resolved.quality)
         val selected = playbackAddresses.choose(resolved.url, resolved.backupUrls)
         val uri = Uri.parse(selected)
+        // A refreshed address can be the same URL even when its byte ranges failed.
+        val readFromStart = selected == refreshFrom
+        // Different script providers can return different encodings at the same nominal quality.
+        val discardPartial = song.source != "bili" && !cached && !readFromStart && key in failedPlaybackCacheKeys
         withContext(Dispatchers.IO) {
-            // Different script providers can return different encodings at the same nominal quality.
-            if (song.source != "bili" && cached == null && key in failedPlaybackCacheKeys) cache.remove(key)
-            cache.remember(key, uri, resolved.bitrate, if (cached == null) song.duration else null, resolved.trackId)
+            if (discardPartial) cache.remove(key)
+            cache.remember(key, uri, resolved.bitrate, if (cached) null else song.duration, resolved.trackId, resetRedirect = refreshFrom != null)
         }
-        startup?.buffer(if (cached != null) "cache" else "stream", resolved.quality)
-        prepareNativePlayer(song, uri, position, cache, key, resolved.quality)
+        startup?.buffer(if (cached) "cache" else "stream", resolved.quality)
+        prepareNativePlayer(song, uri, position, cache, key, resolved.quality, readFromStart = readFromStart)
     }
 
     private fun failNativePlayback(song: Song, position: Int, cache: AudioStreamCache?, key: String?, quality: String?, error: String,
-        exhausted: Boolean = false, skipCache: Boolean = true, discardCache: Boolean = false, tryNext: Boolean = true) {
+        exhausted: Boolean = false, skipCache: Boolean = true, discardCache: Boolean = false, tryNext: Boolean = true,
+        refreshFrom: String? = null) {
         val current = mutableState.value.song ?: return
         if (current.id != song.id || current.source != song.source || playbackFailureReported) return
+        val seek = activeSeek
+        val target = seek?.target ?: position
         startup?.bufferFailed()
         releasePlayback()
         val retry = song.source != "local"
+        if (!retry) activeSeek = null
         if (key != null) failedPlaybackCacheKeys.add(key)
-        mutableState.value = mutableState.value.copy(preparing = retry, playing = false, position = position,
+        mutableState.value = mutableState.value.copy(preparing = retry, playing = false, position = target,
+            playRequested = retry && playWhenReady,
             error = if (retry) null else message(R.string.playback_error, error))
         publish()
         if (!retry) return
@@ -648,18 +671,38 @@ class PlaybackService : Service() {
                 return@launch
             }
             try {
+                if (discardCache && key != null) withContext(Dispatchers.IO) { cache?.remove(key) }
                 if (refreshBilibili) {
                     DiagnosticLog(this@PlaybackService).record("playback", "$error; automatic retry ${playbackRetries.used}/3${if (exhausted) "; HTTP load budget exhausted" else ""}", "WARN")
                     delay(retryDelay)
-                } else DiagnosticLog(this@PlaybackService).record("playback", "$error; trying the next audio source", "WARN")
-                if (discardCache && key != null) withContext(Dispatchers.IO) { cache?.remove(key) }
+                } else {
+                    if (seek != null && !seek.refreshed && cache != null && refreshFrom != null) {
+                        seek.refreshed = true
+                        if (refreshSeekStream(current, seek, cache, refreshFrom, error)) return@launch
+                    }
+                    DiagnosticLog(this@PlaybackService).record("playback", "$error; trying the next audio source", "WARN")
+                }
                 val preferred = if (refreshBilibili) quality ?: preferredQuality() else playbackPreferredQuality
-                prepareStreamingPlayer(current, preferred, position, useDownloads = false, skipCache = skipCache)
+                prepareStreamingPlayer(current, preferred, seek?.target ?: target, useDownloads = false, skipCache = skipCache)
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) {
-                if (refreshBilibili) failNativePlayback(current, position, cache, key, quality, e.localizedMessage.orEmpty())
+                if (refreshBilibili) failNativePlayback(current, seek?.target ?: target, cache, key, quality, e.localizedMessage.orEmpty())
                 else finishFailedPlayback(current, cache, e.localizedMessage.orEmpty())
             }
+        }
+    }
+
+    private suspend fun refreshSeekStream(song: Song, seek: Seek, cache: AudioStreamCache, previousUrl: String, error: String): Boolean {
+        val search = playbackSourceSearch ?: return false
+        DiagnosticLog(this).record("playback", "$error; requesting a fresh address for the current audio source", "WARN")
+        return try {
+            val refreshed = sourceMutex.withLock { search.refresh() } ?: return false
+            prepareResolvedStream(song, refreshed.resolved(), seek.target, cache, refreshFrom = previousUrl)
+            true
+        } catch (e: CancellationException) { throw e }
+        catch (e: Exception) {
+            DiagnosticLog(this).record("playback", "Seek address refresh failed: ${e.message.orEmpty()}", "WARN")
+            false
         }
     }
 
@@ -674,10 +717,15 @@ class PlaybackService : Service() {
             }
         }
         playbackFailureReported = true
-        val notice = if (song.source == "bili") message(R.string.playback_retries_failed, error.take(240))
-            else message(if (failedKeys.isNotEmpty()) R.string.playback_cache_failed else R.string.playback_stream_failed)
+        val notice = when {
+            activeSeek != null -> message(R.string.playback_seek_failed)
+            song.source == "bili" -> message(R.string.playback_retries_failed, error.take(240))
+            else -> message(if (failedKeys.isNotEmpty()) R.string.playback_cache_failed else R.string.playback_stream_failed)
+        }
+        activeSeek = null
         DiagnosticLog(this).record("playback", error)
-        mutableState.value = mutableState.value.copy(preparing = false, playing = false, error = notice)
+        pendingSeek = null
+        mutableState.value = mutableState.value.copy(preparing = false, playing = false, playRequested = false, error = notice)
         ToastUtils.show(this, notice, ToastUtils.LONG)
         publish()
     }
@@ -688,9 +736,10 @@ class PlaybackService : Service() {
     }
 
     private fun prepareNativePlayer(song: Song, uri: Uri, position: Int, cache: AudioStreamCache?, key: String?, quality: String? = null,
-        downloaded: Boolean = false) {
+        downloaded: Boolean = false, readFromStart: Boolean = false) {
         val current = NativeAudioPlayer(this, cache, preferences.audioOffload, { engine ->
             if (nativePlayer === engine) {
+                if (!engine.preparing) { seekRecovery?.cancel(); seekRecovery = null; activeSeek = null }
                 mutableState.value = mutableState.value.copy(preparing = engine.preparing, playing = engine.isPlaying,
                     duration = engine.duration.takeIf { it > 0 } ?: mutableState.value.duration, position = engine.position)
                 if (engine.isPlaying && !engine.recorded) { startup?.finish("playing"); engine.recorded = true; recordHistory(song) }
@@ -702,17 +751,25 @@ class PlaybackService : Service() {
                 else {
                     playbackAddresses.failed(uri.toString(), engine.failedHttpStatus in setOf(401, 403, 404, 410))
                     val detail = engine.failedHttpStatus?.let { message(R.string.playback_http_error, it) } ?: error
-                    failNativePlayback(song, engine.position, cache, key, quality, detail, engine.streamRetriesExhausted, discardCache = engine.contentError)
+                    failNativePlayback(song, engine.position, cache, key, quality, detail, engine.streamRetriesExhausted,
+                        discardCache = engine.contentError || engine.failedHttpStatus == 416,
+                        refreshFrom = uri.toString().takeIf { cache != null && !engine.contentError })
                 }
             }
         }, if(song.source == "bili") cn.toside.music.nativeapp.online.BilibiliApi.audioHeaders else emptyMap(), playbackRetries,
-            audioSessionId = equalizer.audioSessionId, equalizerEnabled = equalizer.state?.enabled == true)
+            audioSessionId = equalizer.audioSessionId, equalizerEnabled = equalizer.state?.enabled == true, readFromStart = readFromStart,
+            freshConnection = activeSeek != null)
         current.measureAudioLevels = playbackLevelsEnabled
         nativePlayer = current
-        try { current.prepare(uri, key, position, state.value.playbackRate, state.value.volume, playWhenReady) }
+        val startAt = pendingSeek ?: position
+        pendingSeek = null
+        try {
+            current.prepare(uri, key, startAt, state.value.playbackRate, state.value.volume, playWhenReady)
+            if (nativePlayer === current && current.preparing) activeSeek?.let { watchSeek(current, it) }
+        }
         catch (e: Exception) {
-            if (downloaded) retryDownloadedPlayback(song, position, e.localizedMessage.orEmpty())
-            else failNativePlayback(song, position, cache, key, quality, e.localizedMessage.orEmpty())
+            if (downloaded) retryDownloadedPlayback(song, startAt, e.localizedMessage.orEmpty())
+            else failNativePlayback(song, startAt, cache, key, quality, e.localizedMessage.orEmpty())
         }
     }
     private fun preparePlayer(song: Song, uri: Uri, resumePosition: Int) {
@@ -725,7 +782,8 @@ class PlaybackService : Service() {
             current.setDataSource(this, uri)
             current.setOnPreparedListener { mp ->
                 if (player !== mp) return@setOnPreparedListener
-                val position = resumePosition.coerceIn(0, mp.duration.coerceAtLeast(0))
+                val position = (pendingSeek ?: resumePosition).coerceIn(0, mp.duration.coerceAtLeast(0))
+                pendingSeek = null
                 if (position > 0) mp.seekTo(position)
                 try {
                     if (playWhenReady) startPlayer(mp)
@@ -733,7 +791,8 @@ class PlaybackService : Service() {
                     if (playWhenReady) recordHistory(song)
                 } catch (e: RuntimeException) {
                     runCatching { mp.pause() }
-                    mutableState.value = mutableState.value.copy(preparing = false, playing = false, error = message(R.string.playback_settings_error, e.localizedMessage.orEmpty()))
+                    mutableState.value = mutableState.value.copy(preparing = false, playing = false, playRequested = false,
+                        error = message(R.string.playback_settings_error, e.localizedMessage.orEmpty()))
                 }
                 publish()
             }
@@ -757,48 +816,65 @@ class PlaybackService : Service() {
         mutableState.value = mutableState.value.copy(preparing = true, playing = false, error = null)
         try { prepareNativePlayer(song, uri, position, null, null) }
         catch (e: Exception) {
-            mutableState.value = mutableState.value.copy(preparing = false, playing = false, error = message(R.string.playback_open_error, e.localizedMessage.orEmpty()))
+            mutableState.value = mutableState.value.copy(preparing = false, playing = false, playRequested = false,
+                error = message(R.string.playback_open_error, e.localizedMessage.orEmpty()))
             publish()
         }
     }
 
     fun pause() {
-        if (mutableState.value.preparing) { playWhenReady = false; nativePlayer?.pause(); return }
-        if (!mutableState.value.playing) return
-        playWhenReady = false
-        player?.pause()
+        resumeOnFocus = false
+        pausePlayback()
+    }
+    private fun pausePlayback() {
+        val state = mutableState.value
+        if (!state.playRequested && !state.playing) return
+        mutableState.value = state.copy(playRequested = false)
+        if (!state.preparing) player?.pause()
         nativePlayer?.pause()
-        mutableState.value = mutableState.value.copy(playing = false, position = nativePlayer?.position ?: player?.currentPosition ?: 0)
+        mutableState.value = mutableState.value.copy(playing = false, position = nativePlayer?.position
+            ?: if (state.preparing) state.position else player?.currentPosition ?: state.position)
         saveQueue()
         publish()
     }
     fun resume() {
         if (mutableState.value.playing) return
-        if (mutableState.value.preparing) { if (requestFocus()) { playWhenReady = true; nativePlayer?.play() }; return }
+        if (mutableState.value.preparing) {
+            if (requestFocus()) {
+                mutableState.value = mutableState.value.copy(playRequested = true)
+                nativePlayer?.play(); publish()
+            }
+            return
+        }
         nativePlayer?.let { current ->
             if (mutableState.value.error != null) { openCurrent(mutableState.value.position); return }
-            if (requestFocus()) { playWhenReady = true; current.play(); publish() }; return
+            if (requestFocus()) { mutableState.value = mutableState.value.copy(playRequested = true); current.play(); publish() }; return
         }
         val mp = player ?: run { if (mutableState.value.song != null) openCurrent(mutableState.value.position); return }
         if (!requestFocus()) return
         try {
-            startPlayer(mp); mutableState.value = mutableState.value.copy(playing = true, error = null)
+            startPlayer(mp); mutableState.value = mutableState.value.copy(playing = true, playRequested = true, error = null)
             mutableState.value.song?.let { recordHistory(it) }; publish()
         } catch (e: RuntimeException) {
             runCatching { mp.pause() }
-            mutableState.value = mutableState.value.copy(playing = false, error = message(R.string.playback_settings_error, e.localizedMessage.orEmpty())); publish()
+            mutableState.value = mutableState.value.copy(playing = false, playRequested = false,
+                error = message(R.string.playback_settings_error, e.localizedMessage.orEmpty())); publish()
         }
     }
     private fun onCompleted() {
+        seekRecovery?.cancel(); seekRecovery = null
+        activeSeek = null
         if (sleepAfterCurrent) {
-            sleepAfterCurrent = false; playWhenReady = false
-            mutableState.value = mutableState.value.copy(playing = false, position = mutableState.value.duration)
+            sleepAfterCurrent = false
+            nativePlayer?.pause()
+            mutableState.value = mutableState.value.copy(playing = false, playRequested = false, position = mutableState.value.duration)
             saveQueue(); publish(); return
         }
         val rules = DislikeStore(this).get()
         val target = nextAllowedSongIndex(mode, index, queue, completed = true, rules::matches) { kotlin.random.Random.nextInt(it) }
         if (target == null) {
-            mutableState.value = mutableState.value.copy(playing = false, position = mutableState.value.duration)
+            nativePlayer?.pause()
+            mutableState.value = mutableState.value.copy(playing = false, playRequested = false, position = mutableState.value.duration)
             saveQueue()
             publish()
         } else {
@@ -821,15 +897,48 @@ class PlaybackService : Service() {
         index = target; openCurrent()
     }
     fun seekTo(position: Int) {
-        if (mutableState.value.preparing) return
+        val state = mutableState.value
+        if (state.song == null || state.duration <= 0) return
         try {
-            val target = position.coerceIn(0, mutableState.value.duration)
+            val target = position.coerceIn(0, state.duration)
             localLevels.close()
-            player?.seekTo(target)
-            nativePlayer?.seekTo(target)
+            val native = nativePlayer
+            when {
+                native != null -> {
+                    seekRecovery?.cancel()
+                    val seek = (activeSeek ?: Seek(target)).also { it.target = target; activeSeek = it }
+                    native.seekTo(target)
+                    if (nativePlayer === native && native.preparing && activeSeek === seek) watchSeek(native, seek)
+                    else if (!native.preparing && activeSeek === seek) activeSeek = null
+                }
+                state.preparing -> { pendingSeek = target; activeSeek?.target = target }
+                else -> player?.seekTo(target)
+            }
             mutableState.value = mutableState.value.copy(position = target)
             saveQueue(); publish()
         } catch (_: IllegalStateException) { }
+    }
+    private fun watchSeek(engine: NativeAudioPlayer, seek: Seek) {
+        seekRecovery = scope.launch {
+            val started = SystemClock.elapsedRealtime()
+            val idleTimeout = if (engine.reconnecting) SEEK_RECONNECT_IDLE_TIMEOUT_MS else SEEK_IDLE_TIMEOUT_MS
+            val maxWait = if (engine.reconnecting) SEEK_RECONNECT_MAX_WAIT_MS else SEEK_MAX_WAIT_MS
+            delay(SEEK_RESTART_DELAY_MS)
+            if (nativePlayer !== engine || activeSeek !== seek || !engine.preparing) return@launch
+            try {
+                if (engine.restartBlockedSeek(seek.target)) {
+                    DiagnosticLog(this@PlaybackService).record("playback", "Seek blocked by the previous load; reopening at ${seek.target} ms", "WARN")
+                }
+            }
+            catch (_: IllegalStateException) { engine.failSeek(); return@launch }
+            while (nativePlayer === engine && activeSeek === seek && engine.preparing) {
+                val lastActivity = maxOf(started, engine.lastUpstreamActivity)
+                val deadline = minOf(lastActivity + idleTimeout, started + maxWait)
+                val remaining = deadline - SystemClock.elapsedRealtime()
+                if (remaining <= 0) { engine.failSeek(); return@launch }
+                delay(remaining)
+            }
+        }
     }
     fun updatePosition() {
         if (!mutableState.value.playing) return
@@ -906,8 +1015,8 @@ class PlaybackService : Service() {
             .setLargeIcon(if (preferences.notificationImage) artworkState.value.bitmap else null)
             .setContentText(s.song?.artist).setContentIntent(open).setOngoing(s.playing || s.preparing)
             .addAction(android.R.drawable.ic_media_previous, strings.getString(R.string.ui_8c747908bf69), command(ACTION_PREVIOUS, 1))
-            .addAction(if (s.playing) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play,
-                strings.getString(if (s.playing) R.string.ui_8d12fc0d4eb2 else R.string.ui_c3396195e91c), command(ACTION_TOGGLE, 2))
+            .addAction(if (s.playRequested) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play,
+                strings.getString(if (s.playRequested) R.string.ui_8d12fc0d4eb2 else R.string.ui_c3396195e91c), command(ACTION_TOGGLE, 2))
             .addAction(android.R.drawable.ic_media_next, strings.getString(R.string.ui_486e42475adb), command(ACTION_NEXT, 3))
             .setStyle(Notification.MediaStyle().setMediaSession(session.sessionToken).setShowActionsInCompactView(0, 1, 2)).build()
     }
@@ -925,6 +1034,11 @@ class PlaybackService : Service() {
         super.onDestroy()
     }
     companion object {
+        private const val SEEK_RESTART_DELAY_MS = 2_500L
+        private const val SEEK_IDLE_TIMEOUT_MS = 12_000L
+        private const val SEEK_MAX_WAIT_MS = 24_000L
+        private const val SEEK_RECONNECT_IDLE_TIMEOUT_MS = 22_000L
+        private const val SEEK_RECONNECT_MAX_WAIT_MS = 40_000L
         private const val CHANNEL = "playback"
         private const val NOTIFICATION_ID = 1
         private const val ACTION_TOGGLE = "cn.toside.music.nativeapp.TOGGLE"

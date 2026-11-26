@@ -32,20 +32,31 @@ internal class KaraokeBackingCache(private val context: Context) {
             key(song, quality)
         }
         if (key != null) {
-            val reused = withContext(Dispatchers.IO) { cacheAttempt { restore(key, target, separation) } }
-            if (reused != null) {
-                val monitor = if (original != null) withContext(Dispatchers.IO) {
-                    cacheAttempt {
-                        if (restoreFrames(originalKey(key), original) == reused.frames) original else null
-                    }
-                } else null
-                return reused.copy(original = monitor, cacheKey = key)
-            }
+            withContext(Dispatchers.IO) { restoreBacking(key, target, original, separation) }?.let { return it }
             withContext(Dispatchers.IO) { check(target.delete() || !target.exists()) }
         }
         val backing = prepare().copy(cacheKey = key)
         remember(song, backing)
         return backing
+    }
+
+    internal suspend fun restoreCached(song: Song, directory: File, separation: MdxParameters?, quality: String): KaraokeBacking? =
+        withContext(Dispatchers.IO) {
+            val key = key(song, quality) ?: return@withContext null
+            val cache = AudioStreamCache.get(context)
+            if (!listOf(true, false).any { cache.hasCachedStart(channelKey(key, it, separation)) }) return@withContext null
+            check(directory.mkdirs() || directory.isDirectory)
+            val target = directory.resolve("backing.wav")
+            val original = directory.resolve("original.wav")
+            check(target.delete() || !target.exists())
+            check(original.delete() || !original.exists())
+            restoreBacking(key, target, original, separation)
+        }
+
+    private suspend fun restoreBacking(key: String, target: File, original: File?, separation: MdxParameters?): KaraokeBacking? {
+        val reused = cacheAttempt { restore(key, target, separation) } ?: return null
+        val monitor = original?.let { file -> cacheAttempt { file.takeIf { restoreFrames(originalKey(key), it) == reused.frames } } }
+        return reused.copy(original = monitor, cacheKey = key)
     }
 
     suspend fun remember(song: Song, backing: KaraokeBacking) = withContext(Dispatchers.IO) {

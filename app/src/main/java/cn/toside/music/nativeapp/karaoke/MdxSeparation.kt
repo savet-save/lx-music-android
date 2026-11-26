@@ -23,6 +23,9 @@ internal const val KARAOKE_MODEL_ASSETS = "karaoke-models"
 internal class MdxSeparation(private val context: Context) {
     private val model = context.noBackupFilesDir.resolve("karaoke-models/$MODEL_FILE")
 
+    internal fun hasModelInput(): Boolean = model.length() == MODEL_BYTES ||
+        runCatching { MODEL_FILE in context.assets.list(KARAOKE_MODEL_ASSETS).orEmpty() }.getOrDefault(false)
+
     suspend fun installedModel(): File? = withContext(Dispatchers.IO) {
         lock.withLock {
             try {

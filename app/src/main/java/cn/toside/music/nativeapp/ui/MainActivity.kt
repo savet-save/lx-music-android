@@ -984,7 +984,9 @@ class MainActivity : FragmentActivity() {
             true
         }
         seek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(bar: SeekBar?, progress: Int, fromUser: Boolean) = Unit
+            override fun onProgressChanged(bar: SeekBar?, progress: Int, fromUser: Boolean) {
+                if (fromUser && !changingSeek) service?.seekTo(progress)
+            }
             override fun onStartTrackingTouch(bar: SeekBar?) { changingSeek = true }
             override fun onStopTrackingTouch(bar: SeekBar?) { changingSeek = false; service?.seekTo(bar?.progress ?: 0) }
         })
@@ -1844,7 +1846,7 @@ class MainActivity : FragmentActivity() {
         }, { index ->
             val player = service
             val line = lyricLines.getOrNull(index)
-            if (player != null && line != null && !player.state.value.preparing) {
+            if (player != null && line != null && player.state.value.duration > 0) {
                 player.seekTo(LyricTiming.seekPosition(line.timeMs, lyricDelayMs, player.state.value.duration))
                 detailScroll?.follow(index)
             } else detailScroll?.follow(detailActiveLine.coerceAtLeast(0))
@@ -1874,7 +1876,9 @@ class MainActivity : FragmentActivity() {
         detailShowingLyrics = showLyrics ?: uiLayout.splitPlayer
         content.showLyrics(detailShowingLyrics)
         detailSeek?.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(bar: SeekBar?, progress: Int, fromUser: Boolean) = Unit
+            override fun onProgressChanged(bar: SeekBar?, progress: Int, fromUser: Boolean) {
+                if (fromUser && !detailSeeking) service?.seekTo(progress)
+            }
             override fun onStartTrackingTouch(bar: SeekBar?) { detailSeeking = true }
             override fun onStopTrackingTouch(bar: SeekBar?) { detailSeeking = false; service?.seekTo(bar?.progress ?: 0) }
         })
@@ -1941,9 +1945,9 @@ class MainActivity : FragmentActivity() {
         renderDetailTime(state)
         detailSeek?.apply { max = state.duration.coerceAtLeast(0); if (!detailSeeking) progress = state.position }
         detailToggle?.apply {
-            text = (if (state.playing) 59661 else 59653).toChar().toString()
-            contentDescription = if (state.playing) getString(R.string.ui_8d12fc0d4eb2) else getString(R.string.ui_c3396195e91c)
-            isEnabled = state.song != null && !state.preparing
+            text = (if (state.playRequested) 59661 else 59653).toChar().toString()
+            contentDescription = if (state.playRequested) getString(R.string.ui_8d12fc0d4eb2) else getString(R.string.ui_c3396195e91c)
+            isEnabled = state.song != null
         }
         detailMode?.apply {
             text = when (state.mode) {
@@ -2079,7 +2083,7 @@ class MainActivity : FragmentActivity() {
         bundle.getString("source") ?: "local", bundle.getString("sourceInfo"))
     private fun togglePlayback() {
         val player = service ?: return
-        if (player.state.value.playing) { player.pause(); return }
+        if (player.state.value.playRequested) { player.pause(); return }
         if (PermissionPolicy.requiresLibraryAccess(this, player.state.value.song) && !hasAudioPermission()) requestAudioAccess(AudioAction.Resume)
         else player.resume()
     }
@@ -2893,9 +2897,9 @@ class MainActivity : FragmentActivity() {
         }
         updateLyric(state.position)
         title.text = state.error ?: state.song?.let { "${it.title} · ${it.artist}" } ?: getString(R.string.ui_2389f5b06bce)
-        toggle.text = (if (state.playing) 59661 else 59653).toChar().toString()
-        toggle.contentDescription = when { state.preparing -> getString(R.string.ui_d04fcbda737f); state.playing -> getString(R.string.ui_8d12fc0d4eb2); else -> getString(R.string.ui_c3396195e91c) }
-        toggle.isEnabled = state.song != null && !state.preparing
+        toggle.text = (if (state.playRequested) 59661 else 59653).toChar().toString()
+        toggle.contentDescription = if (state.playRequested) getString(R.string.ui_8d12fc0d4eb2) else getString(R.string.ui_c3396195e91c)
+        toggle.isEnabled = state.song != null
         seek.max = state.duration.coerceAtLeast(0)
         seek.isEnabled = preferences.allowSeek && song != null
         detailSeek?.isEnabled = preferences.allowSeek && song != null

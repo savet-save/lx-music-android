@@ -472,6 +472,65 @@ class KaraokeWorkflowTest {
         }
     }
 
+    @Test fun sameRecordingJoinsItsExistingConversionAndACompletedCacheBypassesTheQueue() = runBlocking {
+        val preparation = (context.applicationContext as NativeApplication).karaokePreparation
+        val directory = context.cacheDir.resolve("karaoke-dedup-test-${UUID.randomUUID()}").apply { mkdir() }
+        val input = directory.resolve("input.wav").apply { silence(this, 1) }
+        val id = System.nanoTime()
+        val song = Song(id, Uri.EMPTY, "Online recording", "Artist", 1000, "kw", """{"songmid":$id}""")
+        val enriched = song.copy(duration = 1100, sourceInfo = """{"songmid":$id,"img":"cover"}""")
+        val blocker = Song(id + 1, Uri.fromFile(input), "Other recording", "Artist", 1000)
+        val settings = context.getSharedPreferences("app-settings", Context.MODE_PRIVATE)
+        val savedModel = settings.all[MdxParameters.ENABLED_KEY] as? Boolean
+        val savedLimit = settings.getString("player.cacheSize", null)
+        settings.edit().putBoolean(MdxParameters.ENABLED_KEY, false).putString("player.cacheSize", "32").commit()
+        val release = CompletableDeferred<Unit>()
+        val blockerRelease = CompletableDeferred<Unit>()
+        try {
+            val original = async {
+                preparation.prepare(song, directory.resolve("first"), { _, report ->
+                    report(50); release.await(); Uri.fromFile(input)
+                }, installModel = false, previous = null) {}
+            }
+            await { preparation.queue.value.any { it.song == song && it.progress.percent == 22 } }
+            val originalId = preparation.queue.value.single { it.song == song }.id
+            val joined = CompletableDeferred<Unit>()
+            val duplicate = async {
+                preparation.prepare(enriched, directory.resolve("second"), { _, _ -> error("duplicate conversion") },
+                    installModel = false, previous = null) { if (it.percent == 22) joined.complete(Unit) }
+            }
+            withTimeout(4000) { joined.await() }
+            assertEquals(listOf(originalId), preparation.queue.value.filter { it.song.id == id && it.song.source == "kw" }.map { it.id })
+            release.complete(Unit)
+            assertArrayEquals(original.await().backing.file.readBytes(), duplicate.await().backing.file.readBytes())
+
+            val other = async {
+                preparation.prepare(blocker, directory.resolve("other"), { _, report ->
+                    report(50); blockerRelease.await(); Uri.fromFile(input)
+                }, installModel = false, previous = null) {}
+            }
+            await { preparation.queue.value.any { it.song == blocker && it.progress.percent == 22 } }
+            val cached = withTimeout(3000) {
+                preparation.prepare(song, directory.resolve("cached"), { _, _ -> error("cached recording must not convert again") },
+                    installModel = false, previous = null) {}
+            }
+            assertArrayEquals(original.await().backing.file.readBytes(), cached.backing.file.readBytes())
+            assertFalse(preparation.queue.value.any { it.song.id == id && it.song.source == "kw" })
+            blockerRelease.complete(Unit)
+            other.await()
+        } finally {
+            release.complete(Unit); blockerRelease.complete(Unit)
+            settings.edit().apply {
+                if (savedModel == null) remove(MdxParameters.ENABLED_KEY) else putBoolean(MdxParameters.ENABLED_KEY, savedModel)
+                if (savedLimit == null) remove("player.cacheSize") else putString("player.cacheSize", savedLimit)
+            }.commit()
+            val cache = AudioStreamCache.get(context)
+            listOf(song, blocker).forEach { cache.removeSong(AudioStreamCache.key(it, "")) }
+            directory.deleteRecursively()
+        }
+        Unit
+    }
+
     @Test fun generatedAccompanimentIsReusedAndRefreshesWhenLocalAudioChanges() = runBlocking {
         val directory = context.cacheDir.resolve("karaoke-cache-test-${UUID.randomUUID()}").apply { mkdir() }
         val input = directory.resolve("input.wav").apply { silence(this, 1) }
