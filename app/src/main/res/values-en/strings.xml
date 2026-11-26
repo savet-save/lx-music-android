@@ -365,10 +365,10 @@
     <string name="ui_7d4ca7f48eff" formatted="false">"Big"</string>
     <string name="ui_a90304cdfb87" formatted="false">"Extra large"</string>
     <string name="ui_e3ca04a9cb13" formatted="false">"Cache"</string>
-    <string name="ui_0269e7020043" formatted="false">"Playback cache limit"</string>
+    <string name="ui_0269e7020043" formatted="false">"Shared playback and Karaoke cache limit"</string>
     <string name="ui_363b6afc345c" formatted="false">"Disable cache"</string>
-    <string name="ui_3ea7896aff54" formatted="false">"Measuring lyrics cache…"</string>
-    <string name="ui_31b0dd704fee">"Playback cache: %1$s MB\nArtwork cache: %2$s KB\nOnline lyrics cache: %3$s KB (keep imported lyrics)"</string>
+    <string name="ui_3ea7896aff54" formatted="false">"Measuring cache…"</string>
+    <string name="ui_31b0dd704fee">"Playback cache: %1$s\nKaraoke accompaniment cache: %2$s\nArtwork cache: %3$s\nOnline lyrics cache: %4$s (keep imported lyrics)"</string>
     <string name="ui_12ccb655405b" formatted="false">"Clear artwork cache"</string>
     <string name="ui_ca88f243ff2a">"Could not clear cache: %1$s"</string>
     <string name="ui_26cc8d0af3e5" formatted="false">"Clear playback cache"</string>

@@ -28,6 +28,7 @@ internal class UserSources(private val context: Context,
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private data class Loaded(val runtime: UserSource, val updates: Job)
     private val loaded = ConcurrentHashMap<String, Loaded>()
+    private val loading = ConcurrentHashMap<String, Mutex>()
     @Volatile private var closed = false
     private val mutableUpdate = MutableStateFlow<UserSourceUpdate?>(null)
     val updates = mutableUpdate.asStateFlow()
@@ -42,7 +43,7 @@ internal class UserSources(private val context: Context,
             if (update != null && id in catalog().enabled) mutableUpdate.value = update
         }
     })
-    private suspend fun runtime(id: String): UserSource = mutex.withLock {
+    private suspend fun runtime(id: String): UserSource = loading.getOrPut(id) { Mutex() }.withLock {
         check(!closed) { "音源已关闭" }
         val data = catalog()
         check(id in data.enabled) { "音源未启用" }
@@ -51,9 +52,11 @@ internal class UserSources(private val context: Context,
         val runtime = UserSource(context)
         try {
             runtime.load(entry.script)
-            check(!closed) { "音源已关闭" }
-            loaded[id] = observe(id, runtime)
-            runtime
+            mutex.withLock {
+                check(id in catalog().enabled) { "音源未启用" }
+                check(!closed) { "音源已关闭" }
+                loaded[id]?.runtime?.also { runtime.close() } ?: runtime.also { loaded[id] = observe(id, runtime) }
+            }
         } catch (e: Exception) { runtime.close(); throw e }
     }
     suspend fun import(script: String): JSONObject = mutex.withLock {
@@ -100,7 +103,9 @@ internal class UserSources(private val context: Context,
             SourceAudio(it.url, quality, bitrate = it.bitrate, trackId = it.trackId, backupUrls = it.backupUrls)
         } else SourceAudio(runtime(id).musicUrl(source, info, quality, exactQuality = true), quality)
     suspend fun supportsFrom(id: String, source: String, action: String) = if (nativeBilibili(id)) source == "bili" && action == "musicUrl" else runtime(id).supports(source, action)
-    suspend fun hasQualityFrom(id: String, quality: String) = if (nativeBilibili(id)) quality == "original" || quality.matches(Regex("aac-[0-9]+")) else runtime(id).hasQuality(quality)
+    suspend fun audioPlatformsFrom(id: String, quality: String): Set<String> = if (nativeBilibili(id)) {
+        if (quality == "original" || quality.matches(Regex("aac-[0-9]+"))) setOf("bili") else emptySet()
+    } else runtime(id).audioPlatforms(quality)
     suspend fun bilibiliAudioOptions(info: JSONObject): List<SourceAudio> {
         val entry = catalog().enabledEntries.firstOrNull { library.isBilibili(it.id) }
             ?: error("请在设置 → 自定义音源中启用 B站音源")

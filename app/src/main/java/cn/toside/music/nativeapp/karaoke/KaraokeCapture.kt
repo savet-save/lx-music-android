@@ -74,18 +74,13 @@ internal class KaraokeCapture(private val openMicrophone: (Context) -> KaraokeMi
 
     suspend fun record(context: Context, backing: KaraokeBacking, voice: File, progress: (Long, Boolean) -> Unit): KaraokeTake =
         withContext(Dispatchers.IO) {
-            val rate = KaraokeAudio.RATE
             val manager = context.getSystemService(AudioManager::class.java)
             val attributes = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA)
                 .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build()
             val focus = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT).setAudioAttributes(attributes)
                 .setOnAudioFocusChangeListener { change -> if (change < 0) pause() }
                 .setWillPauseWhenDucked(true).build()
-            val playbackBuffer = AudioTrack.getMinBufferSize(rate, AudioFormat.CHANNEL_OUT_STEREO, AudioFormat.ENCODING_PCM_16BIT)
-            check(playbackBuffer > 0) { "Audio output is unavailable" }
-            val track = AudioTrack.Builder().setAudioAttributes(attributes).setAudioFormat(AudioFormat.Builder()
-                .setEncoding(AudioFormat.ENCODING_PCM_16BIT).setSampleRate(rate).setChannelMask(AudioFormat.CHANNEL_OUT_STEREO).build())
-                .setBufferSizeInBytes(maxOf(playbackBuffer, rate / 10 * 4)).setTransferMode(AudioTrack.MODE_STREAM).build()
+            val track = karaokeOutputTrack(attributes)
             try {
                 check(track.state == AudioTrack.STATE_INITIALIZED)
                 openMicrophone(context).use { recorder ->

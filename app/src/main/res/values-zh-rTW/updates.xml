@@ -5,6 +5,7 @@
     <string name="update_cancel">取消並清除更新下載</string>
     <string name="update_ignore">忽略此版本</string>
     <string name="update_no_apk">發佈中沒有原生安裝包</string>
+    <string name="update_edition_invalid">更新套件與目前安裝的模型版本類型不一致</string>
     <string name="update_download_title">LX Music 原生版 %1$s</string>
     <string name="update_save_failed">無法儲存更新下載狀態</string>
     <string name="update_expired">更新下載已不存在，請重新下載</string>

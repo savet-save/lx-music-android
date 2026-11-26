@@ -22,14 +22,14 @@ internal data class AdaptiveLayout(val widthDp: Int, val heightDp: Int) {
     val compactPlayer = heightDp < 480
 }
 
-/** Fit the square artwork during measurement, including the first frame after resizing. */
+/** Fit the record and its halo during measurement, including the first frame after resizing. */
 internal class AlbumCoverLayout(context: Context, private val expanded: Boolean = false) : FrameLayout(context) {
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val density = resources.displayMetrics.density
         val availableWidth = MeasureSpec.getSize(widthMeasureSpec)
         val availableHeight = MeasureSpec.getSize(heightMeasureSpec)
         val metadata = getChildAt(1)?.takeIf { it.visibility != GONE }
-        val maxWidth = (availableWidth * if (expanded) .72f else .80f).toInt()
+        val maxWidth = (availableWidth * if (expanded) .80f else .94f).toInt()
         metadata?.measure(MeasureSpec.makeMeasureSpec(maxWidth, MeasureSpec.EXACTLY), MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED))
         val reserve = if (expanded) (48 * density).toInt() + (metadata?.measuredHeight ?: 0) else (24 * density).toInt()
         val size = minOf(maxWidth, availableHeight - reserve, ((if (expanded) 340 else 420) * density).toInt()).coerceAtLeast(0)

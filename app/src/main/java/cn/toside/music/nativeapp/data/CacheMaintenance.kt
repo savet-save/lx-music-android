@@ -16,8 +16,12 @@ internal class CacheMaintenance(context: Context) {
     suspend fun clearLyrics() = withContext(Dispatchers.IO) {
         files().forEach { file -> check(file.delete() || !file.exists()) { "无法清理 ${file.name}" } }
     }
-    suspend fun audioBytes(): Long = withContext(Dispatchers.IO) { AudioStreamCache.get(appContext).bytes }
-    suspend fun clearAudio() = withContext(Dispatchers.IO) { AudioStreamCache.get(appContext).clear() }
+    suspend fun audioUsage() = withContext(Dispatchers.IO) { AudioStreamCache.get(appContext).usage() }
+    suspend fun clearPlayback() = withContext(Dispatchers.IO) { AudioStreamCache.get(appContext).clearPlayback() }
+    suspend fun clearKaraoke() = withContext(Dispatchers.IO) { AudioStreamCache.get(appContext).clearKaraoke() }
+    suspend fun updateAudioLimit() = withContext(Dispatchers.IO) {
+        AudioStreamCache.get(appContext).updateLimit(AppPreferences(appContext).audioCacheBytes)
+    }
     suspend fun resourceBytes(): Long = withContext(Dispatchers.IO) { resources.listFiles()?.filter { it.isFile }?.sumOf(File::length) ?: 0 }
     suspend fun clearResources() = withContext(Dispatchers.IO) {
         resources.listFiles()?.filter { it.isFile }?.forEach { check(it.delete() || !it.exists()) { "无法清理封面缓存" } }

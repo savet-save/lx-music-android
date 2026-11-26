@@ -146,7 +146,7 @@ class MultiSourceDownloadsTest {
                 sources.import(script); added.add(UserSourceLibrary.metadata(script).id)
             }
             sources.setEnabledOrder(added)
-            val resolver = SourceAudioResolver(sources, { emptyList() }, false)
+            val resolver = SourceAudioResolver(sources, { _, _ -> emptyList() }, false)
             downloads.startWithSources(song, "320k", resolve = resolver::resolve)
             val key = downloads.list().single { it.song == song }.key
             val task = waitFor(downloads, key, DownloadStatus.COMPLETE)

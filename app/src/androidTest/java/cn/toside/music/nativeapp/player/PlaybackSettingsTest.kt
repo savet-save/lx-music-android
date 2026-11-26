@@ -532,11 +532,17 @@ class PlaybackSettingsTest {
         return cache
     }
 
-    private class RangeAudioServer(private val bytes: ByteArray, private val failures: Int, private val partialFailures: Boolean = false) : AutoCloseable {
+    private class RangeAudioServer(private val bytes: ByteArray, private val failures: Int, private val partialFailures: Boolean = false,
+        private val stallFirstLoad: Boolean = false, private val seekDelayMs: Long = 0, private val rejectSeek: Boolean = false,
+        private val fullRetryDelayMs: Long = 0) : AutoCloseable {
         private val server = ServerSocket(0, 8, InetAddress.getByName("127.0.0.1"))
         private val sockets = java.util.concurrent.ConcurrentHashMap.newKeySet<java.net.Socket>()
         val uri = Uri.parse("http://127.0.0.1:${server.localPort}/resume.wav")
         val requests = java.util.concurrent.CopyOnWriteArrayList<Int>()
+        val firstLoadStalled = CountDownLatch(1)
+        val seekRejected = CountDownLatch(1)
+        val fullRetryDelayed = java.util.concurrent.atomic.AtomicBoolean()
+        private val finishFirstLoad = CountDownLatch(1)
         private val sequence = java.util.concurrent.atomic.AtomicInteger()
         private val worker = Thread {
             while (!server.isClosed) {
@@ -548,18 +554,40 @@ class PlaybackSettingsTest {
                         val input = client.getInputStream().bufferedReader()
                         input.readLine()
                         var start = 0
+                        var ranged = false
                         while (true) {
                             val line = input.readLine()?.takeIf { it.isNotBlank() } ?: break
-                            if (line.startsWith("Range:", true)) start = Regex("bytes=(\\d+)-").find(line)?.groupValues?.get(1)?.toInt() ?: 0
+                            if (line.startsWith("Range:", true)) {
+                                ranged = true
+                                start = Regex("bytes=(\\d+)-").find(line)?.groupValues?.get(1)?.toInt() ?: 0
+                            }
                         }
                         requests.add(start)
-                        val fail = sequence.incrementAndGet() <= failures
+                        if (start >= 512 * 1024 && rejectSeek) {
+                            client.getOutputStream().write("HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray())
+                            seekRejected.countDown()
+                            return@use
+                        }
+                        if (start >= 512 * 1024 && seekDelayMs > 0) finishFirstLoad.await(seekDelayMs, TimeUnit.MILLISECONDS)
+                        val number = sequence.incrementAndGet()
+                        if (!ranged && seekRejected.count == 0L && fullRetryDelayMs > 0 && fullRetryDelayed.compareAndSet(false, true)) {
+                            finishFirstLoad.await(fullRetryDelayMs, TimeUnit.MILLISECONDS)
+                        }
+                        val fail = number <= failures
                         client.getOutputStream().apply {
                             if (fail && !partialFailures) write("HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray())
                             else {
                                 val remaining = bytes.size - start
-                                write("HTTP/1.1 206 Partial Content\r\nContent-Type: audio/wav\r\nAccept-Ranges: bytes\r\nContent-Range: bytes $start-${bytes.lastIndex}/${bytes.size}\r\nContent-Length: $remaining\r\nConnection: close\r\n\r\n".toByteArray())
-                                write(bytes, start, if (fail) minOf(1024, remaining) else remaining)
+                                val status = if (ranged) "206 Partial Content" else "200 OK"
+                                val contentRange = if (ranged) "Content-Range: bytes $start-${bytes.lastIndex}/${bytes.size}\r\n" else ""
+                                write("HTTP/1.1 $status\r\nContent-Type: audio/wav\r\nAccept-Ranges: bytes\r\n${contentRange}Content-Length: $remaining\r\nConnection: close\r\n\r\n".toByteArray())
+                                if (stallFirstLoad && number == 1) {
+                                    val prefix = minOf(224 * 1024, remaining)
+                                    write(bytes, start, prefix)
+                                    flush()
+                                    firstLoadStalled.countDown()
+                                    finishFirstLoad.await(15, TimeUnit.SECONDS)
+                                } else write(bytes, start, if (fail) minOf(1024, remaining) else remaining)
                             }
                             flush()
                         }
@@ -568,7 +596,106 @@ class PlaybackSettingsTest {
                 }.apply { isDaemon = true; start() }
             }
         }.apply { isDaemon = true; start() }
-        override fun close() { server.close(); sockets.forEach { it.close() }; worker.join(1000) }
+        override fun close() { finishFirstLoad.countDown(); server.close(); sockets.forEach { it.close() }; worker.join(1000) }
+    }
+
+    @Test fun slowSeekRangeCanFinishAfterTheFormerTimeoutWithoutRequestingAnotherUrl() = runBlocking {
+        withQualityPlayback { fixture, song ->
+            RangeAudioServer(fixture.file.readBytes(), failures = 0, stallFirstLoad = true, seekDelayMs = 8500).use { server ->
+                Lyrics(context).cache(song, listOf(LyricLine(0, "slow range fixture")))
+                AppPreferences(context).set("player.autoLowerQuality", false)
+                fixture.player.importExclusiveTestSource(qualityScript("if (attempts.length > 1) throw Error('unexpected URL refresh'); return Promise.resolve('${server.uri}');"))
+                main { fixture.player.play(listOf(song), 0) }
+                waitFor { fixture.player.state.value.playing && server.firstLoadStalled.count == 0L }
+                main { fixture.player.seekTo(22_000) }
+                delay(8_000)
+                assertNull(fixture.player.state.value.error)
+                assertTrue(fixture.player.state.value.playRequested)
+                withTimeout(10_000) {
+                    while (fixture.player.state.value.let { !it.playing || it.position !in 22_000..25_000 }) delay(40)
+                }
+                assertTrue(server.requests.any { it >= 22_000 * 32 })
+            }
+        }
+    }
+
+    @Test fun rejectedSeekRangeRefreshesTheCurrentSourceAndContinuesAtTheLatestPosition() = runBlocking {
+        withQualityPlayback { fixture, song ->
+            val bytes = fixture.file.readBytes()
+            RangeAudioServer(bytes, failures = 0, stallFirstLoad = true, rejectSeek = true).use { expired ->
+                RangeAudioServer(bytes, failures = 0).use { replacement ->
+                    Lyrics(context).cache(song, listOf(LyricLine(0, "seek refresh fixture")))
+                    AppPreferences(context).set("player.autoLowerQuality", false)
+                    fixture.player.importExclusiveTestSource(qualityScript("""
+                        if (attempts.length === 1) return Promise.resolve('${expired.uri}');
+                        if (attempts.length === 2) return new Promise(resolve => setTimeout(() => resolve('${replacement.uri}'), 1800));
+                        throw Error('unexpected repeat refresh');
+                    """.trimIndent()))
+                    main { fixture.player.play(listOf(song), 0) }
+                    waitFor { fixture.player.state.value.playing && expired.firstLoadStalled.count == 0L }
+                    main { fixture.player.seekTo(20_000) }
+                    waitFor { expired.seekRejected.count == 0L && fixture.player.state.value.preparing }
+                    main { fixture.player.seekTo(24_000) }
+                    waitFor { fixture.player.state.value.let { it.playing && it.position in 24_000..27_000 } }
+                    assertNull(fixture.player.state.value.error)
+                    assertTrue(replacement.requests.any { it >= 24_000 * 32 })
+                }
+            }
+        }
+    }
+
+    @Test fun sameAddressCanBeReadFromTheStartWhenItsSeekRangesAreRejected() = runBlocking {
+        withQualityPlayback { fixture, song ->
+            RangeAudioServer(fixture.file.readBytes(), failures = 0, stallFirstLoad = true, rejectSeek = true,
+                fullRetryDelayMs = 13_000).use { server ->
+                Lyrics(context).cache(song, listOf(LyricLine(0, "full response fixture")))
+                AppPreferences(context).set("player.autoLowerQuality", false)
+                fixture.player.importExclusiveTestSource(qualityScript("""
+                    if (attempts.length > 2) throw Error('unexpected repeat refresh');
+                    return Promise.resolve('${server.uri}');
+                """.trimIndent()))
+                main { fixture.player.play(listOf(song), 0) }
+                waitFor { fixture.player.state.value.playing && server.firstLoadStalled.count == 0L }
+                main { fixture.player.seekTo(23_000) }
+                waitFor { server.seekRejected.count == 0L }
+                withTimeout(20_000) {
+                    while (fixture.player.state.value.let { !it.playing || it.position !in 23_000..26_000 }) delay(40)
+                }
+                assertTrue(server.fullRetryDelayed.get())
+                assertTrue(server.requests.count { it == 0 } >= 2)
+                assertNull(fixture.player.state.value.error)
+            }
+        }
+    }
+
+    @Test fun seekingRestartsAStalledRangeAtTheLatestPositionAndKeepsPlayIntent() = runBlocking {
+        withQualityPlayback { fixture, song ->
+            RangeAudioServer(fixture.file.readBytes(), failures = 0, stallFirstLoad = true).use { server ->
+                Lyrics(context).cache(song, listOf(LyricLine(0, "seek fixture")))
+                fixture.player.importExclusiveTestSource(qualityScript("return Promise.resolve('${server.uri}');"))
+                main { fixture.player.play(listOf(song), 0) }
+                waitFor { fixture.player.state.value.playing && server.firstLoadStalled.count == 0L }
+                main {
+                    fixture.player.seekTo(16_000)
+                    fixture.player.seekTo(22_000)
+                    assertTrue(fixture.player.state.value.playRequested)
+                    assertEquals(22_000, fixture.player.state.value.position)
+                }
+                waitFor { fixture.player.state.value.let { it.playing && it.position in 22_000..25_000 } }
+                assertTrue(server.requests.any { it >= 22_000 * 32 })
+                main {
+                    fixture.player.pause()
+                    val bar = field(fixture.activity, "seek") as SeekBar
+                    assertTrue(bar.performAccessibilityAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SET_PROGRESS.id,
+                        Bundle().apply { putFloat(AccessibilityNodeInfo.ACTION_ARGUMENT_PROGRESS_VALUE, 4000f) }))
+                }
+                waitFor { fixture.player.state.value.let { !it.preparing && it.position in 4_000..4100 } }
+                assertFalse(fixture.player.state.value.playing)
+                assertFalse(fixture.player.state.value.playRequested)
+                main { fixture.player.resume() }
+                waitFor { fixture.player.state.value.playing }
+            }
+        }
     }
 
     @Test fun downloadedAudioHasPriorityOverCacheAndMissingOrCorruptDownloadsFallBackWithoutDeletion() = runBlocking {
@@ -829,6 +956,22 @@ class PlaybackSettingsTest {
         override fun close() { releaseAudio.countDown(); server.close(); sockets.forEach { it.close() }; worker.join(1000) }
     }
 
+    @Test fun missingPlaybackUrlsExhaust320kAnd128kOnce() = runBlocking {
+        withQualityPlayback { fixture, song ->
+            context.getSharedPreferences("player", 0).edit().putString("quality", "320k").commit()
+            QualityAudioServer(fixture.file.readBytes()).use { server ->
+                fixture.player.importExclusiveTestSource(qualityScript("""
+                    return new Promise((_, reject) => lx.request('${server.address}/' + info.type,
+                        {method:'get'}, () => reject(Error('no URL ' + info.type))));
+                """.trimIndent()))
+                main { fixture.player.play(listOf(song), 0) }
+                waitFor { fixture.player.state.value.error != null }
+                assertFalse(fixture.player.state.value.preparing)
+                assertEquals(listOf("320k", "128k"), server.requests.toList())
+            }
+        }
+    }
+
     @Test fun httpAndDecoderFailuresLowerBitrateUseSeparateCachesAndStopWhenExhaustedOrDisabled() = runBlocking {
         withQualityPlayback { fixture, song ->
             QualityAudioServer(fixture.file.readBytes()).use { server ->
@@ -915,7 +1058,7 @@ class PlaybackSettingsTest {
     @Test fun sourceTimeoutLowersBitrateWhileCallerCancellationStopsTheRequest() = runBlocking {
         withQualityPlayback { fixture, song ->
             fixture.player.importExclusiveTestSource(qualityScript("if (info.type === 'flac24bit') return new Promise(() => {}); return Promise.resolve('http://127.0.0.1/' + attempts.join(','));"))
-            assertEquals("http://127.0.0.1/flac24bit,flac", withTimeout(26_000) { fixture.player.resolveUrl(song) })
+            assertEquals("http://127.0.0.1/flac24bit,flac", withTimeout(7_000) { fixture.player.resolveUrl(song) })
             val cancelled = kotlinx.coroutines.withTimeoutOrNull(150) { fixture.player.resolveUrl(song) }
             assertNull(cancelled)
             // The cancelled request must not try the next quality in the background.

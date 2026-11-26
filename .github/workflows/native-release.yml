@@ -76,6 +76,7 @@ jobs:
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
           KEEP_DRAFT: ${{ inputs.draft || false }}
+          NATIVE_BUNDLE_MDX: 'true'
         run: |
           arguments=(--tag "$RELEASE_TAG")
           if [[ "$KEEP_DRAFT" == 'true' ]]; then arguments+=(--draft); fi

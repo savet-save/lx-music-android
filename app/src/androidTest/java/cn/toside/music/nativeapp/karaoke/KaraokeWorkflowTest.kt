@@ -9,6 +9,7 @@ import android.view.View
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.inspector.WindowInspector
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.LinearLayout
 import android.widget.ListView
 import android.widget.SeekBar
@@ -19,6 +20,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.SdkSuppress
 import androidx.test.platform.app.InstrumentationRegistry
+import cn.toside.music.nativeapp.NativeApplication
 import cn.toside.music.nativeapp.R
 import cn.toside.music.nativeapp.data.Song
 import cn.toside.music.nativeapp.lyrics.Lyrics
@@ -26,12 +28,16 @@ import cn.toside.music.nativeapp.player.AudioStreamCache
 import cn.toside.music.nativeapp.ui.ForegroundTestActivities
 import cn.toside.music.nativeapp.ui.KaraokeActivity
 import cn.toside.music.nativeapp.ui.KaraokePlaybackStatus
+import cn.toside.music.nativeapp.ui.KaraokeQueueActivity
 import cn.toside.music.nativeapp.ui.KaraokeStage
 import cn.toside.music.nativeapp.ui.KaraokeViewModel
 import cn.toside.music.nativeapp.ui.MainActivity
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
@@ -132,7 +138,7 @@ class KaraokeWorkflowTest {
             await { model.state.value.stage == KaraokeStage.REVIEW }
             assertTrue(model.state.value.duration in 1..4999)
             instrumentation.runOnMainSync { screen.window.decorView.findViewWithTag<Button>("karaoke-preview").performClick() }
-            await { model.state.value.playingPreview == KaraokeViewModel.DRAFT }
+            await { model.state.value.draftPlayback?.playing == true }
             instrumentation.runOnMainSync { screen.window.decorView.findViewWithTag<Button>("karaoke-save").performClick() }
             await { model.state.value.saved != null }
             saved = checkNotNull(model.state.value.saved)
@@ -150,6 +156,70 @@ class KaraokeWorkflowTest {
             saved?.let { recording -> recording.file.delete(); recording.file.resolveSibling("${recording.id}.json").delete() }
             context.filesDir.resolve("lyrics/${song.id}.lrc").delete()
             lrc.delete()
+            input.delete()
+        }
+    }
+
+    @Test fun draftPreviewSeeksAndRemainsPlayingWhileTheMixChanges() = runBlocking {
+        val input = File.createTempFile("karaoke-draft-seek", ".wav", context.cacheDir).apply { silence(this, 7) }
+        val song = Song(System.nanoTime(), Uri.fromFile(input), "Draft preview fixture", "", 7000)
+        val screen = ForegroundTestActivities.start(KaraokeActivity.intent(context, song)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as KaraokeActivity
+        try {
+            lateinit var model: KaraokeViewModel
+            instrumentation.runOnMainSync { model = ViewModelProvider(screen)[KaraokeViewModel::class.java] }
+            await { model.state.value.stage == KaraokeStage.READY }
+            instrumentation.runOnMainSync { model.record(syntheticCapture()) }
+            await { model.state.value.stage == KaraokeStage.RECORDING && model.state.value.position >= 3600 }
+            instrumentation.runOnMainSync { model.stop() }
+            await { model.state.value.stage == KaraokeStage.REVIEW }
+            val duration = model.state.value.duration
+            val root = screen.window.decorView
+            val bar = root.findViewWithTag<SeekBar>("karaoke-preview-position")
+            val play = root.findViewWithTag<Button>("karaoke-preview")
+            fun change(tag: String, value: Int) {
+                val slider = root.findViewWithTag<SeekBar>(tag)
+                assertTrue(slider.performAccessibilityAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SET_PROGRESS.id,
+                    Bundle().apply { putFloat(AccessibilityNodeInfo.ACTION_ARGUMENT_PROGRESS_VALUE, value.toFloat()) }))
+            }
+            instrumentation.runOnMainSync {
+                assertTrue(bar.isShown && bar.isEnabled)
+                assertEquals(duration, bar.max)
+                change("karaoke-preview-position", 1800)
+                assertEquals(1800, model.state.value.draftPlayback?.positionMs)
+                play.performClick()
+            }
+            await { model.state.value.draftPlayback?.let { it.playing && it.positionMs in 1900..3000 } == true }
+            instrumentation.runOnMainSync {
+                change("karaoke-preview-position", 300)
+                change("karaoke-music-gain", 36)
+                change("karaoke-voice-gain", 64)
+                root.findViewWithTag<CheckBox>("karaoke-noise").performClick()
+                val state = model.state.value
+                assertTrue(state.draftPlayback?.playing == true)
+                assertEquals(36, state.edit.music)
+                assertEquals(64, state.edit.voice)
+                assertTrue(state.edit.reduceNoise)
+            }
+            await { model.state.value.draftPlayback?.let { it.playing && it.positionMs in 450..1200 } == true }
+            instrumentation.runOnMainSync {
+                model.edit { it.copy(trimStartMs = 1600, trimEndMs = 200, voiceDelayMs = 40) }
+                assertTrue(model.state.value.draftPlayback?.playing == true)
+            }
+            await { model.state.value.draftPlayback?.let {
+                it.playing && it.durationMs == duration - 1800 && it.positionMs in 100..1000
+            } == true }
+            instrumentation.runOnMainSync {
+                play.performClick()
+                assertEquals(false, model.state.value.draftPlayback?.playing)
+                change("karaoke-preview-position", duration - 1820)
+                assertEquals(false, model.state.value.draftPlayback?.playing)
+                play.performClick()
+            }
+            await { model.state.value.draftPlayback?.let { !it.playing && it.positionMs == it.durationMs } == true }
+        } finally {
+            instrumentation.runOnMainSync { screen.finish() }
+            AudioStreamCache.get(context).removeSong(AudioStreamCache.key(song, ""))
             input.delete()
         }
     }
@@ -253,26 +323,40 @@ class KaraokeWorkflowTest {
         }
     }
 
-    @Test fun accompanimentProgressTracksSourceAndProcessedAudio() = runBlocking {
+    @Test fun accompanimentPreparationContinuesAfterClosingAndReopeningStudio() = runBlocking {
         val activity = mainActivity()
         val input = File.createTempFile("karaoke-progress", ".wav", context.cacheDir).apply { silence(this, 3) }
         val output = File.createTempFile("karaoke-result", ".wav", context.cacheDir)
+        val downloadProgress = CompletableDeferred<(Int) -> Unit>()
         val finishDownload = CompletableDeferred<Unit>()
         val song = Song(System.nanoTime(), Uri.fromFile(input), "Progress fixture", "", 0)
+        var reopened: KaraokeActivity? = null
         try {
             lateinit var model: KaraokeViewModel
             instrumentation.runOnMainSync {
                 model = ViewModelProvider(activity)[KaraokeViewModel::class.java]
                 model.prepare(song) { file, report ->
                     report(50)
+                    downloadProgress.complete(report)
                     finishDownload.await()
                     withContext(Dispatchers.IO) { input.copyTo(file) }
                     Uri.fromFile(file)
                 }
             }
-            await { model.state.value.stage == KaraokeStage.PREPARING && model.state.value.prepareProgress in 1..49 }
+            await { model.state.value.stage == KaraokeStage.PREPARING && model.state.value.prepareProgress == 22 }
+            instrumentation.runOnMainSync { activity.finish() }
+            await { activity.isDestroyed }
+
+            val screen = ForegroundTestActivities.start(KaraokeActivity.intent(context, song)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as KaraokeActivity
+            reopened = screen
+            lateinit var restored: KaraokeViewModel
+            instrumentation.runOnMainSync { restored = ViewModelProvider(screen)[KaraokeViewModel::class.java] }
+            await { restored.state.value.stage == KaraokeStage.PREPARING && restored.state.value.prepareProgress == 22 }
+            downloadProgress.await()(80)
+            await { restored.state.value.stage == KaraokeStage.PREPARING && restored.state.value.prepareProgress == 36 }
             finishDownload.complete(Unit)
-            await { model.state.value.stage == KaraokeStage.READY && model.state.value.prepareProgress == 100 }
+            await { restored.state.value.stage == KaraokeStage.READY && restored.state.value.prepareProgress == 100 }
 
             val processing = mutableListOf<Int>()
             KaraokeAudio.prepare(context, Uri.fromFile(input), output, songDurationMs = 0, progress = processing::add)
@@ -280,10 +364,171 @@ class KaraokeWorkflowTest {
             assertTrue(processing.last() in 90..99)
             assertTrue(processing.zipWithNext().all { (first, second) -> second > first })
         } finally {
-            instrumentation.runOnMainSync { activity.finish() }
+            finishDownload.complete(Unit)
+            instrumentation.runOnMainSync { reopened?.finish(); activity.finish() }
+            AudioStreamCache.get(context).removeSong(AudioStreamCache.key(song, ""))
             input.delete()
             output.delete()
         }
+    }
+
+    @Test fun conversionQueueRunsOneSongAtATimeAndCancelsWaitingAndActiveSongs() = runBlocking {
+        val preparation = (context.applicationContext as NativeApplication).karaokePreparation
+        val directory = context.cacheDir.resolve("karaoke-queue-test-${UUID.randomUUID()}").apply { mkdir() }
+        val songs = List(4) { index ->
+            val input = directory.resolve("input-$index.wav").apply { silence(this, 1) }
+            Song(System.nanoTime(), Uri.fromFile(input), "Queue song ${index + 1}", "Artist", 1000)
+        }
+        val started = List(songs.size) { CompletableDeferred<Unit>() }
+        val proceed = List(songs.size) { CompletableDeferred<Unit>() }
+        val stopping = CompletableDeferred<Unit>()
+        val stopped = CompletableDeferred<Unit>()
+        val jobs = mutableMapOf<Int, Deferred<Result<KaraokePreparation.Prepared>>>()
+        fun enqueue(index: Int) {
+            val song = songs[index]
+            jobs[index] = async {
+                runCatching {
+                    preparation.prepare(song, directory.resolve("result-$index"), { _, report ->
+                        report(50)
+                        started[index].complete(Unit)
+                        if (index == 0) try { awaitCancellation() } finally {
+                            withContext(NonCancellable) {
+                                stopping.complete(Unit)
+                                stopped.await()
+                            }
+                        }
+                        proceed[index].await()
+                        song.uri
+                    }, installModel = false, previous = null) {}
+                }
+            }
+        }
+        fun entries() = preparation.queue.value.filter { it.song in songs }
+        suspend fun result(index: Int) = withTimeout(12_000) { jobs.getValue(index).await() }
+        var openedStudio: KaraokeActivity? = null
+        var openedQueue: KaraokeQueueActivity? = null
+        val monitor = instrumentation.addMonitor(KaraokeQueueActivity::class.java.name, null, false)
+        try {
+            enqueue(0)
+            await { started[0].isCompleted }
+            val studio = ForegroundTestActivities.start(KaraokeActivity.intent(context, songs[0])
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as KaraokeActivity
+            openedStudio = studio
+            lateinit var model: KaraokeViewModel
+            instrumentation.runOnMainSync { model = ViewModelProvider(studio)[KaraokeViewModel::class.java] }
+            await { model.state.value.prepareProgress == 22 }
+            for (index in 1..3) {
+                enqueue(index)
+                await { entries().map { it.song } == songs.take(index + 1) }
+            }
+
+            instrumentation.runOnMainSync { studio.window.decorView.findViewWithTag<Button>("karaoke-open-queue").performClick() }
+            val queue = instrumentation.waitForMonitorWithTimeout(monitor, 7000) as KaraokeQueueActivity
+            openedQueue = queue
+            val ids = entries().map { it.id }
+            fun row(index: Int) = queue.window.decorView.findViewWithTag<View>("karaoke-queue:${ids[index]}")
+            fun status(index: Int) = row(index)?.findViewWithTag<TextView>("karaoke-queue-status")?.text?.toString()
+            fun cancel(index: Int) = row(index)?.findViewWithTag<Button>("karaoke-queue-cancel")
+            await { status(0) == queue.getString(R.string.karaoke_preparing_progress, 22) &&
+                status(1) == queue.getString(R.string.karaoke_queue_waiting, 1) }
+            assertTrue(started.drop(1).none { it.isCompleted })
+
+            instrumentation.runOnMainSync { checkNotNull(cancel(1)).performClick() }
+            assertTrue(result(1).exceptionOrNull() is KaraokePreparation.Cancelled)
+            await { row(1) == null && status(2) == queue.getString(R.string.karaoke_queue_waiting, 1) }
+
+            instrumentation.runOnMainSync { checkNotNull(cancel(0)).performClick() }
+            await { stopping.isCompleted && status(0) == queue.getString(R.string.karaoke_queue_cancelling) &&
+                cancel(0)?.isEnabled == false }
+            assertFalse(started[2].isCompleted)
+            stopped.complete(Unit)
+            assertTrue(result(0).exceptionOrNull() is KaraokePreparation.Cancelled)
+            await { row(0) == null && started[2].isCompleted && status(3) == queue.getString(R.string.karaoke_queue_waiting, 1) }
+            assertFalse(started[3].isCompleted)
+
+            instrumentation.runOnMainSync { queue.window.decorView.findViewWithTag<View>("page-back").performClick() }
+            await { studio.hasWindowFocus() && model.state.value.stage == KaraokeStage.IDLE &&
+                model.state.value.message == R.string.karaoke_preparation_cancelled }
+            assertEquals(songs.drop(2), entries().map { it.song })
+            proceed[2].complete(Unit)
+            assertTrue(result(2).isSuccess)
+            await { started[3].isCompleted }
+            proceed[3].complete(Unit)
+            assertTrue(result(3).isSuccess)
+            assertTrue(entries().isEmpty())
+            assertFalse(started[1].isCompleted)
+
+            instrumentation.runOnMainSync { studio.window.decorView.findViewWithTag<Button>("karaoke-capture").performClick() }
+            await { model.state.value.stage == KaraokeStage.READY }
+        } finally {
+            stopped.complete(Unit)
+            entries().forEach { preparation.cancel(it.id) }
+            jobs.values.forEach { withTimeout(12_000) { it.join() } }
+            instrumentation.removeMonitor(monitor)
+            instrumentation.runOnMainSync { openedQueue?.finish(); openedStudio?.finish() }
+            val cache = AudioStreamCache.get(context)
+            songs.forEach { cache.removeSong(AudioStreamCache.key(it, "")) }
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test fun sameRecordingJoinsItsExistingConversionAndACompletedCacheBypassesTheQueue() = runBlocking {
+        val preparation = (context.applicationContext as NativeApplication).karaokePreparation
+        val directory = context.cacheDir.resolve("karaoke-dedup-test-${UUID.randomUUID()}").apply { mkdir() }
+        val input = directory.resolve("input.wav").apply { silence(this, 1) }
+        val id = System.nanoTime()
+        val song = Song(id, Uri.EMPTY, "Online recording", "Artist", 1000, "kw", """{"songmid":$id}""")
+        val enriched = song.copy(duration = 1100, sourceInfo = """{"songmid":$id,"img":"cover"}""")
+        val blocker = Song(id + 1, Uri.fromFile(input), "Other recording", "Artist", 1000)
+        val settings = context.getSharedPreferences("app-settings", Context.MODE_PRIVATE)
+        val savedModel = settings.all[MdxParameters.ENABLED_KEY] as? Boolean
+        val savedLimit = settings.getString("player.cacheSize", null)
+        settings.edit().putBoolean(MdxParameters.ENABLED_KEY, false).putString("player.cacheSize", "32").commit()
+        val release = CompletableDeferred<Unit>()
+        val blockerRelease = CompletableDeferred<Unit>()
+        try {
+            val original = async {
+                preparation.prepare(song, directory.resolve("first"), { _, report ->
+                    report(50); release.await(); Uri.fromFile(input)
+                }, installModel = false, previous = null) {}
+            }
+            await { preparation.queue.value.any { it.song == song && it.progress.percent == 22 } }
+            val originalId = preparation.queue.value.single { it.song == song }.id
+            val joined = CompletableDeferred<Unit>()
+            val duplicate = async {
+                preparation.prepare(enriched, directory.resolve("second"), { _, _ -> error("duplicate conversion") },
+                    installModel = false, previous = null) { if (it.percent == 22) joined.complete(Unit) }
+            }
+            withTimeout(4000) { joined.await() }
+            assertEquals(listOf(originalId), preparation.queue.value.filter { it.song.id == id && it.song.source == "kw" }.map { it.id })
+            release.complete(Unit)
+            assertArrayEquals(original.await().backing.file.readBytes(), duplicate.await().backing.file.readBytes())
+
+            val other = async {
+                preparation.prepare(blocker, directory.resolve("other"), { _, report ->
+                    report(50); blockerRelease.await(); Uri.fromFile(input)
+                }, installModel = false, previous = null) {}
+            }
+            await { preparation.queue.value.any { it.song == blocker && it.progress.percent == 22 } }
+            val cached = withTimeout(3000) {
+                preparation.prepare(song, directory.resolve("cached"), { _, _ -> error("cached recording must not convert again") },
+                    installModel = false, previous = null) {}
+            }
+            assertArrayEquals(original.await().backing.file.readBytes(), cached.backing.file.readBytes())
+            assertFalse(preparation.queue.value.any { it.song.id == id && it.song.source == "kw" })
+            blockerRelease.complete(Unit)
+            other.await()
+        } finally {
+            release.complete(Unit); blockerRelease.complete(Unit)
+            settings.edit().apply {
+                if (savedModel == null) remove(MdxParameters.ENABLED_KEY) else putBoolean(MdxParameters.ENABLED_KEY, savedModel)
+                if (savedLimit == null) remove("player.cacheSize") else putString("player.cacheSize", savedLimit)
+            }.commit()
+            val cache = AudioStreamCache.get(context)
+            listOf(song, blocker).forEach { cache.removeSong(AudioStreamCache.key(it, "")) }
+            directory.deleteRecursively()
+        }
+        Unit
     }
 
     @Test fun generatedAccompanimentIsReusedAndRefreshesWhenLocalAudioChanges() = runBlocking {
@@ -322,6 +567,36 @@ class KaraokeWorkflowTest {
                 KaraokeAudio.prepare(context, song.uri, first, song.duration) {}
             }
             assertTrue(regenerated)
+        } finally {
+            AudioStreamCache.get(context).removeSong(AudioStreamCache.key(song, ""))
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test fun separatedAccompanimentCacheMatchesAudioParameters() = runBlocking {
+        val directory = context.cacheDir.resolve("karaoke-mdx-cache-test-${UUID.randomUUID()}").apply { mkdir() }
+        val input = directory.resolve("input.wav").apply { silence(this, 1) }
+        val target = directory.resolve("output.wav")
+        val song = Song(System.nanoTime(), Uri.fromFile(input), "MDX cache fixture", "", 0)
+        val cache = KaraokeBackingCache(context)
+        var generations = 0
+        suspend fun using(parameters: MdxParameters?) = cache.reuseOrPrepare(song, target, separation = parameters) {
+            generations++
+            KaraokeAudio.prepare(context, song.uri, target, song.duration) {}.copy(separation = parameters)
+        }
+        val defaults = MdxParameters.Default
+        val stronger = defaults.copy(strengthPercent = 110)
+        val longerOverlap = stronger.copy(overlapMs = 500)
+        try {
+            assertTrue(using(defaults).separated)
+            assertTrue(using(stronger).separated)
+            assertTrue(using(longerOverlap).separated)
+            assertEquals(3, generations)
+            assertTrue(using(longerOverlap.copy(threads = 1)).separated)
+            assertTrue(using(defaults).separated)
+            assertEquals(3, generations)
+            assertFalse(using(null).separated)
+            assertEquals(4, generations)
         } finally {
             AudioStreamCache.get(context).removeSong(AudioStreamCache.key(song, ""))
             directory.deleteRecursively()

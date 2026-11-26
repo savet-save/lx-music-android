@@ -73,6 +73,7 @@ class KaraokeActivity : FragmentActivity() {
     private lateinit var timing: TextView
     private lateinit var progress: ProgressBar
     private lateinit var originalSwitch: Switch
+    private lateinit var modelButton: Button
     private lateinit var captureButton: Button
     private lateinit var stopButton: Button
     private lateinit var editor: LinearLayout
@@ -83,12 +84,12 @@ class KaraokeActivity : FragmentActivity() {
     private lateinit var voiceDelay: Slider
     private lateinit var noise: CheckBox
     private lateinit var preview: Button
+    private lateinit var draftSeek: PlaybackSeekBar
     private lateinit var share: Button
     private lateinit var export: Button
     private var displayedRecordings: List<KaraokeRecording>? = null
     private val recordingRows = mutableMapOf<String, RecordingRow>()
     private var renderedPlaybackId: String? = null
-    private var service: PlaybackService? = null
     private var bound = false
     private var lyricJob: Job? = null
     private var lyrics = PlayerLyrics()
@@ -116,8 +117,6 @@ class KaraokeActivity : FragmentActivity() {
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName, binder: IBinder) {
             val player = (binder as PlaybackService.LocalBinder).service
-            service = player
-            prepareSong()
             lyricJob = lifecycleScope.launch {
                 player.lyricState.collect {
                     lyrics = it
@@ -125,7 +124,7 @@ class KaraokeActivity : FragmentActivity() {
                 }
             }
         }
-        override fun onServiceDisconnected(name: ComponentName) { service = null; lyricJob?.cancel() }
+        override fun onServiceDisconnected(name: ComponentName) { lyricJob?.cancel() }
     }
 
     override fun attachBaseContext(base: Context) = super.attachBaseContext(UiPreferences.context(base))
@@ -154,9 +153,8 @@ class KaraokeActivity : FragmentActivity() {
     override fun onStart() {
         super.onStart()
         if (song != null) {
-            prepareSong()
+            prepareSong(automatic = true)
             bound = bindService(Intent(this, PlaybackService::class.java), connection, BIND_AUTO_CREATE)
-            if (!bound && song?.source != "local") studio.message(R.string.karaoke_prepare_error)
         }
     }
 
@@ -166,7 +164,6 @@ class KaraokeActivity : FragmentActivity() {
         lyricJob?.cancel()
         if (bound) unbindService(connection)
         bound = false
-        service = null
         super.onStop()
     }
 
@@ -175,16 +172,13 @@ class KaraokeActivity : FragmentActivity() {
         super.onSaveInstanceState(outState)
     }
 
-    private fun prepareSong() {
+    private fun prepareSong(automatic: Boolean = false) {
         val selected = song ?: return
         if (PermissionPolicy.requiresLibraryAccess(this, selected) && checkSelfPermission(PermissionPolicy.audio(Build.VERSION.SDK_INT)) != PackageManager.PERMISSION_GRANTED) {
             studio.message(R.string.karaoke_prepare_error)
             return
         }
-        if (selected.source == "local") studio.prepare(selected) { _, _ -> selected.uri }
-        else service?.let { player ->
-            studio.prepare(selected) { file, progress -> player.karaokeInput(selected, file, progress) }
-        }
+        studio.prepare(selected, automatic = automatic)
     }
 
     private fun record() {
@@ -307,6 +301,9 @@ class KaraokeActivity : FragmentActivity() {
             addView(headerTitle, LinearLayout.LayoutParams(0, -2, 1f))
             sectionButton = button(R.string.karaoke_library) { studio.showLibrary(!studio.state.value.libraryOpen) }
             addView(sectionButton, LinearLayout.LayoutParams(-2, -2))
+            addView(button(R.string.karaoke_queue_button) {
+                startActivity(Intent(this@KaraokeActivity, KaraokeQueueActivity::class.java))
+            }.apply { tag = "karaoke-open-queue" }, LinearLayout.LayoutParams(-2, -2))
         }
         addView(toolbar, LinearLayout.LayoutParams(-1, dp(56)))
         addView(View(context).apply { setBackgroundColor(palette.divider) }, LinearLayout.LayoutParams(-1, dp(1)))
@@ -350,6 +347,14 @@ class KaraokeActivity : FragmentActivity() {
                 progressTintList = ColorStateList.valueOf(palette.primary)
             }
             addView(progress, LinearLayout.LayoutParams(-1, dp(8)))
+            draftSeek = PlaybackSeekBar("karaoke-preview-position", studio::seekDraft) { position ->
+                studio.state.value.draftPlayback?.let { updateTiming(timing, position, it.durationMs) }
+            }
+            addView(draftSeek, LinearLayout.LayoutParams(-1, dp(48)))
+            preview = button(R.string.karaoke_preview, filled = true, click = studio::previewTake).apply {
+                tag = "karaoke-preview"
+            }
+            addView(preview, LinearLayout.LayoutParams(-1, -2))
             @Suppress("UseSwitchCompatOrMaterialCode")
             val toggle = Switch(context).apply {
                 tag = "karaoke-original"
@@ -367,6 +372,9 @@ class KaraokeActivity : FragmentActivity() {
             }
             originalSwitch = toggle
             addView(originalSwitch, LinearLayout.LayoutParams(-1, -2))
+            modelButton = button(R.string.karaoke_model_download) { selected?.let(studio::useSeparationModel) }
+                .apply { tag = "karaoke-model-download" }
+            addView(modelButton, LinearLayout.LayoutParams(-1, -2))
         }
         addView(songCard, LinearLayout.LayoutParams(-1, -2))
         lyricPanel = column().apply {
@@ -389,7 +397,9 @@ class KaraokeActivity : FragmentActivity() {
             setPadding(0, dp(12), 0, 0)
             val gain = { value: Int -> getString(R.string.karaoke_percent, value) }
             musicGain = slider(this, R.string.karaoke_music_gain, 0, 100, gain) { value -> studio.edit { it.copy(music = value) } }
+                .also { it.bar.tag = "karaoke-music-gain" }
             voiceGain = slider(this, R.string.karaoke_voice_gain, 0, 100, gain) { value -> studio.edit { it.copy(voice = value) } }
+                .also { it.bar.tag = "karaoke-voice-gain" }
             val trimTime = { value: Int -> getString(R.string.karaoke_trim_time, time(value), value % 1000 / 100) }
             trimStart = slider(this, R.string.karaoke_trim_start, 0, 0, trimTime) { value ->
                 studio.edit { it.copy(trimStartMs = value.coerceAtMost((studio.state.value.duration - it.trimEndMs - 250).coerceAtLeast(0))) }
@@ -401,6 +411,7 @@ class KaraokeActivity : FragmentActivity() {
                 studio.edit { it.copy(voiceDelayMs = value) }
             }
             noise = CheckBox(context).apply {
+                tag = "karaoke-noise"
                 setText(R.string.karaoke_noise)
                 setTextColor(palette.foreground)
                 buttonTintList = ColorStateList.valueOf(palette.primary)
@@ -410,8 +421,7 @@ class KaraokeActivity : FragmentActivity() {
                 }
             }
             addView(noise)
-            preview = button(R.string.karaoke_preview, click = studio::previewTake).apply { tag = "karaoke-preview" }
-            addView(actions(preview, button(R.string.karaoke_save, filled = true) { song?.let(studio::save) }.apply { tag = "karaoke-save" }))
+            addView(actions(button(R.string.karaoke_save, filled = true) { song?.let(studio::save) }.apply { tag = "karaoke-save" }))
             export = button(R.string.karaoke_export) { studio.state.value.saved?.let(::export) }
             share = button(R.string.karaoke_share) { studio.state.value.saved?.let(::share) }
             addView(actions(export, share))
@@ -433,10 +443,15 @@ class KaraokeActivity : FragmentActivity() {
             return
         }
         val preparing = state.stage == KaraokeStage.PREPARING
+        val cancelled = state.stage == KaraokeStage.IDLE && state.message == R.string.karaoke_preparation_cancelled
         val statusText = when (state.stage) {
-            KaraokeStage.IDLE -> getString(R.string.karaoke_preparing)
-            KaraokeStage.PREPARING -> getString(R.string.karaoke_preparing_progress, state.prepareProgress)
-            KaraokeStage.READY -> getString(if (state.mono) R.string.karaoke_mono else R.string.karaoke_ready)
+            KaraokeStage.IDLE -> if (cancelled) "" else getString(R.string.karaoke_preparing)
+            KaraokeStage.PREPARING -> karaokePreparationStatus(state.preparation)
+            KaraokeStage.READY -> getString(when {
+                state.separated -> R.string.karaoke_model_ready
+                state.mono -> R.string.karaoke_mono
+                else -> R.string.karaoke_ready
+            })
             KaraokeStage.RECORDING -> getString(
                 if (state.originalEnabled && !state.originalLoading) R.string.karaoke_recording_original else R.string.karaoke_recording,
             )
@@ -445,17 +460,38 @@ class KaraokeActivity : FragmentActivity() {
             KaraokeStage.REVIEW -> getString(R.string.karaoke_review)
         }
         if (status.text != statusText) status.text = statusText
-        timing.visibility = if (preparing) View.GONE else View.VISIBLE
-        if (!preparing) timing.text = getString(R.string.karaoke_timing, time(state.position), time(state.duration))
+        status.visibility = if (statusText.isEmpty()) View.GONE else View.VISIBLE
+        val editing = state.stage == KaraokeStage.REVIEW
+        val draft = state.draftPlayback.takeIf { editing || state.stage == KaraokeStage.MIXING }
+        timing.visibility = if (preparing || cancelled) View.GONE else View.VISIBLE
+        if (draft != null) {
+            if (!draftSeek.dragging) updateTiming(timing, draft.positionMs, draft.durationMs)
+            draftSeek.update(draft.positionMs, draft.durationMs)
+        } else if (!preparing) updateTiming(timing, state.position, state.duration)
+        draftSeek.visibility = if (draft != null) View.VISIBLE else View.GONE
+        draftSeek.isEnabled = editing && (draft?.durationMs ?: 0) > 0
+        preview.visibility = draftSeek.visibility
+        preview.isEnabled = editing && draft != null
+        val previewLabel = getString(when {
+            draft?.playing == true -> R.string.karaoke_preview_pause
+            draft != null && draft.positionMs in 1 until draft.durationMs -> R.string.karaoke_preview_resume
+            else -> R.string.karaoke_preview
+        })
+        if (preview.text != previewLabel) preview.text = previewLabel
+        progress.visibility = if (draft == null && !cancelled) View.VISIBLE else View.GONE
         progress.max = if (preparing) 100 else state.duration.coerceAtLeast(1)
-        progress.progress = if (preparing) state.prepareProgress else state.position
+        progress.progress = if (preparing) state.modelDownload ?: state.prepareProgress else state.position
         val monitoring = state.stage == KaraokeStage.READY || state.stage == KaraokeStage.RECORDING || state.stage == KaraokeStage.PAUSED
         originalSwitch.visibility = if (monitoring) View.VISIBLE else View.GONE
-        originalSwitch.isEnabled = monitoring && !state.mono
+        originalSwitch.isEnabled = monitoring && !state.mono && state.modelDownload == null
         originalSwitch.isChecked = state.originalEnabled
         originalSwitch.setText(if (state.originalLoading && state.originalEnabled) R.string.karaoke_original_loading else R.string.karaoke_original)
         renderLyrics(state)
-        captureButton.isEnabled = state.stage !in setOf(KaraokeStage.PREPARING, KaraokeStage.MIXING)
+        modelButton.visibility = if (state.stage == KaraokeStage.READY && state.modelEnabled && !state.separated) View.VISIBLE else View.GONE
+        modelButton.isEnabled = state.modelDownload == null && !state.originalLoading
+        modelButton.text = state.modelDownload?.let { getString(R.string.karaoke_model_downloading, it) }
+            ?: getString(if (state.modelInstalled) R.string.karaoke_model_retry else R.string.karaoke_model_download)
+        captureButton.isEnabled = state.stage !in setOf(KaraokeStage.PREPARING, KaraokeStage.MIXING) && state.modelDownload == null
         captureButton.setText(when (state.stage) {
             KaraokeStage.IDLE -> R.string.karaoke_retry
             KaraokeStage.RECORDING -> R.string.karaoke_pause
@@ -464,7 +500,6 @@ class KaraokeActivity : FragmentActivity() {
             else -> R.string.karaoke_record
         })
         stopButton.visibility = if (state.stage in setOf(KaraokeStage.RECORDING, KaraokeStage.PAUSED)) View.VISIBLE else View.GONE
-        val editing = state.stage == KaraokeStage.REVIEW
         editor.visibility = if (editing || state.stage == KaraokeStage.MIXING) View.VISIBLE else View.GONE
         if (editor.visibility != View.VISIBLE) return
         for (index in 0 until editor.childCount) {
@@ -478,7 +513,6 @@ class KaraokeActivity : FragmentActivity() {
         trimEnd.update(state.edit.trimEndMs, (state.duration - state.edit.trimStartMs - 250).coerceAtLeast(0))
         voiceDelay.update(state.edit.voiceDelayMs)
         noise.isChecked = state.edit.reduceNoise
-        preview.setText(if (state.playingPreview == KaraokeViewModel.DRAFT) R.string.karaoke_preview_stop else R.string.karaoke_preview)
         export.visibility = if (state.saved != null) View.VISIBLE else View.GONE
         share.visibility = export.visibility
     }
@@ -532,34 +566,55 @@ class KaraokeActivity : FragmentActivity() {
         renderedPlaybackId = playback?.id
     }
 
+    private inner class PlaybackSeekBar(tagName: String, seek: (Int) -> Unit, display: (Int) -> Unit) :
+        SeekBar(this@KaraokeActivity) {
+        var dragging = false
+            private set
+
+        init {
+            tag = tagName
+            contentDescription = getString(R.string.karaoke_playback_position)
+            progressTintList = ColorStateList.valueOf(palette.primary)
+            thumbTintList = ColorStateList.valueOf(palette.primary)
+            setOnSeekBarChangeListener(object : OnSeekBarChangeListener {
+                override fun onProgressChanged(view: SeekBar, progress: Int, fromUser: Boolean) {
+                    if (!fromUser) return
+                    display(progress)
+                    if (!dragging) seek(progress)
+                }
+
+                override fun onStartTrackingTouch(view: SeekBar) { dragging = true }
+                override fun onStopTrackingTouch(view: SeekBar) {
+                    dragging = false
+                    if (view.isEnabled) seek(view.progress)
+                }
+            })
+        }
+
+        fun update(position: Int, duration: Int) {
+            if (dragging) return
+            if (max != duration) {
+                max = duration
+                keyProgressIncrement = (max / 20).coerceAtLeast(250)
+            }
+            progress = position
+        }
+    }
+
+    private fun updateTiming(label: TextView, positionMs: Int, durationMs: Int) {
+        val text = getString(R.string.karaoke_timing, time(positionMs), time(durationMs))
+        if (label.text != text) label.text = text
+    }
+
     private inner class RecordingRow(private val recording: KaraokeRecording) {
-        private var dragging = false
         private val playbackTime = styles.label("", 13f, palette.muted).apply {
             setPaddingRelative(0, 0, dp(8), 0)
         }
         private val play = button(R.string.karaoke_play, filled = true) { studio.playRecording(recording) }.apply {
             tag = "karaoke-play-${recording.id}"
         }
-        private val seek = SeekBar(this@KaraokeActivity).apply {
-            tag = "karaoke-seek-${recording.id}"
-            contentDescription = getString(R.string.karaoke_playback_position)
-            max = recording.durationMs
-            keyProgressIncrement = (max / 20).coerceAtLeast(250)
-            progressTintList = ColorStateList.valueOf(palette.primary)
-            thumbTintList = ColorStateList.valueOf(palette.primary)
-            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(view: SeekBar, progress: Int, fromUser: Boolean) {
-                    if (!fromUser) return
-                    updateTime(progress)
-                    if (!dragging) studio.seekRecording(recording.id, progress)
-                }
-
-                override fun onStartTrackingTouch(view: SeekBar) { dragging = true }
-                override fun onStopTrackingTouch(view: SeekBar) {
-                    dragging = false
-                    studio.seekRecording(recording.id, view.progress)
-                }
-            })
+        private val seek = PlaybackSeekBar("karaoke-seek-${recording.id}", { studio.seekRecording(recording.id, it) }) {
+            updateTiming(playbackTime, it, recording.durationMs)
         }
         private val seekRow = LinearLayout(this@KaraokeActivity).apply {
             gravity = Gravity.CENTER_VERTICAL
@@ -602,15 +657,10 @@ class KaraokeActivity : FragmentActivity() {
             }
             val text = getString(label)
             if (play.text != text) play.text = text
-            if (playback != null && !dragging) {
-                seek.progress = playback.positionMs
-                updateTime(playback.positionMs)
+            if (playback != null && !seek.dragging) {
+                seek.update(playback.positionMs, playback.durationMs)
+                updateTiming(playbackTime, playback.positionMs, playback.durationMs)
             }
-        }
-
-        private fun updateTime(positionMs: Int) {
-            val text = getString(R.string.karaoke_timing, time(positionMs), time(recording.durationMs))
-            if (playbackTime.text != text) playbackTime.text = text
         }
     }
 
@@ -636,9 +686,10 @@ class KaraokeActivity : FragmentActivity() {
 
     private class Slider(val label: TextView, val bar: SeekBar, val title: String, val format: (Int) -> String) {
         fun update(value: Int, max: Int = bar.max) {
-            bar.max = max
+            if (bar.max != max) bar.max = max
             bar.progress = value
-            label.text = label.context.getString(R.string.karaoke_control_value, title, format(value))
+            val current = label.context.getString(R.string.karaoke_control_value, title, format(value))
+            if (label.text != current) label.text = current
         }
     }
 

@@ -14,6 +14,7 @@ import android.os.Build
 import android.provider.Settings
 import android.util.AtomicFile
 import androidx.core.content.FileProvider
+import cn.toside.music.nativeapp.karaoke.KARAOKE_MODEL_ASSETS
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
@@ -21,9 +22,10 @@ import org.json.JSONObject
 import java.io.File
 import java.security.MessageDigest
 import java.util.UUID
+import java.util.zip.ZipFile
 import kotlin.coroutines.coroutineContext
 
-internal data class UpdateDownload(val id: Long, val version: String, val size: Long, val digest: String?)
+internal data class UpdateDownload(val id: Long, val version: String, val size: Long, val digest: String?, val withModel: Boolean = false)
 internal data class UpdateProgress(val download: UpdateDownload, val status: Int, val current: Long, val total: Long, val reason: Int = 0)
 class UpdateFileProvider : FileProvider()
 
@@ -32,26 +34,31 @@ internal class NativeUpdates(private val context: Context) {
     private val manager = requireNotNull(context.getSystemService(DownloadManager::class.java))
     private val preferences = context.getSharedPreferences("native-updates", Context.MODE_PRIVATE)
     private val privateDirectory = File(context.filesDir, "updates")
+    private val withModel by lazy { NativeReleases.hasBundledModel(context) }
     private fun file(version: String): File {
         require(version.matches(Regex("\\d{1,5}\\.\\d{1,5}\\.\\d{1,5}")))
         return File(requireNotNull(context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)), "updates/native-v$version.apk")
     }
     fun saved(): UpdateDownload? = runCatching {
         val json = JSONObject(preferences.getString("download", null) ?: return@runCatching null)
-        UpdateDownload(json.getLong("id"), json.getString("version"), json.optLong("size"), json.optString("digest").takeIf { it.isNotBlank() && it != "null" })
+        UpdateDownload(json.getLong("id"), json.getString("version"), json.optLong("size"),
+            json.optString("digest").takeIf { it.isNotBlank() && it != "null" }, json.optBoolean("withModel"))
             .also { require(it.id > 0); file(it.version) }
     }.getOrNull()
     fun start(release: NativeRelease): UpdateDownload {
         require(release.size in 0..MAX_BYTES)
         val url = release.apkUrl ?: error(context.getString(R.string.update_no_apk))
+        check(release.withModel == withModel) { context.getString(R.string.update_edition_invalid) }
         cancel()
         val target = file(release.version); target.parentFile?.mkdirs(); check(!target.exists() || target.delete())
         val request = DownloadManager.Request(Uri.parse(url)).setTitle(context.getString(R.string.update_download_title, release.version))
             .setMimeType("application/octet-stream").setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE)
             .setDestinationInExternalFilesDir(context, Environment.DIRECTORY_DOWNLOADS, "updates/${target.name}")
         val id = manager.enqueue(request)
-        val download = UpdateDownload(id, release.version, release.size, release.digest)
-        if (!preferences.edit().putString("download", JSONObject().put("id", id).put("version", release.version).put("size", release.size).put("digest", release.digest).toString()).commit()) {
+        val download = UpdateDownload(id, release.version, release.size, release.digest, release.withModel)
+        val state = JSONObject().put("id", id).put("version", release.version).put("size", release.size)
+            .put("digest", release.digest).put("withModel", release.withModel)
+        if (!preferences.edit().putString("download", state.toString()).commit()) {
             manager.remove(id); error(context.getString(R.string.update_save_failed))
         }
         return download
@@ -59,7 +66,7 @@ internal class NativeUpdates(private val context: Context) {
     fun progress(): UpdateProgress? {
         val download = saved() ?: return null
         @Suppress("DEPRECATION") val installed = context.packageManager.getPackageInfo(context.packageName, 0).versionName.orEmpty()
-        if (NativeReleases.compare(download.version, installed) <= 0) { cancel(); return null }
+        if (download.withModel != withModel || NativeReleases.compare(download.version, installed) <= 0) { cancel(); return null }
         return manager.query(DownloadManager.Query().setFilterById(download.id))?.use { cursor ->
             if (!cursor.moveToFirst()) return@use null
             fun number(name: String) = cursor.getLong(cursor.getColumnIndexOrThrow(name))
@@ -74,6 +81,7 @@ internal class NativeUpdates(private val context: Context) {
     }
     suspend fun verify(download: UpdateDownload): File = withContext(Dispatchers.IO) {
         require(saved()?.id == download.id) { context.getString(R.string.update_expired) }
+        check(download.withModel == withModel) { context.getString(R.string.update_edition_invalid) }
         val file = file(download.version)
         check(file.isFile && file.length() in 1..MAX_BYTES && (download.size == 0L || file.length() == download.size)) { context.getString(R.string.update_size_invalid) }
         privateDirectory.mkdirs()
@@ -128,6 +136,13 @@ internal class NativeUpdates(private val context: Context) {
             val installed = manager.getPackageInfo(context.packageName, PackageManager.GET_SIGNING_CERTIFICATES)
             check(candidate.packageName == context.packageName && candidate.versionName == version && candidate.longVersionCode > installed.longVersionCode) { context.getString(R.string.update_version_invalid) }
             check(signaturesMatch(installed, candidate)) { context.getString(R.string.update_signature_invalid) }
+            val bundled = ZipFile(file).use { apk ->
+                apk.entries().asSequence().any { entry ->
+                    val name = entry.name.substringAfterLast('/')
+                    name.endsWith(".onnx") && entry.name == "assets/$KARAOKE_MODEL_ASSETS/$name"
+                }
+            }
+            check(bundled == NativeReleases.hasBundledModel(context)) { context.getString(R.string.update_edition_invalid) }
         }
         private fun signaturesMatch(installed: PackageInfo, candidate: PackageInfo): Boolean {
             val old = installed.signingInfo ?: return false; val next = candidate.signingInfo ?: return false

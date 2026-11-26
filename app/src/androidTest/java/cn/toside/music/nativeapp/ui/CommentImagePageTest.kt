@@ -3,6 +3,7 @@ package cn.toside.music.nativeapp.ui
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.graphics.Outline
 import android.graphics.drawable.BitmapDrawable
 import android.net.Uri
 import android.os.SystemClock
@@ -80,12 +81,42 @@ class CommentImagePageTest {
                     host.setContentView(content)
                     requireNotNull(content).render(CommentsState(song, items = listOf(MusicComment("image", "听友", "评论配图", images = listOf("javascript:invalid") + urls)), page = 1, hasMore = false))
                 }
-                await { content?.findViewWithTag<ImageView>("comment-thumbnail-image")?.drawable is BitmapDrawable }
+                await {
+                    urls.indices.all { index ->
+                        content?.findViewWithTag<View>("comment-thumbnail-$index")
+                            ?.findViewWithTag<ImageView>("comment-thumbnail-image")?.drawable is BitmapDrawable
+                    }
+                }
                 main {
                     val root = requireNotNull(content)
                     val thumbnail = root.findViewWithTag<View>("comment-thumbnail-0")
                     assertTrue(thumbnail.width > 0 && thumbnail.width <= 113 * root.resources.displayMetrics.density)
+                    assertEquals(thumbnail.width, thumbnail.height)
+                    assertNull(thumbnail.background)
+                    assertEquals(ImageView.ScaleType.CENTER_CROP, thumbnail.findViewWithTag<ImageView>("comment-thumbnail-image").scaleType)
                     snapshot("comment-image-thumbnails", root)
+                    root.render(CommentsState(song, items = listOf(MusicComment("image", "听友", "评论配图",
+                        images = listOf("javascript:invalid", urls.first()))), page = 1, hasMore = false))
+                }
+                await {
+                    val thumbnail = content?.findViewWithTag<View>("comment-thumbnail-0")
+                    thumbnail != null && thumbnail.width > thumbnail.height &&
+                        thumbnail.findViewWithTag<ImageView>("comment-thumbnail-image").drawable is BitmapDrawable
+                }
+                main {
+                    val root = requireNotNull(content)
+                    val thumbnail = root.findViewWithTag<View>("comment-thumbnail-0")
+                    val density = root.resources.displayMetrics.density
+                    val bitmap = (thumbnail.findViewWithTag<ImageView>("comment-thumbnail-image").drawable as BitmapDrawable).bitmap
+                    val availableWidth = (thumbnail.parent as View).width
+                    assertEquals(minOf(availableWidth.toFloat(), 240 * density), thumbnail.width.toFloat(), 1f)
+                    assertEquals(thumbnail.width * bitmap.height.toFloat() / bitmap.width, thumbnail.height.toFloat(), 1f)
+                    assertNull(thumbnail.background)
+                    assertTrue(thumbnail.clipToOutline)
+                    val outline = Outline()
+                    thumbnail.outlineProvider.getOutline(thumbnail, outline)
+                    assertTrue(outline.radius > 0)
+                    snapshot("comment-image-single-thumbnail", root)
                     thumbnail.performClick()
                 }
                 detail = instrumentation.waitForMonitorWithTimeout(monitor, 10000) as CommentImageActivity

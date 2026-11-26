@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.os.Bundle
 import android.os.SystemClock
+import android.text.format.Formatter
 import android.view.View
 import android.view.ViewGroup
 import android.view.KeyEvent
@@ -13,6 +14,7 @@ import android.widget.EditText
 import android.widget.Switch
 import android.widget.TextView
 import android.widget.ListView
+import android.widget.PopupWindow
 import android.widget.ScrollView
 import android.net.Uri
 import cn.toside.music.nativeapp.data.Song
@@ -22,6 +24,11 @@ import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
 import androidx.test.runner.lifecycle.Stage
 import cn.toside.music.nativeapp.R
+import cn.toside.music.nativeapp.data.AppPreferences
+import cn.toside.music.nativeapp.karaoke.KaraokeAudio
+import cn.toside.music.nativeapp.karaoke.KaraokeBackingCache
+import cn.toside.music.nativeapp.karaoke.MdxParameters
+import cn.toside.music.nativeapp.player.AudioStreamCache
 import cn.toside.music.nativeapp.player.PlaybackService
 import cn.toside.music.nativeapp.source.SourceHttpFixture
 import cn.toside.music.nativeapp.update.NativeRelease
@@ -85,7 +92,7 @@ class SettingsFragmentTest {
                     val page = SettingsPage(activity, scope, { field(activity, "service") as? PlaybackService }, noActions, layout) {}
                     root = page.createContent()
                 }
-                listOf("basic", "playback", "sources", "list", "theme", "cache", "sync", "about", "desktop-lyrics", "diagnostics").forEach { category ->
+                listOf("basic", "playback", "vocal-separation", "sources", "list", "theme", "cache", "sync", "about", "desktop-lyrics", "diagnostics").forEach { category ->
                     instrumentation.runOnMainSync {
                         descendants(root).first { it.tag == "settings-category-$category" }.performClick()
                     }
@@ -110,7 +117,7 @@ class SettingsFragmentTest {
                             assertTrue(input.width > 150 * activity.resources.displayMetrics.density)
                             assertEquals(1, input.maxLines)
                         }
-                        if (category in listOf("basic", "sources")) capture("${layout.widthDp}x${layout.heightDp}-$category", root)
+                        if (category in listOf("basic", "sources", "vocal-separation")) capture("${layout.widthDp}x${layout.heightDp}-$category", root)
                     }
                 }
             }
@@ -305,6 +312,141 @@ class SettingsFragmentTest {
             preferences.edit().apply { if (previous == null) remove("quality") else putString("quality", previous) }.commit()
         }
     }
+    @Test fun vocalSeparationControlsSaveTheValuesUsedByKaraoke() {
+        val activity = start()
+        val preferences = AppPreferences(activity)
+        val key = MdxParameters.STRENGTH_KEY
+        val threadKey = MdxParameters.THREADS_KEY
+        val raw = activity.getSharedPreferences("app-settings", 0)
+        val oldStrength = raw.getString(key, null)
+        val oldThreads = raw.getString(threadKey, null)
+        try {
+            raw.edit().putString(threadKey, "2").commit()
+            assertEquals(2, MdxParameters.read(preferences).threads)
+            raw.edit().remove(threadKey).commit()
+            val coreCount = Runtime.getRuntime().availableProcessors()
+            assertEquals(coreCount, MdxParameters.read(preferences).threads)
+            val selected = if (oldStrength == "110") "103" else "110"
+            instrumentation.runOnMainSync { activity.openSettings("vocal-separation") }
+            val fragment = settings(activity)
+            val page = fragment.requireView()
+            val controller = SettingsFragment::class.java.getDeclaredField("page").apply { isAccessible = true }.get(fragment)
+            val popup = SettingsPage::class.java.getDeclaredField("choicePopup").apply { isAccessible = true }.get(controller)
+            val windowField = PlatformPopup::class.java.getDeclaredField("window").apply { isAccessible = true }
+            fun menu(): ListView? {
+                val window = windowField.get(popup) as? PopupWindow
+                return (window?.contentView as? ListView)?.takeIf { window.isShowing && it.isShown }
+            }
+            fun openChoice(row: View) {
+                await { row.isLaidOut }
+                instrumentation.runOnMainSync {
+                    page.findViewWithTag<ScrollView>("settings-content").scrollTo(0, row.top)
+                    row.performClick()
+                }
+                await { menu()?.childCount?.let { it > 0 } == true }
+            }
+            openChoice(page.findViewWithTag("settings-$key"))
+            instrumentation.runOnMainSync {
+                val index = MdxParameters.strengths.indexOf(selected.toInt())
+                val popup = menu()!!
+                popup.performItemClick(popup.findViewWithTag("settings-choice-$selected"), index, index.toLong())
+                assertEquals(selected.toInt(), MdxParameters.read(preferences).strengthPercent)
+                activity.openSettings("basic")
+                activity.openSettings("vocal-separation")
+                val updatedRow = page.findViewWithTag<View>("settings-$key")
+                assertTrue(descendants(updatedRow).filterIsInstance<TextView>().any {
+                    it.text.toString() == activity.getString(R.string.mdx_value_percent, selected.toInt())
+                })
+            }
+
+            val threadRow = page.findViewWithTag<View>("settings-$threadKey")
+            val autoLabel = activity.getString(R.string.mdx_value_threads_auto, coreCount)
+            instrumentation.runOnMainSync {
+                assertTrue(descendants(threadRow).filterIsInstance<TextView>().any { it.text.toString() == autoLabel })
+            }
+            openChoice(threadRow)
+            val manualChoices = listOf(1, 2, 4, 8, 16, 32)
+            instrumentation.runOnMainSync {
+                val menu = menu()!!
+                val expected = listOf(autoLabel) + manualChoices.map { activity.getString(R.string.mdx_value_threads, it) }
+                assertEquals(expected, (0 until menu.count).map { menu.adapter.getItem(it) })
+                menu.setSelection(manualChoices.size)
+            }
+            await { menu()?.findViewWithTag<View>("settings-choice-32") != null }
+            instrumentation.runOnMainSync {
+                val menu = menu()!!
+                menu.performItemClick(menu.findViewWithTag("settings-choice-32"), manualChoices.size, manualChoices.size.toLong())
+                assertEquals(32, MdxParameters.read(preferences).threads)
+            }
+            openChoice(threadRow)
+            instrumentation.runOnMainSync { menu()!!.setSelection(0) }
+            val autoTag = "settings-choice-${MdxParameters.AUTO_THREADS}"
+            await { menu()?.findViewWithTag<View>(autoTag) != null }
+            instrumentation.runOnMainSync {
+                val menu = menu()!!
+                menu.performItemClick(menu.findViewWithTag(autoTag), 0, 0L)
+                assertEquals(MdxParameters.AUTO_THREADS, raw.getString(threadKey, null))
+                assertEquals(coreCount, MdxParameters.read(preferences).threads)
+            }
+        } finally {
+            raw.edit().apply {
+                if (oldStrength == null) remove(key) else putString(key, oldStrength)
+                if (oldThreads == null) remove(threadKey) else putString(threadKey, oldThreads)
+            }.commit()
+            instrumentation.runOnMainSync { activity.finish() }
+        }
+    }
+
+    @Test fun cachePageReportsAndClearsKaraokeAccompanimentIndependently() = runBlocking {
+        val activity = start()
+        val context = instrumentation.targetContext
+        val directory = context.cacheDir.resolve("settings-cache-test-${System.nanoTime()}").apply { mkdir() }
+        val input = directory.resolve("audio.wav")
+        val backing = directory.resolve("backing.wav")
+        val original = directory.resolve("original.wav")
+        val song = Song(System.nanoTime(), Uri.fromFile(input), "Cache fixture", "", 1000)
+        val stream = AudioStreamCache.get(context)
+        val playbackKey = AudioStreamCache.key(song.copy(source = "kw"), "128k")
+        val karaoke = KaraokeBackingCache(context)
+        try {
+            KaraokeAudio.WavWriter(input).use { it.write(ShortArray(KaraokeAudio.RATE * 2), KaraokeAudio.RATE * 2) }
+            val before = stream.usage()
+            stream.storeFile(playbackKey, input)
+            val prepared = karaoke.reuseOrPrepare(song, backing, original) {
+                KaraokeAudio.prepare(context, song.uri, backing, song.duration, original) {}
+            }
+            val karaokeSize = backing.length() + original.length()
+            val playbackSize = before.playbackBytes + input.length()
+            val restored = karaoke.reuseOrPrepare(song, directory.resolve("restored.wav"), directory.resolve("monitor.wav")) {
+                error("The generated accompaniment should be reusable")
+            }
+            instrumentation.runOnMainSync { activity.openSettings("cache") }
+            val page = settings(activity).requireView()
+            fun checkUsage(playback: Long, accompaniment: Long) {
+                val expected = activity.getString(R.string.ui_31b0dd704fee,
+                    Formatter.formatShortFileSize(activity, playback), Formatter.formatShortFileSize(activity, accompaniment), "", "")
+                    .lineSequence().take(2).toList()
+                await { page.findViewWithTag<TextView>("settings-cache-usage").text.lineSequence().take(2).toList() == expected }
+                assertEquals(AudioStreamCache.Usage(playback, accompaniment), stream.usage())
+            }
+            checkUsage(playbackSize, before.karaokeBytes + karaokeSize)
+
+            instrumentation.runOnMainSync { page.findViewWithTag<View>("settings-clear-karaoke-cache").performClick() }
+            checkUsage(playbackSize, 0)
+            assertEquals(backing.length(), restored.file.length())
+            assertEquals(original.length(), checkNotNull(restored.original).length())
+
+            karaoke.remember(song, prepared)
+            instrumentation.runOnMainSync { page.findViewWithTag<View>("settings-clear-playback-cache").performClick() }
+            checkUsage(0, karaokeSize)
+        } finally {
+            instrumentation.runOnMainSync { activity.finish() }
+            stream.remove(playbackKey)
+            stream.removeSong(AudioStreamCache.key(song, ""))
+            directory.deleteRecursively()
+        }
+    }
+
     @Test fun onlineImportReportsFailureAllowsRetryAndRefreshesEnabledSource() = runBlocking {
         val activity = start()
         val player = field(activity, "service") as PlaybackService

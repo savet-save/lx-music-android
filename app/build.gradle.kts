@@ -1,10 +1,49 @@
 import com.android.build.api.variant.impl.VariantOutputImpl
 import com.android.build.api.variant.FilterConfiguration
+import java.security.MessageDigest
 import java.util.Properties
 
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
+}
+
+abstract class StageMdxModel : DefaultTask() {
+    @get:InputFile @get:PathSensitive(PathSensitivity.NONE) abstract val model: RegularFileProperty
+    @get:Input abstract val fileName: Property<String>
+    @get:Input abstract val size: Property<Long>
+    @get:Input abstract val sha256: Property<String>
+    @get:OutputDirectory abstract val assets: DirectoryProperty
+
+    @TaskAction
+    fun stage() {
+        val source = model.get().asFile
+        require(source.length() == size.get()) { "Unexpected size for the bundled MDX-Net model" }
+        val digest = MessageDigest.getInstance("SHA-256")
+        source.inputStream().use { input ->
+            val buffer = ByteArray(64 * 1024)
+            while (true) {
+                val count = input.read(buffer)
+                if (count == -1) break
+                digest.update(buffer, 0, count)
+            }
+        }
+        val hash = digest.digest().joinToString("") { "%02x".format(it.toInt() and 255) }
+        require(hash == sha256.get()) { "Incorrect SHA-256 for the bundled MDX-Net model" }
+        source.copyTo(assets.file("karaoke-models/${fileName.get()}").get().asFile, overwrite = true)
+    }
+}
+
+val mdxModelSpec = Properties().apply {
+    rootProject.file("gradle/mdx-model.properties").inputStream().use(::load)
+}
+val bundledMdxModel = providers.gradleProperty("nativeBundledMdxModel")
+val stageMdxModel = tasks.register<StageMdxModel>("stageMdxModel") {
+    model.fileProvider(bundledMdxModel.map { rootProject.file(it) })
+    fileName.set(mdxModelSpec.getProperty("file"))
+    size.set(mdxModelSpec.getProperty("size").toLong())
+    sha256.set(mdxModelSpec.getProperty("sha256"))
+    assets.set(layout.buildDirectory.dir("generated/mdx-model/assets"))
 }
 
 val localProperties = Properties().apply {
@@ -16,6 +55,14 @@ val releaseSigningValues = listOf("NATIVE_STORE_PASSWORD", "NATIVE_KEY_ALIAS", "
 val releaseKeystore = rootProject.file(
     localProperties.getProperty("NATIVE_KEYSTORE_PATH")?.takeIf { it.isNotBlank() } ?: "NewKeyStrore.jks"
 )
+val onnxRuntime = configurations.create("onnxRuntime") { isTransitive = false }
+val onnxRuntimeDir = layout.buildDirectory.dir("generated/onnxruntime")
+val extractOnnxRuntime = tasks.register<Sync>("extractOnnxRuntime") {
+    from(onnxRuntime.elements.map { files -> zipTree(files.single().asFile) }) {
+        include("headers/**", "jni/**/libonnxruntime.so")
+    }
+    into(onnxRuntimeDir)
+}
 val validateNativeReleaseSigning = tasks.register("validateNativeReleaseSigning") {
     group = "verification"
     description = "Checks local.properties and the keystore before building a release."
@@ -53,7 +100,12 @@ android {
         testInstrumentationRunner = "cn.toside.music.nativeapp.NativeTestRunner"
         // The universal APK also includes the x86 QuickJS libraries from its AAR.
         // Build every matching encoder ABI even when separate ARM APKs are requested.
-        externalNativeBuild { cmake { abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64") } }
+        externalNativeBuild {
+            cmake {
+                abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
+                arguments += "-DONNX_HEADERS=${onnxRuntimeDir.get().asFile.resolve("headers").invariantSeparatorsPath}"
+            }
+        }
     }
     // CI enables this only after testing first-use permission dialogs.
     if (providers.gradleProperty("nativeTestGrantPermissions").map { it.toBooleanStrict() }.orElse(false).get()) {
@@ -68,6 +120,10 @@ android {
     buildTypes.getByName("release") {
         signingConfig = signingConfigs.getByName("nativeRelease")
     }
+    buildTypes.create("modelRelease") {
+        initWith(buildTypes.getByName("release"))
+        matchingFallbacks += "release"
+    }
     splits.abi {
         isEnable = providers.gradleProperty("nativeSplitApks").map { it.toBooleanStrict() }.orElse(false).get()
         reset()
@@ -78,14 +134,26 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+    sourceSets.getByName("main").jniLibs.srcDir(onnxRuntimeDir.map { it.dir("jni") })
     kotlinOptions { jvmTarget = "17" }
 }
 
 androidComponents {
-    onVariants(selector().withBuildType("release")) { variant ->
+    beforeVariants(selector().withBuildType("modelRelease")) { variant ->
+        variant.enable = bundledMdxModel.isPresent
+    }
+    onVariants { variant ->
+        val editionSuffix = when (variant.buildType) {
+            "release" -> ""
+            "modelRelease" -> {
+                variant.sources.assets?.addGeneratedSourceDirectory(stageMdxModel, StageMdxModel::assets)
+                "-with-model"
+            }
+            else -> return@onVariants
+        }
         variant.outputs.forEach { output ->
-            val abi=output.filters.firstOrNull { it.filterType == FilterConfiguration.FilterType.ABI }?.identifier
-            if(abi in setOf("x86", "x86_64")) {
+            val abi = output.filters.firstOrNull { it.filterType == FilterConfiguration.FilterType.ABI }?.identifier
+            if (abi == "x86" || abi == "x86_64") {
                 output.enabled.set(false)
                 return@forEach
             }
@@ -97,17 +165,25 @@ androidComponents {
             }
             // AGP 8.13 exposes APK filenames on its output implementation.
             (output as VariantOutputImpl).outputFileName.set(
-                output.versionName.map { "lx-music-native-v$it-$architecture.apk" }
+                output.versionName.map { "lx-music-native-v$it-$architecture$editionSuffix.apk" }
             )
         }
     }
 }
 
-tasks.matching { it.name == "preReleaseBuild" || it.name == "validateSigningRelease" }.configureEach {
+tasks.matching {
+    it.name in setOf("preReleaseBuild", "validateSigningRelease", "preModelReleaseBuild", "validateSigningModelRelease")
+}.configureEach {
     dependsOn(validateNativeReleaseSigning)
+}
+tasks.matching {
+    it.name.startsWith("configureCMake") || it.name.startsWith("generateJsonModel") || it.name.endsWith("JniLibFolders")
+}.configureEach {
+    dependsOn(extractOnnxRuntime)
 }
 
 dependencies {
+    add(onnxRuntime.name, "com.microsoft.onnxruntime:onnxruntime-android:1.22.0@aar")
     implementation(libs.jaudiotagger)
     implementation(libs.androidx.core)
     implementation(libs.androidx.fragment.ktx)

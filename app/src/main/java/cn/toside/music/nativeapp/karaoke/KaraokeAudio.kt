@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import cn.toside.music.nativeapp.data.PcmDecoder
 import cn.toside.music.nativeapp.data.PcmFormat
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -23,7 +24,10 @@ internal data class KaraokeBacking(
     val stereo: Boolean,
     val original: File? = null,
     val cacheKey: String? = null,
-)
+    val separation: MdxParameters? = null,
+) {
+    val separated get() = separation != null
+}
 internal data class KaraokeTake(val backing: KaraokeBacking, val voice: File, val frames: Long)
 internal data class KaraokeEdit(
     val music: Int = 70,
@@ -39,10 +43,21 @@ internal object KaraokeAudio {
     const val HEADER_BYTES = 44L
     const val BYTES_PER_FRAME = 4
     const val MAX_FRAMES = RATE * 60L * 30
-    private const val BLOCK_FRAMES = 2048
+    const val BLOCK_FRAMES = 2048
 
     fun millis(frames: Long): Int = (frames * 1000L / RATE).toInt()
     private fun frames(millis: Int): Long = millis.toLong() * RATE / 1000
+
+    data class TrimmedRange(val start: Long, val end: Long) {
+        val durationMs get() = millis(end - start)
+        fun positionMs(frame: Long) = millis(frame.coerceIn(start, end) - start)
+        fun seekFrame(positionMs: Int) = if (positionMs >= durationMs) end else start + frames(positionMs.coerceAtLeast(0))
+    }
+
+    fun range(take: KaraokeTake, edit: KaraokeEdit): TrimmedRange {
+        val start = frames(edit.trimStartMs).coerceIn(0, take.frames)
+        return TrimmedRange(start, (take.frames - frames(edit.trimEndMs)).coerceIn(start, take.frames))
+    }
 
     suspend fun prepare(
         context: Context,
@@ -50,12 +65,29 @@ internal object KaraokeAudio {
         target: File,
         songDurationMs: Long,
         original: File? = null,
+        model: File? = null,
+        parameters: MdxParameters = MdxParameters.Default,
+        onSeparationError: (Exception) -> Unit = {},
         progress: (Int) -> Unit,
-    ): KaraokeBacking = render(context, source, target, songDurationMs, original, removeCenter = true, progress = progress)
+    ): KaraokeBacking {
+        val tryModel = model != null && original != null
+        val backing = render(context, source, target, songDurationMs, original, removeCenter = true) {
+            progress(if (tryModel) it * 45 / 100 else it)
+        }
+        if (model == null || original == null) return backing
+        return try {
+            MdxSeparation(context).run(model, backing, parameters) { progress(45 + it * 55 / 100) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            onSeparationError(e)
+            backing
+        }
+    }
 
     suspend fun prepareOriginal(context: Context, source: Uri, target: File, frames: Long): File {
         val original = render(context, source, target, 0, null, removeCenter = false) {}
-        check(original.stereo && original.frames == frames) { "Original audio does not match the accompaniment" }
+        check(original.frames == frames) { "Original audio does not match the accompaniment" }
         return target
     }
 
@@ -93,56 +125,67 @@ internal object KaraokeAudio {
                 checkNotNull(resampler).flush()
                 check(writer.frames > 0) { "No decoded audio" }
                 val stereo = checkNotNull(format).channels >= 2
-                KaraokeBacking(target, writer.frames, stereo, original.takeIf { stereo })
+                KaraokeBacking(target, writer.frames, stereo, original)
             }
         }
     }
 
     suspend fun mix(take: KaraokeTake, edit: KaraokeEdit, target: File): Long = withContext(Dispatchers.IO) {
-        val start = frames(edit.trimStartMs).coerceIn(0, take.frames)
-        val end = (take.frames - frames(edit.trimEndMs)).coerceIn(start, take.frames)
-        require(end > start)
-        val delay = frames(edit.voiceDelayMs)
-        val musicGain = edit.music.coerceIn(0, 100) / 100.0
-        val voiceGain = edit.voice.coerceIn(0, 100) / 100.0
-        val noiseGate = if (edit.reduceNoise) VoiceNoiseGate() else null
-        val backingBytes = ByteArray(BLOCK_FRAMES * BYTES_PER_FRAME)
-        val voiceBytes = ByteArray(BLOCK_FRAMES * 2)
-        val backing = ByteBuffer.wrap(backingBytes).order(ByteOrder.LITTLE_ENDIAN)
-        val voice = ByteBuffer.wrap(voiceBytes).order(ByteOrder.LITTLE_ENDIAN)
+        val range = range(take, edit)
+        require(range.end > range.start)
         val pcm = ShortArray(BLOCK_FRAMES * 2)
         WavWriter(target).use { output ->
-            RandomAccessFile(take.backing.file, "r").use { backingFile ->
-                RandomAccessFile(take.voice, "r").use { voiceFile ->
-                    val voiceFrames = voiceFile.length() / 2
-                    backingFile.seek(HEADER_BYTES + start * BYTES_PER_FRAME)
-                    var position = start
-                    while (position < end) {
-                        currentCoroutineContext().ensureActive()
-                        val count = minOf(BLOCK_FRAMES.toLong(), end - position).toInt()
-                        backingFile.readFully(backingBytes, 0, count * BYTES_PER_FRAME)
-                        val voiceStart = position - delay
-                        val first = voiceStart.coerceIn(0, voiceFrames)
-                        val last = (voiceStart + count).coerceIn(first, voiceFrames)
-                        voiceBytes.fill(0, 0, count * 2)
-                        if (last > first) {
-                            voiceFile.seek(first * 2)
-                            voiceFile.readFully(voiceBytes, ((first - voiceStart) * 2).toInt(), ((last - first) * 2).toInt())
-                        }
-                        backing.rewind()
-                        voice.rewind()
-                        for (frame in 0 until count) {
-                            val input = voice.short.toDouble()
-                            val vocal = (noiseGate?.sample(input) ?: input) * voiceGain
-                            pcm[frame * 2] = sample16(backing.short * musicGain + vocal)
-                            pcm[frame * 2 + 1] = sample16(backing.short * musicGain + vocal)
-                        }
-                        output.write(pcm, count * 2)
-                        position += count
-                    }
+            withMixer(take) { mixer ->
+                var position = range.start
+                while (position < range.end) {
+                    currentCoroutineContext().ensureActive()
+                    val count = minOf(BLOCK_FRAMES.toLong(), range.end - position).toInt()
+                    mixer.read(position, count, edit, pcm)
+                    output.write(pcm, count * 2)
+                    position += count
                 }
             }
             output.frames
+        }
+    }
+
+    internal inline fun <T> withMixer(take: KaraokeTake, block: (Mixer) -> T): T =
+        RandomAccessFile(take.backing.file, "r").use { backing ->
+            RandomAccessFile(take.voice, "r").use { voice -> block(Mixer(backing, voice)) }
+        }
+
+    internal class Mixer(private val backingFile: RandomAccessFile, private val voiceFile: RandomAccessFile) {
+        private val voiceFrames = voiceFile.length() / 2
+        private val backingBytes = ByteArray(BLOCK_FRAMES * BYTES_PER_FRAME)
+        private val voiceBytes = ByteArray(BLOCK_FRAMES * 2)
+        private val backing = ByteBuffer.wrap(backingBytes).order(ByteOrder.LITTLE_ENDIAN)
+        private val voice = ByteBuffer.wrap(voiceBytes).order(ByteOrder.LITTLE_ENDIAN)
+        private var gate: VoiceNoiseGate? = null
+        private var nextVoiceFrame = 0L
+
+        fun read(position: Long, count: Int, edit: KaraokeEdit, pcm: ShortArray) {
+            val musicGain = edit.music.coerceIn(0, 100) / 100.0
+            val voiceGain = edit.voice.coerceIn(0, 100) / 100.0
+            backingFile.seek(HEADER_BYTES + position * BYTES_PER_FRAME)
+            backingFile.readFully(backingBytes, 0, count * BYTES_PER_FRAME)
+            val voiceStart = position - frames(edit.voiceDelayMs)
+            val first = voiceStart.coerceIn(0, voiceFrames)
+            val last = (voiceStart + count).coerceIn(first, voiceFrames)
+            voiceBytes.fill(0, 0, count * 2)
+            if (last > first) {
+                voiceFile.seek(first * 2)
+                voiceFile.readFully(voiceBytes, ((first - voiceStart) * 2).toInt(), ((last - first) * 2).toInt())
+            }
+            gate = if (edit.reduceNoise) gate?.takeIf { nextVoiceFrame == voiceStart } ?: VoiceNoiseGate() else null
+            nextVoiceFrame = voiceStart + count
+            backing.rewind()
+            voice.rewind()
+            for (frame in 0 until count) {
+                val input = voice.short.toDouble()
+                val vocal = (gate?.sample(input) ?: input) * voiceGain
+                pcm[frame * 2] = sample16(backing.short * musicGain + vocal)
+                pcm[frame * 2 + 1] = sample16(backing.short * musicGain + vocal)
+            }
         }
     }
 
@@ -187,7 +230,7 @@ internal object KaraokeAudio {
     ) {
         private val reducer = if (removeCenter && format.channels >= 2) StereoCenterReduction() else null
         private val chunk = ShortArray(BLOCK_FRAMES * 2)
-        private val originalChunk = if (original != null && format.channels >= 2) ShortArray(chunk.size) else null
+        private val originalChunk = if (original != null) ShortArray(chunk.size) else null
         private var used = 0
         private var inputFrame = 0L
         private var nextOutput = 0L
@@ -230,17 +273,17 @@ internal object KaraokeAudio {
         }
     }
 
-    /** Removes the shared middle-band signal while preserving stereo sides and center bass. */
+    /** Removes the shared vocal band while preserving sub-bass and extreme-high stereo content. */
     internal class StereoCenterReduction {
         private var bass = 0.0
-        private var midrange = 0.0
-        private val bassWeight = 1 - exp(-2 * PI * 150 / RATE)
-        private val midWeight = 1 - exp(-2 * PI * 6000 / RATE)
+        private var fullBand = 0.0
+        private val bassWeight = 1 - exp(-2 * PI * 80 / RATE)
+        private val fullBandWeight = 1 - exp(-2 * PI * 12000 / RATE)
 
         fun center(input: Double): Double {
             bass += (input - bass) * bassWeight
-            midrange += (input - midrange) * midWeight
-            return midrange - bass
+            fullBand += (input - fullBand) * fullBandWeight
+            return fullBand - bass
         }
     }
 

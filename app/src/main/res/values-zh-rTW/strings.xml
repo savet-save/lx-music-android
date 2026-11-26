@@ -365,10 +365,10 @@
     <string name="ui_7d4ca7f48eff" formatted="false">"大"</string>
     <string name="ui_a90304cdfb87" formatted="false">"特大"</string>
     <string name="ui_e3ca04a9cb13" formatted="false">"緩存"</string>
-    <string name="ui_0269e7020043" formatted="false">"播放緩存上限"</string>
+    <string name="ui_0269e7020043" formatted="false">"播放與 K 歌共用緩存上限"</string>
     <string name="ui_363b6afc345c" formatted="false">"關閉緩存"</string>
-    <string name="ui_3ea7896aff54" formatted="false">"正在統計歌詞緩存…"</string>
-    <string name="ui_31b0dd704fee">"播放緩存：%1$s MB\n封面緩存：%2$s KB\n在線歌詞緩存：%3$s KB（保留手動導入歌詞）"</string>
+    <string name="ui_3ea7896aff54" formatted="false">"正在統計緩存…"</string>
+    <string name="ui_31b0dd704fee">"播放緩存：%1$s\nK 歌伴奏緩存：%2$s\n封面緩存：%3$s\n在線歌詞緩存：%4$s（保留手動導入歌詞）"</string>
     <string name="ui_12ccb655405b" formatted="false">"清理封面緩存"</string>
     <string name="ui_ca88f243ff2a">"清理失敗：%1$s"</string>
     <string name="ui_26cc8d0af3e5" formatted="false">"清理播放緩存"</string>

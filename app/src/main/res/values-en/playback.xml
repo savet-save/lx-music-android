@@ -3,6 +3,7 @@
     <string name="playback_http_error">The audio server returned HTTP %1$d</string>
     <string name="playback_cache_failed">Audio download failed after 3 retries. Incomplete cache cleared.</string>
     <string name="playback_stream_failed">Audio download failed after 3 retries. Please try again later.</string>
+    <string name="playback_seek_failed">Could not resume at the new position. Please try again.</string>
     <string name="playback_url_timeout">Timed out getting the playback URL</string>
     <string name="playback_channel">Music playback</string>
     <string name="playback_lyrics_error">Could not read lyrics: %1$s</string>

@@ -11,6 +11,7 @@ import cn.toside.music.nativeapp.data.Song
 import cn.toside.music.nativeapp.source.UserSourceLibrary
 import cn.toside.music.nativeapp.ui.MainActivity
 import cn.toside.music.nativeapp.ui.ForegroundTestActivities
+import cn.toside.music.nativeapp.utils.DiagnosticLog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -46,7 +47,7 @@ class MultiSourcePlaybackTest {
         val quality = context.getSharedPreferences("player", Context.MODE_PRIVATE)
         val settings = context.getSharedPreferences("app-settings", Context.MODE_PRIVATE)
         val oldQuality = quality.getString("quality", null)
-        val old = listOf("player.autoLowerQuality", "player.autoSwitchSource").associateWith { settings.all[it] as? Boolean }
+        val old = listOf("player.autoLowerQuality", "player.autoSwitchSource", DiagnosticLog.SOURCE).associateWith { settings.all[it] as? Boolean }
         val activity = ForegroundTestActivities.start(Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
         waitFor { field(activity, "service") != null }
         val player = field(activity, "service") as PlaybackService
@@ -59,7 +60,8 @@ class MultiSourcePlaybackTest {
         val song = Song(id, Uri.EMPTY, "Multi source playback", "test", 12000, "kw", """{"songmid":$id,"_types":{"320k":{}}}""")
         try { MultiSourceAudioServer().use { server ->
             quality.edit().putString("quality", "320k").commit()
-            settings.edit().putBoolean("player.autoLowerQuality", false).putBoolean("player.autoSwitchSource", false).commit()
+            settings.edit().putBoolean("player.autoLowerQuality", false).putBoolean("player.autoSwitchSource", false)
+                .putBoolean(DiagnosticLog.SOURCE, true).commit()
             listOf(script("first playback fixture", server.url("bad")), script("second playback fixture", server.url("good"))).forEach {
                 player.importSource(it); added.add(UserSourceLibrary.metadata(it).id)
             }
@@ -74,6 +76,11 @@ class MultiSourcePlaybackTest {
             assertTrue(server.requests.any { it.startsWith("/good") })
             assertTrue(server.requests.indexOfFirst { it.startsWith("/bad") } < server.requests.indexOfFirst { it.startsWith("/good") })
             assertFalse(player.state.value.preparing)
+            val diagnostics = DiagnosticLog(context).read().lineSequence().filter { it.startsWith("playback=") }.toList()
+            val request = diagnostics.first { it.contains("lookup source=first playback fixture") }.substringBefore(' ')
+            assertTrue(diagnostics.any { it.startsWith(request) && it.contains("buffer outcome=failed elapsedMs=") })
+            assertTrue(diagnostics.any { it.startsWith(request) && it.contains("startup outcome=playing totalMs=") })
+            assertTrue(diagnostics.none { it.startsWith(request) && it.contains(server.url("bad")) })
             main { player.pause() }
         } } finally {
             main { player.pause(); activity.finish() }

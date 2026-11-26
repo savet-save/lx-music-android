@@ -10,8 +10,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import org.json.JSONObject
@@ -25,28 +25,50 @@ internal class SongMatcher(context: Context, private val scope: CoroutineScope,
         (0 until values.length()).map { normalize(values.getString(it)) }
     }
     private val lock = Any()
-    private val cache = LinkedHashMap<String, List<Song>>()
-    private val pending = mutableMapOf<String, Deferred<List<Song>>>()
+    private data class Key(val song: String, val platforms: List<String>, val playback: Boolean)
+    private val cache = LinkedHashMap<Key, List<Song>>()
+    private val pending = mutableMapOf<Key, Deferred<List<Song>>>()
     private var revision = 0L
     val cacheCount get() = synchronized(lock) { cache.size }
     fun clearCache() { synchronized(lock) { revision++; cache.clear() } }
     private fun cacheKey(song: Song) = "${song.source}:${normalize(song.title)}:${singer(song.artist)}:${song.duration}:${album(song)}"
-    fun clearSong(song: Song) { synchronized(lock) { revision++; cache.remove(cacheKey(song)) } }
-    suspend fun find(song: Song): List<Song> {
+    fun clearSong(song: Song) {
         val key = cacheKey(song)
+        synchronized(lock) { revision++; cache.keys.removeAll { it.song == key } }
+    }
+    suspend fun find(song: Song): List<Song> = find(song, null)
+    suspend fun find(song: Song, platforms: Set<String>?): List<Song> {
+        val searchable = ExternalLinks.sources.filter { it != song.source && (platforms == null || it in platforms) }
+        if (searchable.isEmpty()) return emptyList()
+        val key = Key(cacheKey(song), searchable, platforms != null)
         val request = synchronized(lock) {
             val generation = revision
             cache[key]?.let { return it }
             pending[key] ?: scope.async(start = CoroutineStart.LAZY) {
                 try {
-                    val result = withTimeoutOrNull(12_000) {
-                        coroutineScope { ExternalLinks.sources.filterNot { it == song.source }.map { source -> async {
-                            try { best(song, search("${song.title.trim()} ${song.artist.trim()}".trim(), source)) }
-                            catch (e: CancellationException) { throw e }
-                            catch (_: Exception) { null }
-                        } }.awaitAll().filterNotNull().sortedByDescending { score(song, it) } }
-                    } ?: error("搜索其他来源超时")
-                    synchronized(lock) { if (result.isNotEmpty() && generation == revision) { if (cache.size >= 10) cache.remove(cache.keys.first()); cache[key] = result } }
+                    val results = Channel<Song?>(searchable.size)
+                    val query = "${song.title.trim()} ${song.artist.trim()}".trim()
+                    val workers = searchable.map { source -> scope.launch {
+                        val candidate = try { best(song, search(query, source)) }
+                        catch (e: CancellationException) { throw e }
+                        catch (_: Exception) { null }
+                        results.trySend(candidate)
+                    } }
+                    val matches = mutableListOf<Song>()
+                    val complete = try {
+                        withTimeoutOrNull(if (key.playback) 3_500L else 12_000L) {
+                            repeat(workers.size) { results.receive()?.let(matches::add) }
+                        } != null
+                    } finally { workers.forEach { it.cancel() }; results.cancel() }
+                    if (!complete && !key.playback) error("搜索其他来源超时")
+                    val order = searchable.withIndex().associate { (index, source) -> source to index }
+                    val result = matches.sortedWith(compareByDescending<Song> { score(song, it) }.thenBy { order[it.source] })
+                    synchronized(lock) {
+                        if (complete && result.isNotEmpty() && generation == revision) {
+                            if (cache.size >= 10) cache.remove(cache.keys.first())
+                            cache[key] = result
+                        }
+                    }
                     result
                 } finally { synchronized(lock) { pending.remove(key) } }
             }.also { pending[key] = it; it.start() }

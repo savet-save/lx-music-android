@@ -19,7 +19,7 @@ internal class StreamingRetryPolicy(private val budget: PlaybackRetryBudget = Pl
         if (error is ParserException || error is FileNotFoundException ||
             error is HttpDataSource.CleartextNotPermittedException || error is Loader.UnexpectedLoaderException) return C.TIME_UNSET
         // Refresh signed/expired URLs or switch CDN instead of repeating a rejected address.
-        if (error is HttpDataSource.InvalidResponseCodeException && error.responseCode in setOf(401, 403, 404, 410)) return C.TIME_UNSET
+        if (error is HttpDataSource.InvalidResponseCodeException && error.responseCode in setOf(401, 403, 404, 410, 416)) return C.TIME_UNSET
         return budget.nextDelayMs() ?: run { exhausted = true; C.TIME_UNSET }
     }
     companion object { const val MAX_RETRIES = 3 }

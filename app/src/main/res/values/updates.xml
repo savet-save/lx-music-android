@@ -12,6 +12,7 @@
     <string name="update_hash_invalid">更新文件 SHA-256 校验失败</string>
     <string name="update_apk_invalid">无法读取更新安装包</string>
     <string name="update_version_invalid">更新包的应用、版本名称或版本号不匹配</string>
+    <string name="update_edition_invalid">更新包与当前安装的模型版本类型不一致</string>
     <string name="update_signature_invalid">更新包签名与已安装应用不兼容</string>
     <string name="update_failed">更新失败：%1$s</string>
     <string name="update_cancelled">已取消更新下载</string>

@@ -5,6 +5,7 @@
     <string name="update_cancel">Cancel and clear update download</string>
     <string name="update_ignore">Ignore this version</string>
     <string name="update_no_apk">The release has no native APK</string>
+    <string name="update_edition_invalid">The update does not match the installed model edition</string>
     <string name="update_download_title">LX Music Native %1$s</string>
     <string name="update_save_failed">Could not save update download state</string>
     <string name="update_expired">The update download is no longer available. Download it again.</string>

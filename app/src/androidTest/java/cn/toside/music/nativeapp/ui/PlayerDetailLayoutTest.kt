@@ -4,6 +4,7 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Rect
+import android.graphics.drawable.GradientDrawable
 import android.os.SystemClock
 import android.view.View
 import android.view.ViewGroup
@@ -58,10 +59,15 @@ class PlayerDetailLayoutTest {
                     }
                     val back = content.findViewWithTag<TextView>("page-back")
                     val header = content.findViewWithTag<ViewGroup>("player-header")
+                    val more = header.findViewWithTag<TextView>("player-more")
                     assertEquals(UiPalette(activity, NativeThemes(activity).active()).primary, back.currentTextColor)
                     assertEquals((48 * density).toInt(), back.width); assertEquals((48 * density).toInt(), back.height)
                     assertTrue(abs(back.top + back.bottom - header.height) <= 1)
+                    assertEquals(header.width - header.paddingRight, more.right)
+                    assertEquals(59667.toChar().toString(), more.text.toString())
+                    assertFalse(content.cover.isLongClickable)
                     val album = content.cover.getChildAt(0)
+                    val disc = album.findViewWithTag<View>("player-disc")
                     val albumRect = rect(content, album)
                     val footer = content.findViewWithTag<View>("player-footer")
                     val controls = content.findViewWithTag<View>("player-controls")
@@ -69,6 +75,10 @@ class PlayerDetailLayoutTest {
                     val seek = rect(content, content.seek)
                     val controlRect = rect(content, controls)
                     assertEquals(album.width, album.height)
+                    assertEquals(disc.width, disc.height)
+                    assertTrue(disc.width in 1 until album.width)
+                    assertTrue(disc.clipToOutline)
+                    assertEquals(GradientDrawable.OVAL, (disc.background as GradientDrawable).shape)
                     assertTrue("Artwork remains usable at $layout", album.width >= 100 * density)
                     assertTrue(albumRect.top >= 0 && albumRect.bottom <= footer.top)
                     assertTrue(controlRect.bottom <= height && controlRect.width() > 120 * density)

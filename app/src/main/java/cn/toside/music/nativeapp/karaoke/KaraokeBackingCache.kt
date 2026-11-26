@@ -22,35 +22,51 @@ internal class KaraokeBackingCache(private val context: Context) {
         song: Song,
         target: File,
         original: File? = null,
+        separation: MdxParameters? = null,
+        quality: String = preferredQuality(),
         prepare: suspend () -> KaraokeBacking,
     ): KaraokeBacking {
         val key = withContext(Dispatchers.IO) {
             check(target.delete() || !target.exists())
             original?.let { check(it.delete() || !it.exists()) }
-            cacheAttempt { key(song) }
+            key(song, quality)
         }
         if (key != null) {
-            val reused = withContext(Dispatchers.IO) { cacheAttempt { restore(key, target) } }
-            if (reused != null) {
-                val monitor = if (reused.stereo && original != null) withContext(Dispatchers.IO) {
-                    cacheAttempt {
-                        if (restoreFrames(originalKey(key), original) == reused.frames) original else null
-                    }
-                } else null
-                return reused.copy(original = monitor, cacheKey = key)
-            }
+            withContext(Dispatchers.IO) { restoreBacking(key, target, original, separation) }?.let { return it }
             withContext(Dispatchers.IO) { check(target.delete() || !target.exists()) }
         }
-        val backing = prepare()
-        if (key != null) withContext(Dispatchers.IO) {
-            cacheAttempt {
-                if (key(song) == key) {
-                    backing.original?.let { storeOriginal(key, backing.file, it) }
-                    AudioStreamCache.get(context).storeFile(channelKey(key, backing.stereo), backing.file)
-                }
+        val backing = prepare().copy(cacheKey = key)
+        remember(song, backing)
+        return backing
+    }
+
+    internal suspend fun restoreCached(song: Song, directory: File, separation: MdxParameters?, quality: String): KaraokeBacking? =
+        withContext(Dispatchers.IO) {
+            val key = key(song, quality) ?: return@withContext null
+            val cache = AudioStreamCache.get(context)
+            if (!listOf(true, false).any { cache.hasCachedStart(channelKey(key, it, separation)) }) return@withContext null
+            check(directory.mkdirs() || directory.isDirectory)
+            val target = directory.resolve("backing.wav")
+            val original = directory.resolve("original.wav")
+            check(target.delete() || !target.exists())
+            check(original.delete() || !original.exists())
+            restoreBacking(key, target, original, separation)
+        }
+
+    private suspend fun restoreBacking(key: String, target: File, original: File?, separation: MdxParameters?): KaraokeBacking? {
+        val reused = cacheAttempt { restore(key, target, separation) } ?: return null
+        val monitor = original?.let { file -> cacheAttempt { file.takeIf { restoreFrames(originalKey(key), it) == reused.frames } } }
+        return reused.copy(original = monitor, cacheKey = key)
+    }
+
+    suspend fun remember(song: Song, backing: KaraokeBacking) = withContext(Dispatchers.IO) {
+        val key = backing.cacheKey ?: return@withContext
+        cacheAttempt {
+            if (key(song) == key) {
+                backing.original?.let { storeOriginal(key, backing.file, it) }
+                AudioStreamCache.get(context).storeFile(channelKey(key, backing.stereo, backing.separation), backing.file)
             }
         }
-        return backing.copy(cacheKey = key)
     }
 
     suspend fun rememberOriginal(song: Song, backing: KaraokeBacking, original: File) = withContext(Dispatchers.IO) {
@@ -66,10 +82,10 @@ internal class KaraokeBackingCache(private val context: Context) {
         }
     }
 
-    private suspend fun restore(key: String, target: File): KaraokeBacking? {
+    private suspend fun restore(key: String, target: File, separation: MdxParameters?): KaraokeBacking? {
         for (stereo in listOf(true, false)) {
-            val frames = restoreFrames(channelKey(key, stereo), target)
-            if (frames != null) return KaraokeBacking(target, frames, stereo)
+            val frames = restoreFrames(channelKey(key, stereo, separation), target)
+            if (frames != null) return KaraokeBacking(target, frames, stereo, separation = separation)
         }
         return null
     }
@@ -92,16 +108,19 @@ internal class KaraokeBackingCache(private val context: Context) {
         return null
     }
 
-    private fun key(song: Song): String? {
-        if (preferences.audioCacheBytes == 0L) return null
+    internal fun preferredQuality() = context.getSharedPreferences("player", Context.MODE_PRIVATE)
+        .getString("quality", "128k") ?: "128k"
+
+    private fun key(song: Song, quality: String = preferredQuality()): String? =
+        if (preferences.audioCacheBytes == 0L) null else sourceKey(song, quality)
+
+    internal fun sourceKey(song: Song, quality: String): String? = cacheAttempt {
         val identity = JSONArray().put(song.uri.toString())
-        if (song.source == "local") identity.put(localRevision(song.uri) ?: return null)
-        else identity.put(song.sourceInfo).put(song.duration).put(
-            context.getSharedPreferences("player", Context.MODE_PRIVATE).getString("quality", "128k"),
-        )
+        if (song.source == "local") identity.put(localRevision(song.uri) ?: return@cacheAttempt null)
+        else identity.put(song.sourceInfo).put(song.duration).put(quality)
         val digest = MessageDigest.getInstance("SHA-256").digest(identity.toString().toByteArray())
             .joinToString("") { "%02x".format(it.toInt() and 255) }
-        return "karaoke:${AudioStreamCache.key(song, "")}$FORMAT_VERSION:$digest"
+        "${AudioStreamCache.KARAOKE_PREFIX}${AudioStreamCache.key(song, "")}$FORMAT_VERSION:$digest"
     }
 
     private fun localRevision(uri: Uri): String? {
@@ -115,7 +134,10 @@ internal class KaraokeBackingCache(private val context: Context) {
             stat.st_ctime, stat.st_ctim.tv_nsec).joinToString(":")
     }
 
-    private fun channelKey(key: String, stereo: Boolean) = "$key:${if (stereo) 2 else 1}"
+    private fun channelKey(key: String, stereo: Boolean, separation: MdxParameters?): String {
+        val mode = separation?.cacheMode ?: "center"
+        return "$key:$mode:${if (stereo) 2 else 1}"
+    }
     private fun originalKey(key: String) = "$key:original"
 
     private inline fun <T> cacheAttempt(block: () -> T): T? = try {
@@ -125,6 +147,6 @@ internal class KaraokeBackingCache(private val context: Context) {
 
     private companion object {
         // Increment when the backing format or vocal reduction changes.
-        const val FORMAT_VERSION = 1
+        const val FORMAT_VERSION = 2
     }
 }

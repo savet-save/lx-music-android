@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="mdx_settings_title">人声分离</string>
+    <string name="mdx_settings_intro">K 歌使用 MDX-Net（UVR 9703）在本机分离人声，生成伴奏。内置模型版可直接使用，普通版只需下载一次模型。</string>
+    <string name="mdx_settings_checking">正在检查模型…</string>
+    <string name="mdx_settings_installed">MDX-Net 模型已安装</string>
+    <string name="mdx_settings_missing">未下载模型。下载后即可在 K 歌中使用。</string>
+    <string name="mdx_settings_enabled">在 K 歌使用分离模型</string>
+    <string name="mdx_settings_enabled_hint">开启后通常能去除更多原唱，首次分离需要更多时间和内存。关闭模型或内存不足时会使用较快的基础处理，可能保留更多人声。</string>
+    <string name="mdx_settings_parameters">分离参数</string>
+    <string name="mdx_settings_strength">人声消除强度</string>
+    <string name="mdx_settings_strength_hint">默认 103%。提高强度会从原音中扣除更多预测人声，过高可能削弱乐器或导致失真。降低强度可保留更多伴奏细节，也可能留下更多原唱。</string>
+    <string name="mdx_settings_overlap">分块重叠</string>
+    <string name="mdx_settings_overlap_hint">默认 250 毫秒。增加相邻音频块的交叠可让接缝更平滑，但会增加推理次数和处理时间。</string>
+    <string name="mdx_settings_threads">推理线程数</string>
+    <string name="mdx_settings_threads_hint">默认使用设备可用的 CPU 核心数。更多线程可能加快分离，也可能增加发热和耗电。实际速度取决于设备。</string>
+    <string name="mdx_settings_apply_hint">设置在下次准备伴奏时生效。只有消除强度和分块重叠一致时，才会复用分离后的伴奏缓存。</string>
+    <string name="mdx_value_percent" translatable="false">%1$d%%</string>
+    <string name="mdx_value_millis">%1$d 毫秒</string>
+    <string name="mdx_value_threads" translatable="false">%1$d</string>
+    <string name="mdx_value_threads_auto">按核心数（%1$d）</string>
+</resources>

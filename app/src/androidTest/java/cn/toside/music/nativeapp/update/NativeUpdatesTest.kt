@@ -54,7 +54,8 @@ class NativeUpdatesTest {
             } catch (e: Throwable) { if (!server.isClosed) failure.set(e) }
         }
         try {
-            val record = updates.start(NativeRelease(updateVersion, "", "fixture", "http://127.0.0.1:${server.localPort}/update.apk", size, hash))
+            val record = updates.start(NativeRelease(updateVersion, "", "fixture", "http://127.0.0.1:${server.localPort}/update.apk",
+                size, hash, NativeReleases.hasBundledModel(context)))
             // The transfer is owned by the OS, with no Activity or service bound to this instance.
             val restored = NativeUpdates(context)
             assertEquals(record, restored.saved())
@@ -113,5 +114,20 @@ class NativeUpdatesTest {
         assumeTrue("Pass wrongSignerFixture for a different-key upgrade APK", path.isNotEmpty())
         val exception = runCatching { NativeUpdates.verifyArchive(context, File(path), updateVersion) }.exceptionOrNull()
         assertEquals(context.getString(R.string.update_signature_invalid), exception?.message)
+    }
+
+    @Test fun downloadPolicyRejectsAnUpdateForTheOtherModelEdition() {
+        val release = NativeRelease(updateVersion, "", "fixture", "http://127.0.0.1/update.apk",
+            withModel = !NativeReleases.hasBundledModel(context))
+        val error = runCatching { NativeUpdates(context).start(release) }.exceptionOrNull()
+        assertEquals(context.getString(R.string.update_edition_invalid), error?.message)
+    }
+
+    @Test fun archivePolicyAcceptsOnlyTheInstalledModelEdition() {
+        val otherPath = InstrumentationRegistry.getArguments().getString("otherEditionFixture").orEmpty()
+        assumeTrue("Pass otherEditionFixture for a newer APK of the other model edition", otherPath.isNotEmpty())
+        NativeUpdates.verifyArchive(context, fixture(), updateVersion)
+        val error = runCatching { NativeUpdates.verifyArchive(context, File(otherPath), updateVersion) }.exceptionOrNull()
+        assertEquals(context.getString(R.string.update_edition_invalid), error?.message)
     }
 }

@@ -95,9 +95,13 @@ class PlaybackListFragmentTest {
                 service.enqueue(songs)
                 open(activity, "showPlayerDetails")
             }
-            await("player queue button") { activity.playerFragment()?.view?.findViewWithTag<View>("player-queue")?.isShown == true }
-            main { assertTrue(activity.playerFragment()!!.requireView().findViewWithTag<View>("player-queue").performClick()) }
-            await("queue rows") { list(activity)?.childCount == songs.size }
+            await("player entry animation") { activity.playerFragment()?.view?.alpha == 1f }
+            val player = activity.playerFragment()!!.requireView()
+            val queueButton = player.findViewWithTag<View>("player-queue")
+            main { assertTrue(queueButton.performClick()) }
+            await("queue rows and the end of the player hide animation") {
+                !player.isShown && page(activity)?.alpha == 1f && list(activity)?.childCount == songs.size
+            }
             val queuePage = page(activity)
             main {
                 assertEquals(activity.window.decorView.windowToken, queuePage?.windowToken)
@@ -115,7 +119,19 @@ class PlaybackListFragmentTest {
             }
             await("empty queue") { queuePage!!.findViewWithTag<View>("playback-list-empty").isShown }
             main { activity.onBackPressedDispatcher.onBackPressed() }
-            await("player restored") { page(activity) == null && activity.playerFragment()?.view?.isShown == true }
+            fun checkRestoredPlayer() {
+                await("player return animation") { page(activity) == null && player.isShown && player.alpha == 1f }
+                main {
+                    assertSame(player, activity.playerFragment()?.view)
+                    assertEquals("The player fills the window horizontally", 1f, player.scaleX, 0f)
+                    assertEquals("The player fills the window vertically", 1f, player.scaleY, 0f)
+                }
+            }
+            checkRestoredPlayer()
+            main { assertTrue(queueButton.performClick()) }
+            await("queue reopen animation") { !player.isShown && page(activity)?.alpha == 1f }
+            main { assertTrue(page(activity)!!.findViewWithTag<View>("page-back").performClick()) }
+            checkRestoredPlayer()
         } finally {
             main { service.clearQueue() }
         }

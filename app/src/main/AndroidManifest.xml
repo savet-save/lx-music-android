@@ -27,6 +27,7 @@
         <activity android:name=".ui.CommentsActivity" android:exported="false" />
         <activity android:name=".ui.CommentImageActivity" android:exported="false" />
         <activity android:name=".ui.KaraokeActivity" android:exported="false" android:launchMode="singleTop" />
+        <activity android:name=".ui.KaraokeQueueActivity" android:exported="false" />
         <activity android:name=".ui.LyricsDownloadActivity" android:exported="false" />
         <service android:name=".data.Mp3ConversionJob" android:exported="false" android:permission="android.permission.BIND_JOB_SERVICE" />
         <service android:name=".data.DownloadCoverJob" android:exported="false" android:permission="android.permission.BIND_JOB_SERVICE" />

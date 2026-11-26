@@ -23,6 +23,14 @@ internal object PcmDecoder {
         uri: Uri,
         onDurationUs: ((Long) -> Unit)? = null,
         consume: (PcmFormat, ShortArray) -> Unit,
+    ) = decodeBatches(context, uri, onDurationUs = onDurationUs) { format, _, samples -> consume(format, samples) }
+
+    suspend fun decodeBatches(
+        context: Context,
+        uri: Uri,
+        startUs: Long = 0,
+        onDurationUs: ((Long) -> Unit)? = null,
+        consume: suspend (PcmFormat, Long, ShortArray) -> Unit,
     ) = withContext(Dispatchers.IO) {
         val extractor = MediaExtractor()
         var decoder: MediaCodec? = null
@@ -30,6 +38,7 @@ internal object PcmDecoder {
             extractor.setDataSource(context, uri, null)
             val track = (0 until extractor.trackCount).first { extractor.getTrackFormat(it).getString(MediaFormat.KEY_MIME)?.startsWith("audio/") == true }
             extractor.selectTrack(track)
+            if (startUs > 0L) extractor.seekTo(startUs, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
             val format = extractor.getTrackFormat(track)
             if (onDurationUs != null && format.containsKey(MediaFormat.KEY_DURATION)) {
                 onDurationUs(format.getLong(MediaFormat.KEY_DURATION))
@@ -45,7 +54,7 @@ internal object PcmDecoder {
                     val size = extractor.readSampleData(input, 0)
                     if (size < 0) break
                     input.limit(size)
-                    consume(pcm, input.samples(encoding))
+                    consume(pcm, extractor.sampleTime, input.samples(encoding))
                     extractor.advance()
                 }
                 return@withContext
@@ -79,17 +88,18 @@ internal object PcmDecoder {
                     decodedFormat = codec.outputFormat.pcmFormat()
                     encoding = codec.outputFormat.encoding()
                 } else if (index >= 0) {
-                    try {
+                    val timeUs = info.presentationTimeUs
+                    val samples = try {
                         if (info.size > 0 && info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG == 0) {
-                            val pcm = requireNotNull(decodedFormat)
                             val buffer = requireNotNull(codec.getOutputBuffer(index)).order(ByteOrder.LITTLE_ENDIAN)
                             buffer.position(info.offset)
                             buffer.limit(info.offset + info.size)
-                            consume(pcm, buffer.samples(encoding))
-                        }
-                        outputDone = info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0
-                        lastProgress = SystemClock.elapsedRealtime()
+                            buffer.samples(encoding)
+                        } else null
                     } finally { codec.releaseOutputBuffer(index, false) }
+                    if (samples != null) consume(requireNotNull(decodedFormat), timeUs, samples)
+                    outputDone = info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0
+                    lastProgress = SystemClock.elapsedRealtime()
                 }
             }
         } finally {
